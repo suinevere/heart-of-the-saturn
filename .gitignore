@@ -17,7 +17,10 @@ SaturnRingLib/tools/bin/
 # --- Host/IDE build dirs -----------------------------------------------------
 # .idea/ is deliberately NOT here: Another-Saturn commits its CLion project
 # files and this repo follows that blueprint.
-cmake-build-*/
+# CLion creates cmake-build-debug, cmake-build-release, etc. at the project root.
+# The leading slash anchors this to the repo root; without it, an unanchored
+# cmake-build-*/ at any depth would match, which is not intended.
+/cmake-build-*/
 
 # --- Host unit-test binary ---------------------------------------------------
 # saturn/tests/run_tests.sh builds this with the host gcc, not the SH-2 cross
@@ -34,7 +37,12 @@ tools/extract_disc.exe
 # The source Sega CD rip: 42 tracks, 425 MB, copyrighted. Required to build a
 # disc, never committed. Listed as a bare directory because the track filenames
 # contain spaces and parentheses that are awkward to match individually.
-cd/
+# The leading slash anchors this to the repo root; without it, an unanchored cd/
+# matches any directory named cd at any depth, including saturn/cd/, whose
+# tracklist files (saturn/cd/music/tracklist, saturn/cd/music-off/tracklist) must
+# stay tracked. That is the reason the house style here carries comments: a path
+# list alone does not explain why those paths must stay visible.
+/cd/
 
 # Everything extracted from it is the same data in a different shape.
 # The 19 engine blobs. Both cases: ISO9660 stores them uppercase, but an
