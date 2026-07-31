@@ -125,12 +125,215 @@ static void test_cue_track_for_music(void)
     CHECK_EQ(discfmt_cue_track_for_music(41), 0);
 }
 
+/*----------------------
+ | build_iso_record
+ | Description: Writes one ISO9660 directory record at buf[pos] -- record
+ |   length, LBA and size each stored LE then BE (matching the real format,
+ |   even though this code only ever reads the LE copy), name length and
+ |   name -- and returns pos advanced past it. A hand-built record documents
+ |   the field layout at the call site instead of hiding it in a binary blob.
+ | Author: suinevere
+ ----------------------*/
+static size_t build_iso_record(uint8_t *buf, size_t pos, uint32_t lba,
+                                uint32_t size, const char *name)
+{
+    size_t name_len = strlen(name);
+    size_t rec_len = 33 + name_len;
+
+    if (rec_len % 2 != 0) {
+        rec_len++;  /* ISO9660 pads records to an even length. */
+    }
+
+    memset(buf + pos, 0, rec_len);
+
+    buf[pos + 0] = (uint8_t)rec_len;
+
+    buf[pos + 2] = (uint8_t)(lba & 0xFF);
+    buf[pos + 3] = (uint8_t)((lba >> 8) & 0xFF);
+    buf[pos + 4] = (uint8_t)((lba >> 16) & 0xFF);
+    buf[pos + 5] = (uint8_t)((lba >> 24) & 0xFF);
+    buf[pos + 6] = buf[pos + 5];
+    buf[pos + 7] = buf[pos + 4];
+    buf[pos + 8] = buf[pos + 3];
+    buf[pos + 9] = buf[pos + 2];
+
+    buf[pos + 10] = (uint8_t)(size & 0xFF);
+    buf[pos + 11] = (uint8_t)((size >> 8) & 0xFF);
+    buf[pos + 12] = (uint8_t)((size >> 16) & 0xFF);
+    buf[pos + 13] = (uint8_t)((size >> 24) & 0xFF);
+    buf[pos + 14] = buf[pos + 13];
+    buf[pos + 15] = buf[pos + 12];
+    buf[pos + 16] = buf[pos + 11];
+    buf[pos + 17] = buf[pos + 10];
+
+    buf[pos + 32] = (uint8_t)name_len;
+    memcpy(buf + pos + 33, name, name_len);
+
+    return pos + rec_len;
+}
+
+static void test_iso_root(void)
+{
+    /* The PVD's root directory record: 34 bytes at offset 156 of the
+       2048-byte user area. Root's own name is a single 0x00 byte. */
+    uint8_t pvd[2048];
+    uint32_t lba = 0;
+    uint32_t len = 0;
+
+    /* Root's own name is a single NUL byte (name_len 1), which can't be
+       expressed as a C string through build_iso_record's strlen -- so this
+       one record is written directly instead of through the builder. */
+    memset(pvd, 0, sizeof(pvd));
+    pvd[156 + 0] = 34;   /* record length: 33 fixed bytes + 1-byte name */
+    pvd[156 + 2] = 20;   /* LBA, LE: 20 */
+    pvd[156 + 10] = 0x00; /* size, LE: 4096 = 0x00001000 */
+    pvd[156 + 11] = 0x10;
+    pvd[156 + 32] = 1;   /* name length */
+    pvd[156 + 33] = 0;   /* name: the single NUL byte identifying "." */
+
+    CHECK(discfmt_iso_root(pvd, &lba, &len));
+    CHECK_EQ(lba, 20);
+    CHECK_EQ(len, 4096);
+}
+
+static void test_iso_find(void)
+{
+    /* A two-block (4096-byte) root directory: "." and ".." in block 0,
+       then one real file, then the rest of block 0 is zero padding, then
+       another real file starting exactly at the block-1 boundary. This is
+       the disc's actual shape and the one that breaks a walk that treats a
+       zero record length as end-of-directory. */
+    uint8_t dir[4096];
+    size_t pos = 0;
+    uint32_t lba = 0;
+    uint32_t size = 0;
+
+    memset(dir, 0, sizeof(dir));
+
+    pos = build_iso_record(dir, pos, 20, 4096, ".");
+    pos = build_iso_record(dir, pos, 20, 4096, "..");
+    pos = build_iso_record(dir, pos, 100, 12345, "FIRST.BIN;1");
+
+    /* Everything from pos to 2048 is left zero -- the record-length-0 pad
+       that must be skipped, not treated as EOF. */
+
+    pos = 2048;
+    pos = build_iso_record(dir, pos, 200, 67890, "SECOND.BIN;1");
+
+    /* Found in block 0. */
+    CHECK(discfmt_iso_find(dir, sizeof(dir), "FIRST.BIN", &lba, &size));
+    CHECK_EQ(lba, 100);
+    CHECK_EQ(size, 12345);
+
+    /* Found in block 1, only reachable by crossing the zero-length pad
+       at the end of block 0 rather than stopping there. */
+    lba = 0;
+    size = 0;
+    CHECK(discfmt_iso_find(dir, sizeof(dir), "SECOND.BIN", &lba, &size));
+    CHECK_EQ(lba, 200);
+    CHECK_EQ(size, 67890);
+
+    /* Absent name: not found, not garbage. */
+    CHECK(!discfmt_iso_find(dir, sizeof(dir), "NOPE.BIN", &lba, &size));
+
+    /* Truncated directory: SECOND.BIN's record starts at byte 2048 but
+       dir_len is cut a few bytes into it. The walk must fail closed
+       instead of reading past dir_len to find it. */
+    CHECK(!discfmt_iso_find(dir, 2048 + 10, "SECOND.BIN", &lba, &size));
+
+    /* dir_len of 0: nothing to walk, must not touch dir at all. */
+    CHECK(!discfmt_iso_find(dir, 0, "FIRST.BIN", &lba, &size));
+}
+
+static void test_cue_parse_multi_file(void)
+{
+    /* 42 tracks, one FILE per TRACK -- this disc's actual layout. Every
+       filename here has both a space and parentheses, which a whitespace
+       tokeniser would mangle; the parser must take the quoted string
+       between the first and last '"' on the line, whole. */
+    static char cue[1024 * 32];
+    size_t off = 0;
+    int n;
+    DiscCue disc_cue;
+    int single_file = -1;  /* poison: must come back 0 on a clean parse */
+    int i;
+
+    off += (size_t)sprintf(cue + off,
+        "FILE \"Heart of the Alien (Track 01).bin\" BINARY\r\n"
+        "  TRACK 01 MODE1/2352\r\n"
+        "    INDEX 01 00:00:00\r\n");
+
+    for (i = 2; i <= 42; i++) {
+        n = sprintf(cue + off,
+            "FILE \"Heart of the Alien (Track %02d).bin\" BINARY\r\n"
+            "  TRACK %02d AUDIO\r\n"
+            "    INDEX 00 00:00:00\r\n"
+            "    INDEX 01 00:02:00\r\n",
+            i, i);
+        off += (size_t)n;
+    }
+
+    CHECK(discfmt_cue_parse(cue, off, &disc_cue, &single_file));
+    CHECK_EQ(single_file, 0);
+    CHECK_EQ(disc_cue.count, 42);
+
+    CHECK_EQ(disc_cue.tracks[0].number, 1);
+    CHECK_EQ(disc_cue.tracks[0].is_audio, 0);
+    CHECK(strcmp(disc_cue.tracks[0].filename,
+                 "Heart of the Alien (Track 01).bin") == 0);
+
+    for (i = 1; i < 42; i++) {
+        char want[64];
+        CHECK_EQ(disc_cue.tracks[i].number, i + 1);
+        CHECK_EQ(disc_cue.tracks[i].is_audio, 1);
+        sprintf(want, "Heart of the Alien (Track %02d).bin", i + 1);
+        CHECK(strcmp(disc_cue.tracks[i].filename, want) == 0);
+    }
+}
+
+static void test_cue_parse_single_file_rejected(void)
+{
+    /* Two TRACK lines under one FILE: a single-file image. Accepting this
+       silently would yield 42 tracks all pointing at the same file at
+       offset zero -- universal data corruption, not a load failure at the
+       one place that caused it. Must be a distinct, named failure. */
+    static const char cue[] =
+        "FILE \"Heart of the Alien.bin\" BINARY\r\n"
+        "  TRACK 01 MODE1/2352\r\n"
+        "    INDEX 01 00:00:00\r\n"
+        "  TRACK 02 AUDIO\r\n"
+        "    INDEX 00 00:04:30\r\n"
+        "    INDEX 01 00:06:30\r\n";
+    DiscCue disc_cue;
+    int single_file = 0;
+
+    CHECK(!discfmt_cue_parse(cue, sizeof(cue) - 1, &disc_cue, &single_file));
+    CHECK_EQ(single_file, 1);
+}
+
+static void test_cue_parse_malformed_not_single_file(void)
+{
+    /* A TRACK line before any FILE line is a different kind of malformed
+       cue -- must fail, but must NOT be reported as the single-file case. */
+    static const char cue[] = "  TRACK 01 MODE1/2352\r\n";
+    DiscCue disc_cue;
+    int single_file = -1;
+
+    CHECK(!discfmt_cue_parse(cue, sizeof(cue) - 1, &disc_cue, &single_file));
+    CHECK_EQ(single_file, 0);
+}
+
 int main(void)
 {
     test_mode1_user_offset();
     test_sector_span();
     test_iso_name_eq();
     test_cue_track_for_music();
+    test_iso_root();
+    test_iso_find();
+    test_cue_parse_multi_file();
+    test_cue_parse_single_file_rejected();
+    test_cue_parse_malformed_not_single_file();
 
     if (g_fail == 0) {
         printf("all tests passed\n");

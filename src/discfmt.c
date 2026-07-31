@@ -83,3 +83,285 @@ int discfmt_cue_track_for_music(int engine_index)
 
     return engine_index + DISCFMT_MUSIC_FIRST_TRACK;
 }
+
+/*----------------------
+ | discfmt_read_le32
+ | Description: Reads a little-endian uint32 out of a 4-byte field. Every
+ |   LBA and size in an ISO9660 directory record is stored twice, LE then BE;
+ |   this always reads the LE copy, per the header's contract.
+ | Author: suinevere
+ ----------------------*/
+static uint32_t discfmt_read_le32(const uint8_t *p)
+{
+    return (uint32_t)p[0]
+         | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16)
+         | ((uint32_t)p[3] << 24);
+}
+
+int discfmt_iso_root(const uint8_t *pvd_user, uint32_t *lba, uint32_t *len)
+{
+    const uint8_t *rec = pvd_user + 156;
+    uint8_t rec_len = rec[0];
+
+    if (rec_len < 34)
+    {
+        return 0;
+    }
+
+    if (lba != NULL)
+    {
+        *lba = discfmt_read_le32(rec + 2);
+    }
+
+    if (len != NULL)
+    {
+        *len = discfmt_read_le32(rec + 10);
+    }
+
+    return 1;
+}
+
+int discfmt_iso_find(const uint8_t *dir, uint32_t dir_len, const char *name, uint32_t *lba, uint32_t *size)
+{
+    uint32_t pos = 0;
+
+    while (pos < dir_len)
+    {
+        uint32_t block_end = (pos / DISCFMT_USER_SECTOR + 1) * DISCFMT_USER_SECTOR;
+        uint8_t rec_len;
+
+        if (block_end > dir_len)
+        {
+            block_end = dir_len;
+        }
+
+        if (pos >= block_end)
+        {
+            break;
+        }
+
+        rec_len = dir[pos];
+
+        if (rec_len == 0)
+        {
+            /* Rest of this block is padding -- advance to the next block
+               boundary, not end of directory. */
+            pos = block_end;
+            continue;
+        }
+
+        if (rec_len < 33 || pos + rec_len > block_end)
+        {
+            /* Truncated or corrupt: fail closed rather than read past the
+               record's own declared length or the block/dir_len bound. */
+            return 0;
+        }
+
+        {
+            uint8_t name_len = dir[pos + 32];
+
+            if (33u + name_len > rec_len)
+            {
+                return 0;
+            }
+
+            if (discfmt_iso_name_eq((const char *)(dir + pos + 33), name_len, name))
+            {
+                if (lba != NULL)
+                {
+                    *lba = discfmt_read_le32(dir + pos + 2);
+                }
+
+                if (size != NULL)
+                {
+                    *size = discfmt_read_le32(dir + pos + 10);
+                }
+
+                return 1;
+            }
+        }
+
+        pos += rec_len;
+    }
+
+    return 0;
+}
+
+/*----------------------
+ | discfmt_cue_track_number
+ | Description: Parses the decimal, zero-padded track number following
+ |   "TRACK " on a cue TRACK line.
+ | Author: suinevere
+ ----------------------*/
+static int discfmt_cue_track_number(const char *p)
+{
+    int n = 0;
+
+    while (*p >= '0' && *p <= '9')
+    {
+        n = n * 10 + (*p - '0');
+        p++;
+    }
+
+    return n;
+}
+
+int discfmt_cue_parse(const char *text, size_t len, DiscCue *out, int *single_file)
+{
+    size_t i = 0;
+    char cur_filename[256];
+    int have_file = 0;
+
+    if (single_file != NULL)
+    {
+        *single_file = 0;
+    }
+
+    out->count = 0;
+    cur_filename[0] = '\0';
+
+    while (i < len)
+    {
+        size_t line_start = i;
+        size_t line_end;
+
+        while (i < len && text[i] != '\n' && text[i] != '\r')
+        {
+            i++;
+        }
+        line_end = i;
+
+        while (i < len && (text[i] == '\n' || text[i] == '\r'))
+        {
+            i++;
+        }
+
+        {
+            const char *line = text + line_start;
+            size_t line_len = line_end - line_start;
+            size_t j = 0;
+
+            /* Skip leading whitespace to find the first non-space token. */
+            while (j < line_len && (line[j] == ' ' || line[j] == '\t'))
+            {
+                j++;
+            }
+
+            if (line_len - j >= 4 && memcmp(line + j, "FILE", 4) == 0)
+            {
+                /* Take everything between the first and last '"' on the
+                   line -- filenames on this disc contain spaces and
+                   parentheses that a whitespace tokeniser would mangle. */
+                size_t first_quote = (size_t)-1;
+                size_t last_quote = (size_t)-1;
+                size_t k;
+
+                for (k = j; k < line_len; k++)
+                {
+                    if (line[k] == '"')
+                    {
+                        if (first_quote == (size_t)-1)
+                        {
+                            first_quote = k;
+                        }
+                        last_quote = k;
+                    }
+                }
+
+                if (first_quote == (size_t)-1 || last_quote <= first_quote)
+                {
+                    return 0;
+                }
+
+                {
+                    size_t name_len = last_quote - first_quote - 1;
+
+                    if (name_len >= sizeof(cur_filename))
+                    {
+                        return 0;
+                    }
+
+                    memcpy(cur_filename, line + first_quote + 1, name_len);
+                    cur_filename[name_len] = '\0';
+                    have_file = 1;
+                }
+            }
+            else if (line_len - j >= 5 && memcmp(line + j, "TRACK", 5) == 0)
+            {
+                int number;
+                int is_audio;
+                size_t k = j + 5;
+
+                if (!have_file)
+                {
+                    /* A second TRACK with no intervening FILE line means a
+                       single-file image; a TRACK with no FILE line at all
+                       (the very first line) is a different, plain malformed
+                       cue -- distinguished by whether we have ever seen a
+                       FILE line and already consumed it for a prior track. */
+                    if (out->count > 0)
+                    {
+                        if (single_file != NULL)
+                        {
+                            *single_file = 1;
+                        }
+                    }
+
+                    return 0;
+                }
+
+                while (k < line_len && line[k] == ' ')
+                {
+                    k++;
+                }
+
+                number = discfmt_cue_track_number(line + k);
+
+                while (k < line_len && line[k] >= '0' && line[k] <= '9')
+                {
+                    k++;
+                }
+
+                while (k < line_len && line[k] == ' ')
+                {
+                    k++;
+                }
+
+                if (line_len - k >= 5 && memcmp(line + k, "AUDIO", 5) == 0)
+                {
+                    is_audio = 1;
+                }
+                else if (line_len - k >= 10 && memcmp(line + k, "MODE1/2352", 10) == 0)
+                {
+                    is_audio = 0;
+                }
+                else
+                {
+                    return 0;
+                }
+
+                if (out->count >= DISCFMT_MAX_TRACKS)
+                {
+                    return 0;
+                }
+
+                out->tracks[out->count].number = number;
+                out->tracks[out->count].is_audio = is_audio;
+                memcpy(out->tracks[out->count].filename, cur_filename, sizeof(cur_filename));
+                out->count++;
+
+                /* This FILE line has now been consumed by a TRACK; a second
+                   TRACK before another FILE line is the single-file case. */
+                have_file = 0;
+            }
+        }
+    }
+
+    if (out->count == 0)
+    {
+        return 0;
+    }
+
+    return 1;
+}
