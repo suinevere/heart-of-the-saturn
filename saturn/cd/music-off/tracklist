@@ -1,0 +1,3 @@
+# Intentionally empty. Selected by HOTA_AUDIO = none (the default) so that
+# shared.mk finds no audio and builds a data-only disc. The real track order
+# is saturn/cd/music/tracklist, written by tools/extract_disc.

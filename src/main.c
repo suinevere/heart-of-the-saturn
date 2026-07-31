@@ -21,6 +21,7 @@
 #include <string.h>
 #include <memory.h>
 #include <assert.h>
+#include <dirent.h>
 #include <SDL.h>
 #include <SDL_mixer.h>
 
@@ -29,9 +30,8 @@
 #include "rooms.h"
 #include "debug.h"
 #include "sound.h"
-#include "music.h"
 #include "common.h"
-#include "cd_iso.h"
+#include "disc.h"
 #include "decode.h"
 #include "render.h"
 #include "screen.h"
@@ -114,7 +114,7 @@ static int load_room(int index)
 
 	LOG(("loading %s\n", filename));
 	ptr = get_memory_ptr(0xf900);
-	if (read_file(filename, ptr) < 0)
+	if (disc_read_file(filename, ptr, get_memory_size() - 0xf900) < 0)
 	{
 		panic("load_room failed");
 	}
@@ -131,7 +131,16 @@ static int load_room(int index)
 */
 static void atexit_callback(void)
 {
-	stop_music();
+	/* Stop before close, not the reverse: harmless on the host, since
+	   disc_close only touches disc_data_fp/disc_root_dir and disc_stop_track
+	   only touches disc_music_fp -- but disc.h's contract is written for a
+	   Saturn backend too, where both halves share one CD drive and one
+	   session. There, closing the disc first and then issuing a stop-track
+	   command would be commanding CDDA playback after the drive session
+	   that command depends on was already released -- a use-after-close
+	   that the host cannot demonstrate but the seam must still get right. */
+	disc_stop_track();
+	disc_close();
 	SDL_Quit();
 }
 
@@ -142,11 +151,25 @@ static int initialize()
 
 	if (cls.nosound == 0)
 	{
+		int spec_freq;
+		Uint16 spec_format;
+		int spec_channels;
+
+		/* SDL_AUDIO_ALLOW_ANY_CHANGE deliberately removed (flags arg is 0
+		   below): it let SDL hand back a device at a different frequency,
+		   format or channel count than requested, and SDL_mixer would then
+		   mix at that spec silently. disc_cue.c's Mix_HookMusic callback
+		   streams CD-DA straight off the disc with a plain fread -- no
+		   resample -- so correct pitch/speed depends on the device really
+		   being 44100 Hz/AUDIO_S16/stereo. A 48000 Hz WASAPI device (common
+		   on Windows) would otherwise play every track about 8.8% fast:
+		   plausible enough to survive casual listening. Do not restore this
+		   flag without also giving disc_cue.c a resampler. */
 #if (SDL_VERSIONNUM(SDL_MIXER_MAJOR_VERSION, SDL_MIXER_MINOR_VERSION, SDL_MIXER_PATCHLEVEL) >= SDL_VERSIONNUM(2, 0, 2))
 		const SDL_version *link_version = Mix_Linked_Version();
 		if (SDL_VERSIONNUM(link_version->major, link_version->minor, link_version->patch) >= SDL_VERSIONNUM(2,0,2))
 		{
-			if (Mix_OpenAudioDevice(44100, AUDIO_S16, 2, 4096, NULL, SDL_AUDIO_ALLOW_ANY_CHANGE) < 0)
+			if (Mix_OpenAudioDevice(44100, AUDIO_S16, 2, 4096, NULL, 0) < 0)
 			{
 				panic("Mix_OpenAudio failed\n");
 			}
@@ -158,7 +181,31 @@ static int initialize()
 			panic("Mix_OpenAudio failed\n");
 		}
 
-		music_init();
+		/* Prove the negotiated spec rather than assume it matched the
+		   request. A mismatch here means disc_cue.c's unconverted CD-DA
+		   stream would play at the wrong pitch/speed -- worse than silence,
+		   since it sounds plausible and gets missed. disc_play_track
+		   independently re-checks this before every track and refuses to
+		   play on a mismatch; this printout is so the mismatch (or the
+		   match) is visible at startup instead of only discovered later. */
+		spec_freq = 0;
+		spec_format = 0;
+		spec_channels = 0;
+		Mix_QuerySpec(&spec_freq, &spec_format, &spec_channels);
+		if (spec_freq != 44100 || spec_format != AUDIO_S16 || spec_channels != 2)
+		{
+			fprintf(stderr, "WARNING: audio device negotiated freq=%d format=0x%x channels=%d, "
+			                "expected 44100/AUDIO_S16(0x%x)/2 -- CD-DA music will NOT play "
+			                "(would be pitched/timed wrong)\n",
+			        spec_freq, (unsigned)spec_format, spec_channels, (unsigned)AUDIO_S16);
+		}
+		else
+		{
+			printf("audio device negotiated freq=%d format=0x%x channels=%d (matches CD-DA, music enabled)\n",
+			       spec_freq, (unsigned)spec_format, spec_channels);
+		}
+		fflush(stdout);
+
 		sound_init();
 	}
 
@@ -705,7 +752,7 @@ int play_anm(anm_file_t *anm, int n, int skippable)
 		{
 			int ok;
 
-			play_music_track(anm[seq].track, 0);
+			disc_play_track(anm[seq].track, 0);
 			ok = play_animation(anm[seq].filename, anm[seq].offset);
 			if (ok < 0)
 			{
@@ -721,7 +768,7 @@ int play_anm(anm_file_t *anm, int n, int skippable)
 		}
 	}
 
-	stop_music();
+	disc_stop_track();
 	return ret;
 }
 
@@ -826,8 +873,6 @@ static void run()
 				break;
 			}
 		}
-
-		music_update();
 
 		rest(12);
 	}
@@ -942,11 +987,12 @@ void sprite_test()
 static void help()
 {
 	printf("Heart of The Alien Redux %s\n", VERSION);
-	puts("USAGE:");
+	puts("USAGE: alien [OPTIONS] [.cue-file]");
+	puts("");
+	puts("OPTIONS:");
 	#ifdef ENABLE_DEBUG
 	puts("\t--debug        turn on debugging");
 	#endif
-	puts("\t--iso          use iso and mp3s (in current directory)");
 	puts("\t--double       double size window (608 x 384)");
 	puts("\t--triple       triple size window (912 x 576)");
 	puts("\t--scale=[2|3]  rescale using scale2x or scale3x filters");
@@ -958,6 +1004,67 @@ static void help()
 	puts("\t--record       record keys");
 	puts("\t--replay       replay keys");
 	puts("\t--help         this help");
+	puts("");
+	puts("ARGUMENTS:");
+	puts("\t.cue-file      disc cue sheet (default: alphabetically-first .cue in");
+	puts("\t               ./cd/, resolved against the current working directory)");
+}
+
+/*----------------------
+ | find_cue_path
+ | Description: When no cue path is given on the command line, falls back to
+ |   the *.cue found directly under ./cd/ (resolved against the process's
+ |   current working directory, not this executable's location) -- the
+ |   layout the disc rip is normally dropped into. If more than one .cue is
+ |   present, picks the alphabetically-first name rather than whatever
+ |   readdir happens to return first: readdir order is unspecified, and a
+ |   fallback that silently picked a different disc on a different run (or a
+ |   different OS/filesystem) would be a much worse surprise than picking a
+ |   fixed, predictable one. Returns a pointer into a static buffer (valid
+ |   until the next call), or NULL if cd/ doesn't exist or holds no cue.
+ | Author: suinevere
+ ----------------------*/
+static const char *find_cue_path(void)
+{
+	static char found[512];
+	static char best_name[508]; /* leaves room for the "cd/" prefix + NUL in found[] --
+	                                sized so gcc's -Wformat-truncation can prove the
+	                                snprintf below always fits, not just usually does */
+	DIR *dir;
+	struct dirent *entry;
+	int have_best = 0;
+
+	dir = opendir("cd");
+	if (dir == NULL)
+	{
+		return NULL;
+	}
+
+	while ((entry = readdir(dir)) != NULL)
+	{
+		size_t name_len = strlen(entry->d_name);
+
+		if (name_len > 4 && strcmp(entry->d_name + name_len - 4, ".cue") == 0)
+		{
+			if (!have_best || strcmp(entry->d_name, best_name) < 0)
+			{
+				snprintf(best_name, sizeof(best_name), "%s", entry->d_name);
+				have_best = 1;
+			}
+		}
+	}
+
+	closedir(dir);
+
+	if (!have_best)
+	{
+		return NULL;
+	}
+
+	snprintf(found, sizeof(found), "cd/%s", best_name);
+	printf("no disc cue file given, using '%s'\n", found);
+	fflush(stdout);
+	return found;
 }
 
 static struct option options[] =
@@ -974,26 +1081,23 @@ static struct option options[] =
 	{"double", no_argument, 0, '2'},
 	{"triple", no_argument, 0, '3'},
 	{"scale", required_argument, 0, 's'},
-	{"iso", no_argument, 0, 'i'},
 	{"fastest", no_argument, &fastest_flag, 1},
-	{"iso-prefix", required_argument, 0, 'e'},
 	{0, no_argument, 0, 0}
 };
 
 int main(int argc, char **argv)
 {
 	int options_index;
+	const char *cue_path;
 
 	next_script = 0;
 
 	cls.scale = 1;
 	cls.filtered = 0;
 	cls.fullscreen = 0;
-	cls.use_iso = 0;
 	cls.speed_throttle = 0;
 	cls.paused = 0;
 	cls.nosound = 0;
-	cls.iso_prefix = NULL;
 
 	options_index = 0;
 	while (1)
@@ -1039,16 +1143,8 @@ int main(int argc, char **argv)
 			cls.filtered = 1;
 			break;
 
-			case 'i':
-			cls.use_iso = 1;
-			break;
-
 			case 'n':
 			cls.nosound = 1;
-			break;
-
-			case 'e':
-			cls.iso_prefix = strdup(optarg);
 			break;
 
 			case '?':
@@ -1070,6 +1166,21 @@ int main(int argc, char **argv)
 	else if (record_flag)
 	{
 		record_fp = fopen(RECORDED_KEYS_FILENAME, "wb");
+	}
+
+	/* Positional argument after option parsing, or fall back to searching
+	   the cd directory for a cue sheet -- disc_open must run before
+	   initialize()'s game2bin_init() call, the first thing that reads
+	   from the disc. */
+	cue_path = (optind < argc) ? argv[optind] : find_cue_path();
+	if (cue_path == NULL)
+	{
+		panic("no disc cue file given, and none found under cd/*.cue");
+	}
+
+	if (!disc_open(cue_path))
+	{
+		panic("failed to open disc");
 	}
 
 	initialize();

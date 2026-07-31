@@ -3,11 +3,18 @@ all: alien
 CC=gcc
 SDL_CFLAGS = `sdl2-config --cflags`
 SDL_LIBS = `sdl2-config --libs`
-CFLAGS=-DNDEBUG -O2 -Wall $(SDL_CFLAGS) -DPYRA -march=armv7ve+simd -mcpu=cortex-a15 -mtune=cortex-a15 -mfpu=neon-vfpv4 -mfloat-abi=hard -mthumb
+CFLAGS=-DNDEBUG -O2 -Wall -I. -Ihost $(SDL_CFLAGS) -DPYRA -march=armv7ve+simd -mcpu=cortex-a15 -mtune=cortex-a15 -mfpu=neon-vfpv4 -mfloat-abi=hard -mthumb
+# The old standalone music player and the old ISO/CD-image loader source
+# files were deleted by the bincue-disc-backend port (Tasks 4 and 5) in
+# favor of the disc.h seam -- discfmt (format arithmetic) and disc_cue (the
+# host FILE*-backed implementation) below replace them. Mirrors
+# src/Makefile's OBJS list exactly; see that file for why disc_cue's object
+# needs its own rule below instead of a plain OBJS entry.
 OBJS=\
 	client.o common.o vm.o      sprites.o decode.o   animation.o   \
-	rooms.o  render.o main.o    music.o   debug.o    lzss.o        \
-	sound.o  screen.o scale2x.o scale3x.o game2bin.o cd_iso.o
+	rooms.o  render.o main.o    debug.o    lzss.o                  \
+	sound.o  screen.o scale2x.o scale3x.o game2bin.o discfmt.o     \
+	disc_cue.o
 
 LIBS=$(SDL_LIBS) -lSDL2_mixer
 
@@ -16,6 +23,12 @@ alien: $(OBJS)
 
 .c.o:
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# disc_cue.o lives under host/ -- the .c.o suffix rule above only looks in
+# the current directory, so a plain OBJS entry for it would silently never
+# compile. Explicit rule beats the implicit suffix rule for the same target.
+disc_cue.o: host/disc_cue.c
+	$(CC) $(CFLAGS) -c host/disc_cue.c -o disc_cue.o
 
 clean:
 	@rm $(OBJS)
