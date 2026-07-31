@@ -1,0 +1,58 @@
+# --- Host build output -------------------------------------------------------
+src/*.o
+src/alien
+src/alien.exe
+
+# --- Saturn build output -----------------------------------------------------
+saturn/BuildDrop/
+**/*.o
+**/*.elf
+**/*.iso
+**/*.bin.tmp
+
+# --- Cross-compiler and iso2raw (fetched into the SDK submodule, never committed)
+SaturnRingLib/Compiler/
+SaturnRingLib/tools/bin/
+
+# --- Host/IDE build dirs -----------------------------------------------------
+# .idea/ is deliberately NOT here: Another-Saturn commits its CLion project
+# files and this repo follows that blueprint.
+cmake-build-*/
+
+# --- Host unit-test binary ---------------------------------------------------
+# saturn/tests/run_tests.sh builds this with the host gcc, not the SH-2 cross
+# compiler, so the pure disc-format logic can be tested off-target. Build
+# output, not source. Both spellings: MSYS gcc emits .exe on Windows.
+saturn/tests/run_tests
+saturn/tests/run_tests.exe
+
+# --- Extractor binary --------------------------------------------------------
+tools/extract_disc
+tools/extract_disc.exe
+
+# --- Non-free game data ------------------------------------------------------
+# The source Sega CD rip: 42 tracks, 425 MB, copyrighted. Required to build a
+# disc, never committed. Listed as a bare directory because the track filenames
+# contain spaces and parentheses that are awkward to match individually.
+cd/
+
+# Everything extracted from it is the same data in a different shape.
+# The 19 engine blobs. Both cases: ISO9660 stores them uppercase, but an
+# extractor or a case-insensitive copy can produce either, and git's ignore
+# matching is case-sensitive wherever core.ignorecase is false (e.g. CI on Linux).
+saturn/cd/data/*.BIN
+saturn/cd/data/*.bin
+
+# The 41 CD-DA tracks and sox's raw intermediates, ~828 MB with HOTA_AUDIO=full.
+# cd/music/tracklist is NOT ignored: it is the track ordering, it contains no
+# game data, and without it shared.mk falls back to `find` order and lays the
+# music onto the disc in an arbitrary sequence.
+saturn/cd/music/*.wav
+saturn/cd/music/*.raw
+
+# SGL sound driver files the makefile copies in when SRL_USE_SGL_SOUND_DRIVER=1,
+# and the linked program objcopy'd into the image. Build output, not source.
+saturn/cd/data/0.bin
+saturn/cd/data/SDDRVS.DAT
+saturn/cd/data/SDDRVS.TSK
+saturn/cd/data/BOOTSND.MAP
