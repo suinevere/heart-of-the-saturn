@@ -979,11 +979,12 @@ void sprite_test()
 static void help()
 {
 	printf("Heart of The Alien Redux %s\n", VERSION);
-	puts("USAGE:");
+	puts("USAGE: alien [OPTIONS] [.cue-file]");
+	puts("");
+	puts("OPTIONS:");
 	#ifdef ENABLE_DEBUG
 	puts("\t--debug        turn on debugging");
 	#endif
-	puts("\t--iso          use iso and mp3s (in current directory)");
 	puts("\t--double       double size window (608 x 384)");
 	puts("\t--triple       triple size window (912 x 576)");
 	puts("\t--scale=[2|3]  rescale using scale2x or scale3x filters");
@@ -995,6 +996,9 @@ static void help()
 	puts("\t--record       record keys");
 	puts("\t--replay       replay keys");
 	puts("\t--help         this help");
+	puts("");
+	puts("ARGUMENTS:");
+	puts("\t.cue-file      disc cue sheet (default: first .cue in cd/)");
 }
 
 /*----------------------
@@ -1047,9 +1051,7 @@ static struct option options[] =
 	{"double", no_argument, 0, '2'},
 	{"triple", no_argument, 0, '3'},
 	{"scale", required_argument, 0, 's'},
-	{"iso", no_argument, 0, 'i'},
 	{"fastest", no_argument, &fastest_flag, 1},
-	{"iso-prefix", required_argument, 0, 'e'},
 	{0, no_argument, 0, 0}
 };
 
@@ -1063,11 +1065,9 @@ int main(int argc, char **argv)
 	cls.scale = 1;
 	cls.filtered = 0;
 	cls.fullscreen = 0;
-	cls.use_iso = 0;
 	cls.speed_throttle = 0;
 	cls.paused = 0;
 	cls.nosound = 0;
-	cls.iso_prefix = NULL;
 
 	options_index = 0;
 	while (1)
@@ -1113,16 +1113,8 @@ int main(int argc, char **argv)
 			cls.filtered = 1;
 			break;
 
-			case 'i':
-			cls.use_iso = 1;
-			break;
-
 			case 'n':
 			cls.nosound = 1;
-			break;
-
-			case 'e':
-			cls.iso_prefix = strdup(optarg);
 			break;
 
 			case '?':
