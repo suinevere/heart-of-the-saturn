@@ -25,7 +25,7 @@
 #include "vm.h"
 #include "lzss.h"
 #include "debug.h"
-#include "cd_iso.h"
+#include "disc.h"
 #include "render.h"
 #include "common.h"
 #include "client.h"
@@ -868,7 +868,7 @@ int play_animation(const char *filename, int fileoffset)
 	/* animations are loaded into a fixed place in 68000 memory */
 	read_offset = 0x809a - fileoffset;
 	ptr = get_memory_ptr(read_offset);
-	if (read_file(filename, ptr) < 0)
+	if (disc_read_file(filename, ptr, get_memory_size() - read_offset) < 0)
 	{
 		LOG(("play_animation: unable to read %s\n", filename));
 		return -1;

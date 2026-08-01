@@ -21,7 +21,6 @@
 #include <unistd.h>
 #include "debug.h"
 #include "music.h"
-#include "cd_iso.h"
 #include "client.h"
 
 static Mix_Music *current_track;

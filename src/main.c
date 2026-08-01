@@ -21,6 +21,7 @@
 #include <string.h>
 #include <memory.h>
 #include <assert.h>
+#include <dirent.h>
 #include <SDL.h>
 #include <SDL_mixer.h>
 
@@ -31,7 +32,7 @@
 #include "sound.h"
 #include "music.h"
 #include "common.h"
-#include "cd_iso.h"
+#include "disc.h"
 #include "decode.h"
 #include "render.h"
 #include "screen.h"
@@ -114,7 +115,7 @@ static int load_room(int index)
 
 	LOG(("loading %s\n", filename));
 	ptr = get_memory_ptr(0xf900);
-	if (read_file(filename, ptr) < 0)
+	if (disc_read_file(filename, ptr, get_memory_size() - 0xf900) < 0)
 	{
 		panic("load_room failed");
 	}
@@ -131,6 +132,7 @@ static int load_room(int index)
 */
 static void atexit_callback(void)
 {
+	disc_close();
 	stop_music();
 	SDL_Quit();
 }
@@ -960,6 +962,42 @@ static void help()
 	puts("\t--help         this help");
 }
 
+/*----------------------
+ | find_cue_path
+ | Description: When no cue path is given on the command line, falls back to
+ |   the first *.cue found directly under cd/ -- the layout the disc rip is
+ |   normally dropped into. Returns a pointer into a static buffer (valid
+ |   until the next call), or NULL if cd/ doesn't exist or holds no cue.
+ | Author: suinevere
+ ----------------------*/
+static const char *find_cue_path(void)
+{
+	static char found[512];
+	DIR *dir;
+	struct dirent *entry;
+
+	dir = opendir("cd");
+	if (dir == NULL)
+	{
+		return NULL;
+	}
+
+	while ((entry = readdir(dir)) != NULL)
+	{
+		size_t name_len = strlen(entry->d_name);
+
+		if (name_len > 4 && strcmp(entry->d_name + name_len - 4, ".cue") == 0)
+		{
+			snprintf(found, sizeof(found), "cd/%s", entry->d_name);
+			closedir(dir);
+			return found;
+		}
+	}
+
+	closedir(dir);
+	return NULL;
+}
+
 static struct option options[] =
 {
 	{"debug", no_argument, 0, 'd'},
@@ -983,6 +1021,7 @@ static struct option options[] =
 int main(int argc, char **argv)
 {
 	int options_index;
+	const char *cue_path;
 
 	next_script = 0;
 
@@ -1070,6 +1109,21 @@ int main(int argc, char **argv)
 	else if (record_flag)
 	{
 		record_fp = fopen(RECORDED_KEYS_FILENAME, "wb");
+	}
+
+	/* Positional argument after option parsing, or fall back to searching
+	   the cd directory for a cue sheet -- disc_open must run before
+	   initialize()'s game2bin_init() call, the first thing that reads
+	   from the disc. */
+	cue_path = (optind < argc) ? argv[optind] : find_cue_path();
+	if (cue_path == NULL)
+	{
+		panic("no disc cue file given, and none found under cd/*.cue");
+	}
+
+	if (!disc_open(cue_path))
+	{
+		panic("failed to open disc");
 	}
 
 	initialize();

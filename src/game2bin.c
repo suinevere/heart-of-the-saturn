@@ -19,7 +19,7 @@
 #include <stdio.h>
 #include <memory.h>
 #include "debug.h"
-#include "cd_iso.h"
+#include "disc.h"
 #include "game2bin.h"
 
 #define GAME2BIN_SIZE 409600
@@ -53,7 +53,7 @@ int copy_from_game2bin(void *dst, int offset, int length)
 */
 int game2bin_init()
 {
-	if (read_file("GAME2.BIN", game2bin) < 0)
+	if (disc_read_file("GAME2.BIN", game2bin, GAME2BIN_SIZE) < 0)
 	{
 		LOG(("failure reading game2bin file\n"));
 		return -1;

@@ -142,6 +142,15 @@ unsigned char *get_memory_ptr(int offset)
 	return (unsigned char *)memory + offset;
 }
 
+/** Returns the total size of the emulated memory map
+    @returns sizeof(memory), so callers derive available space from the
+             array itself instead of a copy of the literal
+*/
+int get_memory_size(void)
+{
+	return (int)sizeof(memory);
+}
+
 /** Resets VM, zeros all variables and aux memory
 */
 void vm_reset()

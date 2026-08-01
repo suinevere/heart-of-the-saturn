@@ -60,6 +60,17 @@ void copy_tls_to_global(int dst_index, int src_index, int count);
 
 unsigned char *get_memory_ptr(int offset);
 
+/*----------------------
+ | get_memory_size
+ | Description: Total size of the emulated 68000 memory map. disc_read_file
+ |   call sites need to know how much room is left from an offset (their
+ |   max_size argument) -- this lets them compute it as
+ |   get_memory_size() - offset rather than duplicating the array's size as
+ |   a literal that would silently drift if memory[] were ever resized.
+ | Author: suinevere
+ ----------------------*/
+int get_memory_size(void);
+
 void vm_reset();
 
 #endif
