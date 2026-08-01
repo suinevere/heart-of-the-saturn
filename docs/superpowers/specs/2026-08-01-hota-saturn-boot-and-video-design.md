@@ -226,9 +226,14 @@ static object whose constructor allocates may exist in the build.
 
 ### Pure subtraction
 
-`decode.c`, `animation.c`, `scale2x.c` and `scale3x.c` include `<SDL.h>` and use zero
-SDL symbols. Those four includes are deleted. This is verified, not assumed — with
-only that edit, 14 of the 19 engine TUs already compile clean for SH-2.
+`decode.c` and `animation.c` include `<SDL.h>` and use no SDL symbol at all. Those two
+includes are deleted. This is verified, not assumed — with only that edit, 14 of the
+19 engine TUs already compile clean for SH-2.
+
+`scale2x.c` and `scale3x.c` name no `SDL_*` symbol either, but their headers type the
+buffers as `Uint8`, so the include is load-bearing and they stay host-only. `sound.c`
+(`Mix_Chunk`) and `render.c`/`main.c` are the other three that do not compile, and all
+three are replaced or shimmed by this sub-project.
 
 ## Data and control flow
 
@@ -298,9 +303,16 @@ retargeted at `../host/`. Both builds must keep working — that is the point of
 dual-backend decision, and a broken host build removes the reference this sub-project
 depends on.
 
+`6d31b11` also broke the host test suite and nobody has run it since: `run_tests.sh`
+still compiles `../../src/discfmt.c` with `-I../../src`, which after the move is the
+empty leftover directory at the repo root. It fails with "No such file or directory".
+Repairing it is the first task, because it is the harness every later task is verified
+against.
+
 Three levels of verification:
 
-1. **Host unit tests.** `saturn/tests/run_tests.sh` keeps passing unchanged.
+1. **Host unit tests.** `saturn/tests/run_tests.sh`, once its paths are repaired,
+   keeps passing for the rest of the sub-project.
 2. **The 512 KB bound.** A bounds assert in `get_memory_ptr()`, compiled into the host
    build where `assert` is real, exercised by a full playthrough. This is what turns
    the static three-call-site analysis into evidence. Until it has run, 512 KB is a
