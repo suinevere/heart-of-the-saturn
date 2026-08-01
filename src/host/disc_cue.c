@@ -16,15 +16,25 @@
  | Author: suinevere
  | Dependencies: stdio.h, stdlib.h, string.h, dirent-free (the caller
  |   resolves the cd directory's cue sheet, not this file); discfmt.h,
- |   disc.h
+ |   disc.h. Also SDL.h/SDL_mixer.h, for Mix_HookMusic -- disc_play_track
+ |   streams CD-DA straight off an audio track's FILE * through the same
+ |   device sound.c already opened, so this file crosses the platform
+ |   boundary SDL-side as well as stdio-side. client.h for cls.nosound: on
+ |   that path Mix_OpenAudioDevice is never called in main.c, so a
+ |   disc_play_track that skipped this check would fopen a track file and
+ |   hand it to a mixer with no open device for nothing.
  ----------------------*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 
+#include <SDL.h>
+#include <SDL_mixer.h>
+
 #include "discfmt.h"
 #include "disc.h"
+#include "client.h"
 
 #define DISC_SECTOR_USER_BYTES 2048
 
@@ -32,6 +42,31 @@ static FILE *disc_data_fp = NULL;
 static uint8_t *disc_root_dir = NULL;
 static uint32_t disc_root_dir_len = 0;
 static int disc_opened = 0;
+
+/*----------------------
+ | disc_cue / disc_cue_dir
+ | Description: The parsed cue table and the cue's own directory, cached
+ |   here rather than re-parsed, so disc_play_track can look up an audio
+ |   track's filename by cue track number the same way disc_open already
+ |   looked up the data track's. disc_cue_dir is what track filenames
+ |   resolve against, not the process CWD -- see disc_dirname.
+ | Author: suinevere
+ ----------------------*/
+static DiscCue disc_cue;
+static char disc_cue_dir[512];
+
+/*----------------------
+ | disc_music_fp / disc_music_loop
+ | Description: State for the single currently-hooked CD-DA track.
+ |   disc_music_fp is NULL whenever nothing is hooked, which is also what
+ |   disc_music_callback checks before touching the file -- so a callback
+ |   invocation racing a not-yet-completed disc_play_track sees either "no
+ |   file yet" (silence) or "the new file" (Mix_HookMusic is only called
+ |   after disc_music_fp is set), never a half-updated pair.
+ | Author: suinevere
+ ----------------------*/
+static FILE *disc_music_fp = NULL;
+static int disc_music_loop = 0;
 
 /*----------------------
  | disc_manifest_entry_t / disc_manifest
@@ -183,14 +218,15 @@ void disc_close(void)
 
     disc_root_dir_len = 0;
     disc_opened = 0;
+
+    disc_cue.count = 0;
+    disc_cue_dir[0] = '\0';
 }
 
 int disc_open(const char *cue_path)
 {
-    char dir[512];
     char *cue_text = NULL;
     size_t cue_len = 0;
-    DiscCue cue;
     int single_file = 0;
     int data_track = -1;
     int i;
@@ -204,7 +240,7 @@ int disc_open(const char *cue_path)
        slate rather than leaking a previous FILE * / buffer. */
     disc_close();
 
-    disc_dirname(cue_path, dir, sizeof(dir));
+    disc_dirname(cue_path, disc_cue_dir, sizeof(disc_cue_dir));
 
     if (!disc_read_whole_file(cue_path, &cue_text, &cue_len))
     {
@@ -212,7 +248,7 @@ int disc_open(const char *cue_path)
         return 0;
     }
 
-    if (!discfmt_cue_parse(cue_text, cue_len, &cue, &single_file))
+    if (!discfmt_cue_parse(cue_text, cue_len, &disc_cue, &single_file))
     {
         free(cue_text);
 
@@ -230,9 +266,9 @@ int disc_open(const char *cue_path)
 
     free(cue_text);
 
-    for (i = 0; i < cue.count; i++)
+    for (i = 0; i < disc_cue.count; i++)
     {
-        if (!cue.tracks[i].is_audio)
+        if (!disc_cue.tracks[i].is_audio)
         {
             data_track = i;
             break;
@@ -245,13 +281,13 @@ int disc_open(const char *cue_path)
         return 0;
     }
 
-    if (dir[0] != '\0')
+    if (disc_cue_dir[0] != '\0')
     {
-        snprintf(data_path, sizeof(data_path), "%s/%s", dir, cue.tracks[data_track].filename);
+        snprintf(data_path, sizeof(data_path), "%s/%s", disc_cue_dir, disc_cue.tracks[data_track].filename);
     }
     else
     {
-        snprintf(data_path, sizeof(data_path), "%s", cue.tracks[data_track].filename);
+        snprintf(data_path, sizeof(data_path), "%s", disc_cue.tracks[data_track].filename);
     }
 
     disc_data_fp = fopen(data_path, "rb");
@@ -388,17 +424,165 @@ int disc_read_file(const char *name, void *out, int max_size)
 }
 
 /*----------------------
- | disc_play_track / disc_stop_track
- | Description: No-op stubs for this task -- see disc.h. Nothing calls
- |   these yet; music still runs through music.c/SDL_mixer until Task 6.
+ | disc_music_callback
+ | Description: The Mix_HookMusic callback. Audio tracks are raw CD-DA --
+ |   44100 Hz/16-bit signed/stereo/little-endian, no header -- and main.c's
+ |   audio device is opened in that exact format with no
+ |   SDL_AUDIO_ALLOW_ANY_CHANGE (see main.c), so this is a buffered fread
+ |   straight into the mixer's buffer: no decode, no resample.
+ |
+ |   Runs on SDL_mixer's audio thread, not the main thread -- it must never
+ |   touch disc_music_fp in a way that races disc_play_track/disc_stop_track
+ |   closing it. It doesn't: those two always call Mix_HookMusic(NULL, NULL)
+ |   before fclose, and SDL_mixer guarantees the outgoing hook is not
+ |   invoked again once that call returns.
+ | Author: suinevere
+ ----------------------*/
+static void disc_music_callback(void *udata, Uint8 *stream, int len)
+{
+    size_t want = (size_t)len;
+    size_t got;
+
+    (void)udata;
+
+    if (disc_music_fp == NULL)
+    {
+        memset(stream, 0, want);
+        return;
+    }
+
+    got = fread(stream, 1, want, disc_music_fp);
+
+    if (got < want && disc_music_loop != 0)
+    {
+        /* CD-DA tracks carry no header, so "the start of the track" is
+           just byte 0 of the file -- looping is a plain rewind. */
+        if (fseek(disc_music_fp, 0, SEEK_SET) == 0)
+        {
+            got += fread(stream + got, 1, want - got, disc_music_fp);
+        }
+    }
+
+    if (got < want)
+    {
+        /* EOF with nothing left to loop back to (or a failed rewind seek):
+           zero-fill the remainder so the mixer never plays stale buffer
+           contents, then unhook so this callback stops being invoked with
+           a file that has nothing left to give it. */
+        memset(stream + got, 0, want - got);
+        Mix_HookMusic(NULL, NULL);
+    }
+}
+
+/*----------------------
+ | disc_play_track
+ | Description: Looks engine_index up through discfmt_cue_track_for_music
+ |   and the cached cue table from disc_open, then hooks disc_music_callback
+ |   onto the resulting audio track file. See disc.h for the seam and
+ |   disc_music_callback above for the streaming format.
+ |
+ |   cls.nosound short-circuits this before any fopen: on that path main.c
+ |   never calls Mix_OpenAudioDevice, so there is no device for
+ |   Mix_HookMusic to feed and opening the track file would be pure waste.
+ |
+ |   Also re-verifies the negotiated device spec via Mix_QuerySpec on every
+ |   call, independent of main.c's own startup check -- this is the raw
+ |   fread streamer with no resampler, so 44100 Hz/AUDIO_S16/stereo is a
+ |   hard precondition, not an optimization. Checking here rather than
+ |   trusting a flag set once at startup means this function is correct on
+ |   its own even if that startup check is ever refactored away.
  | Author: suinevere
  ----------------------*/
 void disc_play_track(int engine_index, int loop)
 {
-    (void)engine_index;
-    (void)loop;
+    int cue_track;
+    int i;
+    const char *filename = NULL;
+    char path[768];
+    FILE *fp;
+    int spec_freq = 0;
+    Uint16 spec_format = 0;
+    int spec_channels = 0;
+
+    if (cls.nosound != 0)
+    {
+        return;
+    }
+
+    Mix_QuerySpec(&spec_freq, &spec_format, &spec_channels);
+    if (spec_freq != 44100 || spec_format != AUDIO_S16 || spec_channels != 2)
+    {
+        fprintf(stderr, "disc_play_track: audio device is freq=%d format=0x%x channels=%d, "
+                        "not 44100/AUDIO_S16(0x%x)/2 -- refusing to play track (would be "
+                        "pitched/timed wrong)\n",
+                spec_freq, (unsigned)spec_format, spec_channels, (unsigned)AUDIO_S16);
+        return;
+    }
+
+    cue_track = discfmt_cue_track_for_music(engine_index);
+    if (cue_track == 0)
+    {
+        fprintf(stderr, "disc_play_track: engine index %d has no cue track mapping\n", engine_index);
+        return;
+    }
+
+    for (i = 0; i < disc_cue.count; i++)
+    {
+        if (disc_cue.tracks[i].is_audio && disc_cue.tracks[i].number == cue_track)
+        {
+            filename = disc_cue.tracks[i].filename;
+            break;
+        }
+    }
+
+    if (filename == NULL)
+    {
+        fprintf(stderr, "disc_play_track: cue track %d (engine index %d) not found in cue sheet\n", cue_track, engine_index);
+        return;
+    }
+
+    if (disc_cue_dir[0] != '\0')
+    {
+        snprintf(path, sizeof(path), "%s/%s", disc_cue_dir, filename);
+    }
+    else
+    {
+        snprintf(path, sizeof(path), "%s", filename);
+    }
+
+    /* Unhook-then-close the previous track before opening the new one --
+       exactly the disc_stop_track sequence, so there is no window where
+       the audio thread could still be reading through a handle about to
+       be fclose'd. */
+    disc_stop_track();
+
+    fp = fopen(path, "rb");
+    if (fp == NULL)
+    {
+        fprintf(stderr, "disc_play_track: can't open track file '%s'\n", path);
+        return;
+    }
+
+    disc_music_fp = fp;
+    disc_music_loop = loop;
+    Mix_HookMusic(disc_music_callback, NULL);
 }
 
+/*----------------------
+ | disc_stop_track
+ | Description: Mix_HookMusic(NULL, NULL) before fclose, always, with no
+ |   path that skips it -- see disc_music_callback. Safe to call with
+ |   nothing playing (disc_music_fp == NULL): Mix_HookMusic(NULL, NULL) is
+ |   a harmless no-op unhook and the fclose is skipped.
+ | Author: suinevere
+ ----------------------*/
 void disc_stop_track(void)
 {
+    Mix_HookMusic(NULL, NULL);
+
+    if (disc_music_fp != NULL)
+    {
+        fclose(disc_music_fp);
+        disc_music_fp = NULL;
+    }
 }

@@ -50,11 +50,14 @@ int disc_read_file(const char *name, void *out, int max_size);
 
 /*----------------------
  | disc_play_track / disc_stop_track
- | Description: Declared here so the seam is complete, but stubbed (no-op)
- |   in this task -- nothing calls them yet, since music still runs through
- |   the old music.c/SDL_mixer path until Task 6 retires it. Task 5 gives
- |   these real bodies over Mix_HookMusic, streaming the raw CD-DA track
- |   named by discfmt_cue_track_for_music(engine_index).
+ | Description: Streams the raw CD-DA audio track named by
+ |   discfmt_cue_track_for_music(engine_index) through Mix_HookMusic --
+ |   fread straight into the mixer's buffer, no decode, no resample, since
+ |   the track and the audio device are the same format (44100/S16/stereo).
+ |   disc_stop_track is the unhook-then-close half of disc_play_track's
+ |   track-change sequence, exposed on its own for the callers that only
+ |   need to stop. See src/host/disc_cue.c for the implementation and the
+ |   ordering reason.
  | Author: suinevere
  ----------------------*/
 void disc_play_track(int engine_index, int loop);

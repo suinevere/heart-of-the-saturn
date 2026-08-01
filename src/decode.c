@@ -20,7 +20,7 @@
 #include <SDL.h>
 
 #include "vm.h"
-#include "music.h"
+#include "disc.h"
 #include "debug.h"
 #include "sound.h"
 #include "common.h"
@@ -1843,23 +1843,23 @@ int decode(int current_task, int start_pc)
 				}
 				else if (next_script == 7)
 				{
-					play_music_track(35, 0);
+					disc_play_track(35, 0);
 					play_animation("MAKE2MB.BIN", 0x109a);
-					play_music_track(36, 0);
+					disc_play_track(36, 0);
 					play_animation("MID2.BIN", 0);
-					stop_music();
+					disc_stop_track();
 					next_script = 6;
 					leave = 1;
 				}
 				else if (next_script == 6)
 				{
-					play_music_track(37, 0);
+					disc_play_track(37, 0);
 					play_animation("END1.BIN", 0);
-					play_music_track(38, 0);
+					disc_play_track(38, 0);
 					play_animation("END2.BIN", 0);
-					play_music_track(39, 0);
+					disc_play_track(39, 0);
 					play_animation("END3.BIN", 0);
-					play_music_track(40, 0);
+					disc_play_track(40, 0);
 					play_animation("END4.BIN", 0);
 
 					/* return to password selection */
@@ -1882,7 +1882,7 @@ int decode(int current_task, int start_pc)
 			if (imm8 == 0)
 			{
 				/* stop music */
-				stop_music();
+				disc_stop_track();
 			}
 			else if (imm8 >= 100)
 			{
@@ -1890,14 +1890,14 @@ int decode(int current_task, int start_pc)
 				imm8 = imm8 - 100 - 1;
 
 				LOG(("play single audio track %d\n", imm8));
-				play_music_track(imm8, 0);
+				disc_play_track(imm8, 0);
 			}
 			else
 			{
 				imm8 = imm8 - 1;
 				LOG(("play audio track %d\n", imm8));
 
-				play_music_track(imm8, 1);
+				disc_play_track(imm8, 1);
 			}
 			break;
 

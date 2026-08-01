@@ -30,7 +30,6 @@
 #include "rooms.h"
 #include "debug.h"
 #include "sound.h"
-#include "music.h"
 #include "common.h"
 #include "disc.h"
 #include "decode.h"
@@ -133,7 +132,7 @@ static int load_room(int index)
 static void atexit_callback(void)
 {
 	disc_close();
-	stop_music();
+	disc_stop_track();
 	SDL_Quit();
 }
 
@@ -144,11 +143,25 @@ static int initialize()
 
 	if (cls.nosound == 0)
 	{
+		int spec_freq;
+		Uint16 spec_format;
+		int spec_channels;
+
+		/* SDL_AUDIO_ALLOW_ANY_CHANGE deliberately removed (flags arg is 0
+		   below): it let SDL hand back a device at a different frequency,
+		   format or channel count than requested, and SDL_mixer would then
+		   mix at that spec silently. disc_cue.c's Mix_HookMusic callback
+		   streams CD-DA straight off the disc with a plain fread -- no
+		   resample -- so correct pitch/speed depends on the device really
+		   being 44100 Hz/AUDIO_S16/stereo. A 48000 Hz WASAPI device (common
+		   on Windows) would otherwise play every track about 8.8% fast:
+		   plausible enough to survive casual listening. Do not restore this
+		   flag without also giving disc_cue.c a resampler. */
 #if (SDL_VERSIONNUM(SDL_MIXER_MAJOR_VERSION, SDL_MIXER_MINOR_VERSION, SDL_MIXER_PATCHLEVEL) >= SDL_VERSIONNUM(2, 0, 2))
 		const SDL_version *link_version = Mix_Linked_Version();
 		if (SDL_VERSIONNUM(link_version->major, link_version->minor, link_version->patch) >= SDL_VERSIONNUM(2,0,2))
 		{
-			if (Mix_OpenAudioDevice(44100, AUDIO_S16, 2, 4096, NULL, SDL_AUDIO_ALLOW_ANY_CHANGE) < 0)
+			if (Mix_OpenAudioDevice(44100, AUDIO_S16, 2, 4096, NULL, 0) < 0)
 			{
 				panic("Mix_OpenAudio failed\n");
 			}
@@ -160,7 +173,31 @@ static int initialize()
 			panic("Mix_OpenAudio failed\n");
 		}
 
-		music_init();
+		/* Prove the negotiated spec rather than assume it matched the
+		   request. A mismatch here means disc_cue.c's unconverted CD-DA
+		   stream would play at the wrong pitch/speed -- worse than silence,
+		   since it sounds plausible and gets missed. disc_play_track
+		   independently re-checks this before every track and refuses to
+		   play on a mismatch; this printout is so the mismatch (or the
+		   match) is visible at startup instead of only discovered later. */
+		spec_freq = 0;
+		spec_format = 0;
+		spec_channels = 0;
+		Mix_QuerySpec(&spec_freq, &spec_format, &spec_channels);
+		if (spec_freq != 44100 || spec_format != AUDIO_S16 || spec_channels != 2)
+		{
+			fprintf(stderr, "WARNING: audio device negotiated freq=%d format=0x%x channels=%d, "
+			                "expected 44100/AUDIO_S16(0x%x)/2 -- CD-DA music will NOT play "
+			                "(would be pitched/timed wrong)\n",
+			        spec_freq, (unsigned)spec_format, spec_channels, (unsigned)AUDIO_S16);
+		}
+		else
+		{
+			printf("audio device negotiated freq=%d format=0x%x channels=%d (matches CD-DA, music enabled)\n",
+			       spec_freq, (unsigned)spec_format, spec_channels);
+		}
+		fflush(stdout);
+
 		sound_init();
 	}
 
@@ -707,7 +744,7 @@ int play_anm(anm_file_t *anm, int n, int skippable)
 		{
 			int ok;
 
-			play_music_track(anm[seq].track, 0);
+			disc_play_track(anm[seq].track, 0);
 			ok = play_animation(anm[seq].filename, anm[seq].offset);
 			if (ok < 0)
 			{
@@ -723,7 +760,7 @@ int play_anm(anm_file_t *anm, int n, int skippable)
 		}
 	}
 
-	stop_music();
+	disc_stop_track();
 	return ret;
 }
 
@@ -828,8 +865,6 @@ static void run()
 				break;
 			}
 		}
-
-		music_update();
 
 		rest(12);
 	}

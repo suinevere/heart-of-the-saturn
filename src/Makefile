@@ -6,7 +6,7 @@ SDL_LIBS = `sdl2-config --libs`
 CFLAGS=-ggdb -DENABLE_DEBUG -O2 -Wall -I. -Ihost $(SDL_CFLAGS)
 OBJS=\
 	client.o common.o vm.o      sprites.o decode.o   animation.o   \
-	rooms.o  render.o main.o    music.o   debug.o    lzss.o        \
+	rooms.o  render.o main.o    debug.o    lzss.o                  \
 	sound.o  screen.o scale2x.o scale3x.o game2bin.o discfmt.o     \
 	disc_cue.o
 
