@@ -101,8 +101,20 @@ static uint32_t discfmt_read_le32(const uint8_t *p)
 
 int discfmt_iso_root(const uint8_t *pvd_user, uint32_t *lba, uint32_t *len)
 {
-    const uint8_t *rec = pvd_user + 156;
-    uint8_t rec_len = rec[0];
+    static const uint8_t DISCFMT_PVD_IDENTIFIER[5] = { 'C', 'D', '0', '0', '1' };
+    const uint8_t *rec;
+    uint8_t rec_len;
+
+    /* Refuse to trust offset 156 of a buffer that is not actually a PVD --
+       wrong type code, or missing the "CD001" identifier, means this is the
+       wrong sector (or garbage), not a directory record. */
+    if (pvd_user[0] != 1 || memcmp(pvd_user + 1, DISCFMT_PVD_IDENTIFIER, 5) != 0)
+    {
+        return 0;
+    }
+
+    rec = pvd_user + 156;
+    rec_len = rec[0];
 
     if (rec_len < 34)
     {
@@ -191,17 +203,23 @@ int discfmt_iso_find(const uint8_t *dir, uint32_t dir_len, const char *name, uin
 /*----------------------
  | discfmt_cue_track_number
  | Description: Parses the decimal, zero-padded track number following
- |   "TRACK " on a cue TRACK line.
+ |   "TRACK " on a cue TRACK line. Bounds the scan with avail because a
+ |   cue sheet's final line may lack a trailing newline -- ordinary input
+ |   when Task 4's disc_open reads with fread into a sized buffer and
+ |   hands over that exact length. Every existing test and the real disc's
+ |   own cue file end in a newline, which is why this was not caught until
+ |   a guard-page regression test was written for it.
  | Author: suinevere
  ----------------------*/
-static int discfmt_cue_track_number(const char *p)
+static int discfmt_cue_track_number(const char *p, size_t avail)
 {
     int n = 0;
 
-    while (*p >= '0' && *p <= '9')
+    while (avail > 0 && *p >= '0' && *p <= '9')
     {
         n = n * 10 + (*p - '0');
         p++;
+        avail--;
     }
 
     return n;
@@ -316,7 +334,7 @@ int discfmt_cue_parse(const char *text, size_t len, DiscCue *out, int *single_fi
                     k++;
                 }
 
-                number = discfmt_cue_track_number(line + k);
+                number = discfmt_cue_track_number(line + k, (size_t)(line_len - k));
 
                 while (k < line_len && line[k] >= '0' && line[k] <= '9')
                 {

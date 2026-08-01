@@ -10,6 +10,14 @@
 #include <string.h>
 #include "discfmt.h"
 
+#ifdef _WIN32
+/* Only the guard-page regression below needs this -- discfmt.h/.c stay free
+   of it. VirtualAlloc lets that one test place its buffer directly against
+   an unmapped page, so an out-of-bounds read faults deterministically
+   instead of merely reading unrelated-but-mapped memory and getting lucky. */
+#include <windows.h>
+#endif
+
 static int g_fail = 0;
 
 #define CHECK_EQ(actual, expected)                                            \
@@ -184,6 +192,8 @@ static void test_iso_root(void)
        expressed as a C string through build_iso_record's strlen -- so this
        one record is written directly instead of through the builder. */
     memset(pvd, 0, sizeof(pvd));
+    pvd[0] = 1;                    /* PVD type code */
+    memcpy(pvd + 1, "CD001", 5);   /* PVD standard identifier */
     pvd[156 + 0] = 34;   /* record length: 33 fixed bytes + 1-byte name */
     pvd[156 + 2] = 20;   /* LBA, LE: 20 */
     pvd[156 + 10] = 0x00; /* size, LE: 4096 = 0x00001000 */
@@ -194,6 +204,49 @@ static void test_iso_root(void)
     CHECK(discfmt_iso_root(pvd, &lba, &len));
     CHECK_EQ(lba, 20);
     CHECK_EQ(len, 4096);
+}
+
+static void test_iso_root_rejects_non_pvd(void)
+{
+    /* Important-severity regression: discfmt_iso_root must not trust offset
+       156 of an arbitrary sector. A buffer that is not actually a Primary
+       Volume Descriptor -- wrong type code, or missing the "CD001"
+       identifier -- must be rejected outright, rather than returning a
+       plausible-looking LBA/size read from the wrong place. Tasks 4 and 7
+       both trust this return value to locate every file on the disc, so a
+       silent bogus success here would surface as "the whole disc is
+       corrupt" rather than "we read the wrong sector". */
+    uint8_t pvd[2048];
+    uint32_t lba = 0;
+    uint32_t len = 0;
+
+    /* Otherwise identical to test_iso_root's valid record -- byte 0 and
+       bytes 1..5 are left zero, so there is neither the type code nor the
+       "CD001" identifier. This is what a directory record sitting at 156
+       of a random, non-PVD sector looks like. */
+    memset(pvd, 0, sizeof(pvd));
+    pvd[156 + 0] = 34;
+    pvd[156 + 2] = 20;
+    pvd[156 + 10] = 0x00;
+    pvd[156 + 11] = 0x10;
+    pvd[156 + 32] = 1;
+    pvd[156 + 33] = 0;
+
+    CHECK(!discfmt_iso_root(pvd, &lba, &len));
+
+    /* The identifier alone is not enough either -- the type code must also
+       be 1, not (say) 2, a Supplementary Volume Descriptor. */
+    memset(pvd, 0, sizeof(pvd));
+    pvd[0] = 2;
+    memcpy(pvd + 1, "CD001", 5);
+    pvd[156 + 0] = 34;
+    pvd[156 + 2] = 20;
+    pvd[156 + 10] = 0x00;
+    pvd[156 + 11] = 0x10;
+    pvd[156 + 32] = 1;
+    pvd[156 + 33] = 0;
+
+    CHECK(!discfmt_iso_root(pvd, &lba, &len));
 }
 
 static void test_iso_find(void)
@@ -323,17 +376,86 @@ static void test_cue_parse_malformed_not_single_file(void)
     CHECK_EQ(single_file, 0);
 }
 
+#ifdef _WIN32
+static void test_cue_parse_no_trailing_newline_track_number_bound(void)
+{
+    /* Critical regression: discfmt_cue_track_number had no bound of its
+       own and relied on hitting a non-digit byte to know when to stop.
+       A TRACK line's number sitting at the very end of the input, with no
+       trailing newline, walked straight past text+len looking for one --
+       ordinary input, since Task 4's disc_open reads a cue with fread into
+       a sized buffer and hands over that exact length, and nothing
+       guarantees a cue file's last line ends in a newline.
+
+       A plain stack or heap buffer sitting next to unrelated-but-mapped
+       bytes would not reliably fault even with the bug present, which is
+       exactly why it survived the original test suite -- every existing
+       fixture and the real disc's cue both end in a newline, so every scan
+       always found its terminator before any bound would have mattered.
+       This places the content at the very end of a committed page,
+       immediately followed by a reserved-but-uncommitted page: any read
+       past `len` here is guaranteed to raise an access violation, not
+       merely read garbage. */
+    static const char cue[] = "FILE \"x\" BINARY\r\n  TRACK 01";
+    size_t cue_len = sizeof(cue) - 1;
+    SYSTEM_INFO si;
+    size_t page_size;
+    uint8_t *region;
+    uint8_t *first_page;
+    uint8_t *dst;
+    DiscCue disc_cue;
+    int single_file = -1;
+
+    GetSystemInfo(&si);
+    page_size = (size_t)si.dwPageSize;
+
+    /* Reserve two pages with no access, then commit only the first. The
+       second stays reserved-only, so it acts as a guard page immediately
+       after whatever is placed at the end of the first. */
+    region = (uint8_t *)VirtualAlloc(NULL, page_size * 2, MEM_RESERVE, PAGE_NOACCESS);
+    CHECK(region != NULL);
+    if (region == NULL)
+    {
+        return;
+    }
+
+    first_page = (uint8_t *)VirtualAlloc(region, page_size, MEM_COMMIT, PAGE_READWRITE);
+    CHECK(first_page == region);
+
+    /* The cue text's last byte lands on the last byte of the committed
+       page -- the guard page begins at the very next address. */
+    dst = region + page_size - cue_len;
+    memcpy(dst, cue, cue_len);
+
+    CHECK(!discfmt_cue_parse((const char *)dst, cue_len, &disc_cue, &single_file));
+    CHECK_EQ(single_file, 0);
+
+    VirtualFree(region, 0, MEM_RELEASE);
+}
+#endif
+
 int main(void)
 {
+#ifdef _WIN32
+    /* Suppress the WER crash dialog so a genuine access violation in the
+       guard-page regression below terminates the process instead of
+       blocking forever on a dialog with no one to click it. */
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+#endif
+
     test_mode1_user_offset();
     test_sector_span();
     test_iso_name_eq();
     test_cue_track_for_music();
     test_iso_root();
+    test_iso_root_rejects_non_pvd();
     test_iso_find();
     test_cue_parse_multi_file();
     test_cue_parse_single_file_rejected();
     test_cue_parse_malformed_not_single_file();
+#ifdef _WIN32
+    test_cue_parse_no_trailing_newline_track_number_bound();
+#endif
 
     if (g_fail == 0) {
         printf("all tests passed\n");

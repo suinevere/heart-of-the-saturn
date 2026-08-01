@@ -143,6 +143,15 @@ int discfmt_cue_parse(const char *text, size_t len, DiscCue *out, int *single_fi
  |   fixed offset (156) in every ISO9660 PVD, so this is a straight field
  |   read, not a search -- discfmt_iso_find is for records found underneath
  |   the root once its LBA and length are known.
+ |
+ |   Validates that pvd_user is actually a Primary Volume Descriptor before
+ |   trusting offset 156: byte 0 must be the PVD type code (1) and bytes
+ |   1..5 must read "CD001". Returns 0 if either check fails. Without this,
+ |   a wrong sector or a garbage buffer that happens to satisfy the record's
+ |   own length check would still return success with a meaningless LBA and
+ |   length -- and Tasks 4 and 7 both trust this return value to locate
+ |   every file on the disc, so a silent bogus success here surfaces later
+ |   as "the whole disc is corrupt" rather than "we read the wrong sector".
  | Author: suinevere
  ----------------------*/
 int discfmt_iso_root(const uint8_t *pvd_user, uint32_t *lba, uint32_t *len);
