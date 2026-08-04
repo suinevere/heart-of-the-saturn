@@ -20,6 +20,12 @@
 #ifndef INPUT_H
 #define INPUT_H
 
+/* The Saturn backend is C++; without this its definitions would get C++
+   linkage and fail to satisfy the C callers. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern int key_up, key_down, key_left, key_right;
 extern int key_a, key_b, key_c, key_select;
 extern int key_reset_record;
@@ -34,5 +40,9 @@ extern int key_reset_record;
  | Author: suinevere
  ----------------------*/
 void check_events(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* INPUT_H */

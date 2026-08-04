@@ -12,12 +12,7 @@
  | Dependencies: input.h
  ----------------------*/
 
-// input.h carries no extern "C" guard of its own. Included plain from a .cxx
-// its declaration picks up C++ linkage, which then conflicts with the
-// extern "C" definition below and with the C objects that call it.
-extern "C" {
 #include "input.h"
-}
 
 extern "C" {
 

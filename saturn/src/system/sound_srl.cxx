@@ -17,12 +17,7 @@
  | Dependencies: sound.h
  ----------------------*/
 
-// sound.h carries no extern "C" guard of its own. Included plain from a .cxx
-// its declarations pick up C++ linkage, which then conflicts with the
-// extern "C" definitions below and with the C objects that call them.
-extern "C" {
 #include "sound.h"
-}
 
 extern "C" {
 

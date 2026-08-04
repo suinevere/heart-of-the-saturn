@@ -26,13 +26,7 @@
 #include "disc_manifest.h"
 #include "saturn_compat.h"
 
-// disc.h carries no extern "C" guard of its own -- included plain from a
-// .cxx its five declarations pick up C++ linkage, which then conflicts with
-// the extern "C" definitions below. Same trap saturn_compat.h documents for
-// SGL's <string.h>.
-extern "C" {
 #include "disc.h"
-}
 
 /*----------------------
  | g_discOpened

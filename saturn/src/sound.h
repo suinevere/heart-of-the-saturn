@@ -19,6 +19,12 @@
 #ifndef __SOUND_INCLUDED__
 #define __SOUND_INCLUDED__
 
+/* The Saturn backend is C++; without this its definitions would get C++
+   linkage and fail to satisfy the C callers. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /** Initialize sound module
     @returns zero on success, negative value on error
 */
@@ -44,5 +50,9 @@ void sound_flush_cache();
     in cache until purged manually.
 */
 void play_sample(int index, int volume, int channel);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

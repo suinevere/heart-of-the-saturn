@@ -27,6 +27,12 @@
 #ifndef PLATFORM_H
 #define PLATFORM_H
 
+/* The Saturn backend is C++; without this its definitions would get C++
+   linkage and fail to satisfy the C callers. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*----------------------
  | platform_init
  | Description: Module initializer, called before any other engine startup.
@@ -78,5 +84,9 @@ void         platform_delay(unsigned int ms);
  | Author: suinevere
  ----------------------*/
 void         platform_frame(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* PLATFORM_H */

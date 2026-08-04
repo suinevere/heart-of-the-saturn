@@ -34,13 +34,8 @@
 #include <srl.hpp>
 #include "saturn_compat.h"
 
-// Neither header carries an extern "C" guard of its own. Included plain from
-// a .cxx their declarations pick up C++ linkage, which then conflicts with
-// the extern "C" definitions below and with the C objects that call them.
-extern "C" {
 #include "video.h"
 #include "game2bin.h"
-}
 
 /*----------------------
  | SCREEN_W / SCREEN_H / VRAM_PITCH / VRAM_ROWS / OFFSET_X / OFFSET_Y

@@ -48,6 +48,12 @@
 #ifndef DISC_H
 #define DISC_H
 
+/* The Saturn backend is C++; without this its definitions would get C++
+   linkage and fail to satisfy the C callers. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*----------------------
  | disc_open
  | Description: Opens the disc named by cue_path, parses its layout and
@@ -119,5 +125,9 @@ void disc_stop_track(void);
  | Author: suinevere
  ----------------------*/
 void disc_close(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* DISC_H */

@@ -19,6 +19,12 @@
 #ifndef __GAME2BIN_INCLUDED__
 #define __GAME2BIN_INCLUDED__
 
+/* video_srl.cxx includes this from C++; without this the declarations would
+   get C++ linkage and fail to match the C definitions in game2bin.c. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*----------------------
  | game2bin_alloc / game2bin_free
  | Description: Acquires the GAME2BIN_SIZE-byte resident GAME2.BIN buffer.
@@ -48,5 +54,9 @@ int game2bin_init();
     @returns bytes copied (length on success)
 */
 int  copy_from_game2bin(void *dst, int offset, int length);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

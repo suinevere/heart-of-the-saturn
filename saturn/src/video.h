@@ -24,6 +24,12 @@
 #ifndef VIDEO_H
 #define VIDEO_H
 
+/* The Saturn backend is C++; without this its definitions would get C++
+   linkage and fail to satisfy the C callers. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*----------------------
  | video_init
  | Description: Module initializer, called before anything else in this
@@ -120,5 +126,9 @@ int  video_get_scroll_register(void);
  | Author: suinevere
  ----------------------*/
 void video_toggle_fullscreen(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* VIDEO_H */

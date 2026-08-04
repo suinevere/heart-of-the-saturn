@@ -26,12 +26,7 @@
  ----------------------*/
 #include <srl.hpp>
 
-// platform.h carries no extern "C" guard of its own. Included plain from a
-// .cxx its five declarations pick up C++ linkage, which then conflicts with
-// the extern "C" definitions below and with the C objects that call them.
-extern "C" {
 #include "platform.h"
-}
 
 /*----------------------
  | g_frames
