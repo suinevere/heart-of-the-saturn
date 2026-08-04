@@ -5,10 +5,16 @@
  |
  |   platform_frame is the one function with no SDL ancestor. On the host the
  |   game loop is free-running and this is a no-op; on Saturn it is
- |   SRL::Core::Synchronize(), and the loop must call it every iteration or the
- |   VDP2 layer is never presented and the screen stays black. It is declared
- |   here rather than hidden inside video_render because it paces the whole
- |   frame, not just the blit.
+ |   SRL::Core::Synchronize(), and every loop that renders must call it once per
+ |   frame or the VDP2 layer is never presented and the screen stays black.
+ |   The engine has two such loops, not one: run()'s task scheduler in main.c,
+ |   and the animation player's own loops in animation.c, which drive the intro
+ |   and never reach run()'s tail. Both call it exactly once per frame they
+ |   present -- main.c at the tail of the loop body, animation.c from
+ |   post_render. It is declared here rather than hidden inside video_render
+ |   because it paces the whole frame, not just the blit, and because
+ |   screen.c's update_screen renders on run()'s behalf without owning a frame
+ |   boundary of its own.
  |
  |   Audio device setup is deliberately absent. main.c's Mix_OpenAudioDevice
  |   block exists solely to guarantee the host disc backend's CD-DA
@@ -62,10 +68,13 @@ void         platform_delay(unsigned int ms);
 
 /*----------------------
  | platform_frame
- | Description: Called once per game-loop iteration, after rendering. On the
- |   host it is empty -- the loop is free-running. On Saturn it will be
- |   SRL::Core::Synchronize(), without which the VDP2 layer is never
- |   presented and the screen stays black.
+ | Description: Called once per presented frame by whichever loop produced it
+ |   -- run() in main.c and post_render in animation.c, and no one else. On the
+ |   host it is empty; the loop is free-running. On Saturn it is
+ |   SRL::Core::Synchronize(), without which the VDP2 layer is never presented
+ |   and the screen stays black. Calling it twice for one frame costs a whole
+ |   field and halves the frame rate, so a third caller is a bug, not a
+ |   redundancy.
  | Author: suinevere
  ----------------------*/
 void         platform_frame(void);

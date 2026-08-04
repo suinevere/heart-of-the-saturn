@@ -30,6 +30,7 @@
 #include "common.h"
 #include "client.h"
 #include "input.h"
+#include "platform.h"
 #include "main.h"
 
 ///////
@@ -63,13 +64,40 @@ static unsigned char screen4[192*304];
 #define DELTA_SCRATCH_SIZE (0x100000 - 0xdc000)
 static unsigned char delta_scratch[DELTA_SCRATCH_SIZE];
 
+/*----------------------
+ | post_render
+ | Description: The animation player's per-frame tail, run once for every
+ |   copy_to_screen. platform_frame comes first because on Saturn it is the
+ |   call that actually presents the frame copy_to_screen just wrote: these
+ |   loops never reach run()'s platform_frame, so without it the intro would
+ |   present only by accident, on the frames where rest()'s busy-wait happened
+ |   to spin. Presenting before check_events also means the input read below
+ |   sees peripherals refreshed by the same sync.
+ | Author: suinevere
+ | Dependencies: platform.h, input.h, main.h (rest)
+ | Globals: N/A
+ | Params: fps -- frame budget handed to rest(), 0 to only reset the clock
+ | Returns: N/A
+ ----------------------*/
 static void post_render(int fps)
 {
+	platform_frame();
 	check_events();
 	update_keys();
 	rest(fps);
 }
 
+/*----------------------
+ | copy_to_screen
+ | Description: Hands the animation player's working buffer across the video
+ |   seam. Does not present it -- post_render does, on the next line at every
+ |   call site.
+ | Author: suinevere
+ | Dependencies: video.h
+ | Globals: screen0
+ | Params: a4 -- byte offset into screen0 the frame starts at
+ | Returns: N/A
+ ----------------------*/
 static void copy_to_screen(int a4)
 {
 	//video_set_scroll(0); /////////

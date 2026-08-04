@@ -145,10 +145,13 @@ void platform_delay(unsigned int ms)
 
 /*----------------------
  | platform_frame
- | Description: SRL::Core::Synchronize(), called once per game-loop iteration.
- |   Without it the VDP2 layer video_srl.cxx wrote is never presented and the
- |   screen stays black, which is the whole reason platform.h declares this
- |   seam at all.
+ | Description: SRL::Core::Synchronize(), called once per presented frame by
+ |   run() in main.c and by animation.c's post_render, which is the loop the
+ |   intro actually runs in. Without it the VDP2 layer video_srl.cxx wrote is
+ |   never presented and the screen stays black, which is the whole reason
+ |   platform.h declares this seam at all. Synchronize waits for vblank, so a
+ |   second call for the same frame does not merely cost nothing -- it costs a
+ |   whole field.
  | Author: suinevere
  | Globals: N/A
  | Params: N/A

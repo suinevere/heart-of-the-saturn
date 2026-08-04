@@ -51,6 +51,10 @@ int  video_create_surface(void);
  |   SDL texture's pixel format; on Saturn the format already matches
  |   VDP2 Paletted256, so it is a straight copy, one memcpy per source
  |   line because the destination stride does not match the source pitch.
+ |   It does not present the frame. Presentation is platform_frame's job,
+ |   because the loop that owns the frame boundary is not always the caller
+ |   here -- screen.c's update_screen renders inside run()'s iteration, and
+ |   syncing here would sync twice for that frame.
  | Author: suinevere
  ----------------------*/
 void video_render(char *src);
