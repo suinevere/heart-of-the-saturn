@@ -66,17 +66,18 @@ unsigned char *get_memory_ptr(int offset);
  |   than taken with sizeof because vm.c's backing store is a static array on
  |   the host and an LWRAM allocation on Saturn -- sizeof would yield 4 on the
  |   pointer form and hand every caller a 4-byte buffer with no diagnostic.
- |   Fixed at 0x100000, not lower, because of three fixed sites: main.c:116
- |   loads ROOMSn.BIN at 0xf900 (largest 370,688), animation.c:869 loads
- |   animations at up to 0x809a (largest 432,128), and animation.c:746 writes
- |   delta-unpack scratch for animation playback at 0xdc000 -- routine
- |   playback reaches that site via play_sequence, and the engine relies on
- |   the space above 0xdc000 remaining available for it. get_memory_ptr does
- |   not itself validate offsets against this bound; nothing enforces it at
- |   runtime beyond the map being large enough to contain it.
+ |   0x80000 covers every load site with room to spare: animation.c loads
+ |   animations at up to offset 0x809a and the largest is 432,128 bytes, for a
+ |   worst case of 465,050, and main.c:116 loads ROOMSn.BIN at 0xf900 (largest
+ |   370,688) which ends lower. That leaves about 59 KB of headroom. It was
+ |   0x100000 until 2026-08-04 only because a 144 KB delta-unpack scratch was
+ |   parked at 0xdc000; that buffer is a host array in animation.c now and no
+ |   longer constrains this. get_memory_ptr does not itself validate offsets
+ |   against this bound; nothing enforces it at runtime beyond the map being
+ |   large enough to contain it.
  | Author: suinevere
  ----------------------*/
-#define MEMORY_SIZE 0x100000
+#define MEMORY_SIZE 0x80000
 
 /*----------------------
  | get_memory_size

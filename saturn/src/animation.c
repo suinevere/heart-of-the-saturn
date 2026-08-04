@@ -40,6 +40,20 @@ static unsigned char *screen0 = screenX + 1*304;
 static unsigned char *screen2 = screenX + (192+1)*304;
 static unsigned char screen4[192*304];
 
+/*----------------------
+ | delta_scratch
+ | Description: Decode buffer for unpack_animation_delta. Lived at offset 0xdc000
+ |   inside the emulated 68000 map until 2026-08-04, which forced the map to stay
+ |   1 MB and put the Saturn port 189 KB over its total work RAM. It is not
+ |   emulated state -- nothing reads it through get_byte, and the original code
+ |   carried its own note to move it out. Sized 0x100000 - 0xdc000, the space the
+ |   original reserved above the scratch base, because unpack_animation_delta
+ |   writes a data-driven stream with no length of its own.
+ | Author: suinevere
+ ----------------------*/
+#define DELTA_SCRATCH_SIZE (0x100000 - 0xdc000)
+static unsigned char delta_scratch[DELTA_SCRATCH_SIZE];
+
 static void post_render(int fps)
 {
 	check_events();
@@ -215,16 +229,21 @@ static void unpack_animation_delta(int offset, unsigned char *out)
 	goto loc_d05e;
 }
 
-/**
-
-    This is probably the most interesting compression ever developed. The
-    color_mask passed represents which colors (out of 16) have changed in
-    this frame; each color is associated with a mask of what types of
-    brushes were used to draw these colors. Options are delta-horz-line,
-    rectangle, horizontal line, vertical line, set of pixels, 3x3, 4x4
-    and 5x5 patterns.
-*/
-static void anim_interesting(int a1, int a2, int a3, unsigned short color_mask)
+/*----------------------
+ | anim_interesting
+ | Description: Draws one delta frame, in probably the most interesting
+ |   compression ever developed. color_mask says which of the 16 colors changed
+ |   this frame; each is associated with a mask of the brush types used to draw
+ |   it -- delta-horz-line, rectangle, horizontal line, vertical line, set of
+ |   pixels, 3x3, 4x4 and 5x5 patterns. Two of the three cursors are pointers
+ |   and one is an offset, which is deliberate: a1 walks the loaded animation
+ |   stream, genuine emulated 68000 state that must be read with get_byte,
+ |   while a2 and a3 walk delta_scratch, a host buffer that no longer lives in
+ |   the map -- reading those through get_byte would fetch whatever the map
+ |   happens to hold at those offsets and silently corrupt the frame.
+ | Author: suinevere
+ ----------------------*/
+static void anim_interesting(int a1, const unsigned char *a2, const unsigned char *a3, unsigned short color_mask)
 {
 	unsigned char *out;
 	int d4;
@@ -262,14 +281,14 @@ static void anim_interesting(int a1, int a2, int a3, unsigned short color_mask)
 			fillline(out, offset, count, color);
 
 			loc_d324:
-			if (get_byte(a2) == 9 && get_byte(a3) == 9)
+			if (*a2 == 9 && *a3 == 9)
 			{
 				a2++;
 				a3++;
 				goto loc_d308;
 			}
 
-			if (get_byte(a2) == 8 && get_byte(a3) == 8)
+			if (*a2 == 8 && *a3 == 8)
 			{
 				a2++;
 				a3++;
@@ -277,10 +296,10 @@ static void anim_interesting(int a1, int a2, int a3, unsigned short color_mask)
 			}
 
 			offset += 304; /* next line */
-			d4 = extn(get_byte(a2++));
+			d4 = extn(*a2++);
 			offset += d4;
 			count -= d4;
-			d4 = extn(get_byte(a3++));
+			d4 = extn(*a3++);
 			count += d4;
 
 			fillline(out, offset, count, color);
@@ -550,7 +569,7 @@ void decompress_backdrop(unsigned char *out, int a2, int a3)
 int play_sequence(int offset, int fps)
 {
 	int d0, d1, d3, d4, d6, d7;
-	int a0, a1, a2, a3, a4, a5;
+	int a1, a2, a3, a4, a5;
 
 	rest(0);
 
@@ -735,20 +754,13 @@ int play_sequence(int offset, int fps)
 	a1 += 2;
 	if (d0 != 0)
 	{
-		unsigned char *ptr;
-
 		a2 += d0;
 		d3 = get_word(a1); /* colors mask used in this frame */
 		d4 = get_word(a1+2); /* offset of something */
 		a1 += 4;
 
-		/* XXX: move into a local array */
-		a0 = 0xdc000;
-		ptr = get_memory_ptr(a0);
-		unpack_animation_delta(a2, ptr);
-		a2 = a0;
-		a3 = a0 + d4;
-		anim_interesting(a1, a2, a3, (unsigned short)d3);
+		unpack_animation_delta(a2, delta_scratch);
+		anim_interesting(a1, delta_scratch, delta_scratch + d4, (unsigned short)d3);
 	}
 
 	/* a4 = screen0 */
