@@ -66,14 +66,17 @@ unsigned char *get_memory_ptr(int offset);
  |   than taken with sizeof because vm.c's backing store is a static array on
  |   the host and an LWRAM allocation on Saturn -- sizeof would yield 4 on the
  |   pointer form and hand every caller a 4-byte buffer with no diagnostic.
- |   0x80000 rather than the original 0x100000 because the game's three fixed
- |   load sites top out at 469,146 bytes: main.c:116 loads ROOMSn.BIN at
- |   0xf900 (largest 370,688) and animation.c:870 loads animations at up to
- |   0x809a (largest 436,224). The remaining ~55 KB is headroom over that
- |   worst case, verified at runtime by the bound check in get_memory_ptr.
+ |   Fixed at 0x100000, not lower, because of three fixed sites: main.c:116
+ |   loads ROOMSn.BIN at 0xf900 (largest 370,688), animation.c:869 loads
+ |   animations at up to 0x809a (largest 432,128), and animation.c:746 writes
+ |   delta-unpack scratch for animation playback at 0xdc000 -- routine
+ |   playback reaches that site via play_sequence, and the engine relies on
+ |   the space above 0xdc000 remaining available for it. get_memory_ptr does
+ |   not itself validate offsets against this bound; nothing enforces it at
+ |   runtime beyond the map being large enough to contain it.
  | Author: suinevere
  ----------------------*/
-#define MEMORY_SIZE 0x80000
+#define MEMORY_SIZE 0x100000
 
 /*----------------------
  | get_memory_size
