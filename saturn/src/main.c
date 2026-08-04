@@ -22,8 +22,6 @@
 #include <memory.h>
 #include <assert.h>
 #include <dirent.h>
-#include <SDL.h>
-#include <SDL_mixer.h>
 
 #include "client.h"
 #include "vm.h"
@@ -36,6 +34,7 @@
 #include "decode.h"
 #include "video.h"
 #include "input.h"
+#include "platform.h"
 #include "screen.h"
 #include "sprites.h"
 #include "game2bin.h"
@@ -92,8 +91,8 @@ short new_enabled_tasks[64];
 int key_up, key_down, key_left, key_right, key_a, key_b, key_c, key_select;
 int key_reset_record;
 
-static Uint32 last_tick = 0;
-static Uint32 last_tick_fp = 0;
+static unsigned int last_tick = 0;
+static unsigned int last_tick_fp = 0;
 
 #define RECORDED_KEYS_CACHE 4096
 static int cached_keys_offset = 0;
@@ -143,73 +142,16 @@ static void atexit_callback(void)
 	   that the host cannot demonstrate but the seam must still get right. */
 	disc_stop_track();
 	disc_close();
-	SDL_Quit();
+	platform_quit();
 }
 
 static int initialize()
 {
-	SDL_Init(SDL_INIT_VIDEO|SDL_INIT_AUDIO);
-	atexit(atexit_callback);
-
-	if (cls.nosound == 0)
+	if (!platform_init())
 	{
-		int spec_freq;
-		Uint16 spec_format;
-		int spec_channels;
-
-		/* SDL_AUDIO_ALLOW_ANY_CHANGE deliberately removed (flags arg is 0
-		   below): it let SDL hand back a device at a different frequency,
-		   format or channel count than requested, and SDL_mixer would then
-		   mix at that spec silently. disc_cue.c's Mix_HookMusic callback
-		   streams CD-DA straight off the disc with a plain fread -- no
-		   resample -- so correct pitch/speed depends on the device really
-		   being 44100 Hz/AUDIO_S16/stereo. A 48000 Hz WASAPI device (common
-		   on Windows) would otherwise play every track about 8.8% fast:
-		   plausible enough to survive casual listening. Do not restore this
-		   flag without also giving disc_cue.c a resampler. */
-#if (SDL_VERSIONNUM(SDL_MIXER_MAJOR_VERSION, SDL_MIXER_MINOR_VERSION, SDL_MIXER_PATCHLEVEL) >= SDL_VERSIONNUM(2, 0, 2))
-		const SDL_version *link_version = Mix_Linked_Version();
-		if (SDL_VERSIONNUM(link_version->major, link_version->minor, link_version->patch) >= SDL_VERSIONNUM(2,0,2))
-		{
-			if (Mix_OpenAudioDevice(44100, AUDIO_S16, 2, 4096, NULL, 0) < 0)
-			{
-				panic("Mix_OpenAudio failed\n");
-			}
-		}
-		else
-#endif
-		if (Mix_OpenAudio(44100, AUDIO_S16, 2, 4096) < 0)
-		{
-			panic("Mix_OpenAudio failed\n");
-		}
-
-		/* Prove the negotiated spec rather than assume it matched the
-		   request. A mismatch here means disc_cue.c's unconverted CD-DA
-		   stream would play at the wrong pitch/speed -- worse than silence,
-		   since it sounds plausible and gets missed. disc_play_track
-		   independently re-checks this before every track and refuses to
-		   play on a mismatch; this printout is so the mismatch (or the
-		   match) is visible at startup instead of only discovered later. */
-		spec_freq = 0;
-		spec_format = 0;
-		spec_channels = 0;
-		Mix_QuerySpec(&spec_freq, &spec_format, &spec_channels);
-		if (spec_freq != 44100 || spec_format != AUDIO_S16 || spec_channels != 2)
-		{
-			fprintf(stderr, "WARNING: audio device negotiated freq=%d format=0x%x channels=%d, "
-			                "expected 44100/AUDIO_S16(0x%x)/2 -- CD-DA music will NOT play "
-			                "(would be pitched/timed wrong)\n",
-			        spec_freq, (unsigned)spec_format, spec_channels, (unsigned)AUDIO_S16);
-		}
-		else
-		{
-			printf("audio device negotiated freq=%d format=0x%x channels=%d (matches CD-DA, music enabled)\n",
-			       spec_freq, (unsigned)spec_format, spec_channels);
-		}
-		fflush(stdout);
-
-		sound_init();
+		panic("platform_init failed\n");
 	}
+	atexit(atexit_callback);
 
 	if (video_init() < 0)
 	{
@@ -518,7 +460,7 @@ void rest(int fps)
 	{
 		if (fps == 0)
 		{
-			last_tick = SDL_GetTicks();
+			last_tick = platform_ticks();
 			last_tick_fp = 0;
 			return;
 		}
@@ -529,14 +471,14 @@ void rest(int fps)
 			fps = fps*10;
 		}
 
-		Uint32 diff = ((1000 << 16) / fps) + last_tick_fp;
+		unsigned int diff = ((1000 << 16) / fps) + last_tick_fp;
 		last_tick_fp = diff & 0xffff;
 		diff = diff >> 16;
-		Uint32 current_tick = SDL_GetTicks();
+		unsigned int current_tick = platform_ticks();
 		while (current_tick - last_tick < diff)
 		{
-			SDL_Delay(1);
-			current_tick = SDL_GetTicks();
+			platform_delay(1);
+			current_tick = platform_ticks();
 		}
 		last_tick += diff;
 	}
@@ -705,6 +647,7 @@ static void run()
 		}
 
 		rest(12);
+		platform_frame();
 	}
 }
 

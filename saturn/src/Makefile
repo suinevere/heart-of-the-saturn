@@ -8,7 +8,7 @@ OBJS=\
 	client.o common.o vm.o      sprites.o decode.o   animation.o   \
 	rooms.o  video_sdl.o main.o debug.o    lzss.o                  \
 	sound.o  screen.o scale2x.o scale3x.o game2bin.o discfmt.o     \
-	disc_cue.o input_sdl.o
+	disc_cue.o input_sdl.o platform_sdl.o
 
 LIBS=$(SDL_LIBS) -lSDL2_mixer
 
@@ -39,6 +39,13 @@ video_sdl.o: ../host/video_sdl.c
 # the SH-2 build.
 input_sdl.o: ../host/input_sdl.c
 	$(CC) $(CFLAGS) -c ../host/input_sdl.c -o input_sdl.o
+
+# platform_sdl.o lives under ../host/ for the same reason disc_cue.o does --
+# the .c.o suffix rule above only looks in the current directory, and this
+# SDL file must stay out of saturn/makefile's `find src/ -name '*.c'` glob
+# for the SH-2 build.
+platform_sdl.o: ../host/platform_sdl.c
+	$(CC) $(CFLAGS) -c ../host/platform_sdl.c -o platform_sdl.o
 
 clean:
 	@rm $(OBJS)
