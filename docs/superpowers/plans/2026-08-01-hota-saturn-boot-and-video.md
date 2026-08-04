@@ -1124,7 +1124,7 @@ Expected: links, and produces `BuildDrop/Heart of the Alien (USA).{elf,iso,bin,c
 ```bash
 grep -E "^(\.text|\.data|\.rodata|\.bss|HEAP|WORK_AREA)" "saturn/BuildDrop/Heart of the Alien (USA).map"
 ```
-Expected: `.bss` ends below `work_area_start` at `0x060c0000`, with heap remaining. This is the moment the ~224 KB heap estimate stops being an estimate — record the real number. If `.bss` overruns, the spec's two levers are trimming `SGL_MAX_POLYGONS`/`SGL_MAX_VERTICES` (recovers ~155 KB of the 171,120-byte work area) and moving `huge_buf` into VDP2 VRAM (another 171 KB).
+Expected: `.bss` ends below `work_area_start` at `0x060c0000`, with heap remaining. This is the moment the ~224 KB heap estimate stops being an estimate — record the real number. **Measured: `.bss` 581,200, heap 69,440**, so the estimate was out by 3.2x, mostly because 11,592 bytes of SRL/SGL/newlib `.bss` were never counted. Note also that `SRL::Cd::File` takes 10,240 heap bytes per open file (`srl_cd.hpp:441`) — 14.7% of what is left. If `.bss` overruns, the spec's two levers are trimming `SGL_MAX_POLYGONS`/`SGL_MAX_VERTICES` (recovers ~155 KB of the 171,120-byte work area) and moving `huge_buf` into VDP2 VRAM (another 171 KB).
 
 - [ ] **Step 6: Verify the host build one last time**
 

@@ -309,16 +309,44 @@ reads from the disc, which is the first thing that writes into either buffer.
 
 **HWRAM** — `0x06004000` to `work_area_start` at `0x060c0000`, **770,048 bytes**:
 
-| | bytes |
-|---|---:|
-| text + rodata + data + SLPROG | ~125,000 |
-| `.bss` — `animation.o` 352,352 (incl. the relocated 147,456-byte scratch), `screen.o` 175,168, `main.o` 34,976, rest ~4,704 | 567,200 |
-| **heap remaining** | **~77,800** |
+Measured from `BuildDrop/Heart of the Alien (USA).map` after the first successful link.
+These replace the pre-link projections, which are kept in the right-hand column because
+the size of the miss is the useful part:
 
-The code figure is corroborated two ways: 14 engine TUs measured at 24,495 bytes of
-text+rodata+data compiled for SH-2 at the SDK's own `-O2 -m2`, plus roughly 12 KB for
-the ported `main.c` and the video backend, plus the SRL/SGL runtime — against
-Another-Saturn's measured total of 123,612 bytes for a comparable engine.
+| | measured | projected |
+|---|---:|---:|
+| text + rodata + data + SLPROG + ctors | 119,408 | ~125,000 |
+| `.bss` — `animation.o` 352,352 (incl. the relocated 147,456-byte scratch), `screen.o` 175,136, `main.o` 33,884, rest 19,769 | **581,200** | 567,200 |
+| **heap remaining** | **69,440** | ~77,800 |
+
+The three named objects came in close. The projection missed on the `rest` row, which
+it put at ~4,704 and which measures **19,769** — and 11,592 of that is not engine `.bss`
+at all. It is SRL/SGL/newlib library state, attributed by the linker to `disc_srl.o`
+because that is the first TU to pull in `srl.hpp`: `SRL::Cd::GfsDirectoryNames` 6,144,
+`SRL::Cd::GfsWork` 3,336, `SRL::VDP1::Textures` 800, `SRL::VDP1::Metadata` 400, the
+`SRL::Core` callback slots, plus newlib's `__sf` at 304 and the LIBCD/LIBSND odds and
+ends. Reading that as "the disc backend costs 11 KB of BSS" is the wrong conclusion —
+it is the cost of linking SRL at all, and it would move to whichever TU included
+`srl.hpp` first. The remaining 8,177 bytes are the small engine TUs the projection
+simply did not count: `vm.o` 4,620, `sprites.o` 1,036, `debug.o` 1,024, `video_srl.o`
+875, `decode.o` 524, and change.
+
+The code figure was corroborated two ways before the link — 14 engine TUs measured at
+24,495 bytes of text+rodata+data compiled for SH-2 at the SDK's own `-O2 -m2`, plus
+roughly 12 KB for the ported `main.c` and the video backend, plus the SRL/SGL runtime,
+against Another-Saturn's measured 123,612 for a comparable engine — and landed within
+5 KB.
+
+**The heap is smaller than the number that reaches it.** `SaturnRingLib/saturnringlib/srl_cd.hpp:441`
+allocates `SectorSize * SectorsToReadAtOnce` = 2048 × 5 = **10,240 bytes** from the heap
+on the first `Read` of every `SRL::Cd::File`, and frees it when the file closes. Every
+`disc_read_file` call therefore takes **14.7% of the entire 69,440-byte heap** for the
+duration of the read. It is transient and it is freed, so it does not accumulate — but
+`saturn_new.cxx` deliberately does not fall back to LWRAM when HWRAM is exhausted, so
+anything else holding 59 KB at the moment a file is opened turns a disc read into a
+failed allocation rather than a slow one. Nothing in this sub-project comes close; the
+constraint is recorded because the sound sub-project's buffers are the obvious thing
+that would.
 
 **LWRAM** — 1,048,576-byte TLSF pool: `memory[]` 524,288 + `game2bin[]` 409,600 =
 **933,888**, leaving ~114,000.
@@ -328,16 +356,18 @@ for two reasons: LWRAM has only ~114,000 bytes left after them, and
 `unpack_animation_delta` writes it a byte at a time, which is precisely the access
 pattern that belongs on the 32-bit bus.
 
-Heap is the number to watch now — ~77,800 bytes, down from the ~224,000 the first draft
-predicted, because the scratch had to go somewhere and HWRAM is where it fits. If that
-proves too tight, the SGL work-area trim below recovers roughly twice the shortfall.
+Heap is the number to watch now — **69,440 bytes measured**, down from the ~224,000 the
+first draft predicted and from the ~77,800 the second one did, because the scratch had
+to go somewhere, HWRAM is where it fits, and linking SRL costs another 11,592 bytes of
+`.bss` nobody had counted. If that proves too tight, the SGL work-area trim below
+recovers roughly twice the shortfall.
 
 **VDP2 VRAM** — the 512×256 `Paletted256` display bitmap is 131,072 bytes of the
 512 KB VDP2 has. It never touches work RAM; the display buffer is free.
 
 Heap demand is supply, not proven surplus: `sound.c`'s allocations are deferred to the
-audio sub-project and `SRL::Cd::File` keeps a work buffer whose size is not yet
-measured.
+audio sub-project, and `SRL::Cd::File`'s work buffer — unmeasured when this was
+written — is now known to be 10,240 bytes per open file, 14.7% of the heap.
 
 ## Deferred / stubbed
 
@@ -422,9 +452,16 @@ pointers as a matter of course. HOTA's `get_long`/`get_byte` on `memory[]` are t
 same shape. This must be checked early, not discovered as a crash: the engine reads
 `get_long(0x809e)` and `get_long(0x80a6 + (pattern << 2))` from data-derived offsets.
 
-**Heap exhaustion.** ~224 KB of HWRAM heap against unmeasured demand. Mitigated by
-measuring the linker map after the first successful link, when the number stops being
-an estimate.
+**Heap exhaustion.** **69,440 bytes** of HWRAM heap, measured from the linker map — not
+the ~224 KB this risk was first written against, which was out by 3.2x. The largest
+single known demand is `SRL::Cd::File`'s 10,240-byte work buffer
+(`srl_cd.hpp:441`), taken on every `disc_read_file` and released at close: 14.7% of the
+heap, transient, and not stacked with anything else in this sub-project. `malloc`
+deliberately does not fall back to LWRAM (`saturn_compat.cxx:199`), so exhaustion is a
+NULL at the allocation site rather than a slow read, which is the behaviour that makes
+this measurable at all. No longer mitigated by "measure after the first link" — that
+has happened. The open item is the sound sub-project's buffers, which must be sized
+against 69,440 and not against the old figure.
 
 ## Out of scope
 

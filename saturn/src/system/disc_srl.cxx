@@ -8,6 +8,17 @@
  |   max_size the same way the host backend does. CD-DA (disc_play_track/
  |   disc_stop_track) is a later sub-project; both are silent no-ops here,
  |   which disc.h's contract explicitly allows.
+ |
+ |   Heap cost, which is not obvious from anything in this file:
+ |   srl_cd.hpp:441 allocates SectorSize * SectorsToReadAtOnce = 2048 * 5 =
+ |   10,240 bytes on the first Read of every SRL::Cd::File and frees it at
+ |   close. That is 14.7% of the 69,440-byte HWRAM heap the linker map leaves,
+ |   held for the duration of each disc_read_file -- and saturn_compat.cxx's
+ |   malloc deliberately refuses to fall back to LWRAM, so a caller holding
+ |   59 KB across a read turns it into a NULL rather than a slow read. Nothing
+ |   here stacks two open files to make it worse, and it is transient, but any
+ |   future allocator sharing this heap has to be sized against what is left
+ |   after it, not against the whole.
  | Author: suinevere
  | Dependencies: srl.hpp, disc.h, disc_manifest.h, saturn_compat.h
  ----------------------*/
