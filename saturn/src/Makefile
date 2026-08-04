@@ -18,11 +18,13 @@ alien: $(OBJS)
 .c.o:
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# disc_cue.o lives under host/ -- the .c.o suffix rule above only looks in
+# disc_cue.o lives under ../host/ -- the .c.o suffix rule above only looks in
 # the current directory, so a plain OBJS entry for it would silently never
 # compile. Explicit rule beats the implicit suffix rule for the same target.
-disc_cue.o: host/disc_cue.c
-	$(CC) $(CFLAGS) -c host/disc_cue.c -o disc_cue.o
+# It sits outside src/ because saturn/makefile globs `find src/ -name '*.c'`
+# for the SH-2 build, which would otherwise compile this SDL file for Saturn.
+disc_cue.o: ../host/disc_cue.c
+	$(CC) $(CFLAGS) -c ../host/disc_cue.c -o disc_cue.o
 
 clean:
 	@rm $(OBJS)
