@@ -430,11 +430,11 @@ Note the ordering: `a2` is the *source* offset here and must be read before it w
 
 - [ ] **Step 6: Shrink the map**
 
-In `saturn/src/vm.h`, change `MEMORY_SIZE` to `0x80000` and rewrite its banner. The true worst case is now 465,050 bytes — `animation.c:869` loads animations at up to offset `0x809a` and the largest file loaded there is 432,128 — leaving about 59 KB of headroom. The banner must not mention 0xdc000 as a live constraint any more, and must still not claim `get_memory_ptr` validates anything.
+In `saturn/src/vm.h`, change `MEMORY_SIZE` to `0x80000` and rewrite its banner. The true worst case is 469,146 bytes — animations load at `ANIMATION_LOAD_BASE` `0x809a` and the largest file on the disc is `MAKE2MB.BIN` at 436,224 — leaving 55,142 bytes of headroom. Take both numbers from `disc_manifest.h`, not from memory: 432,128 is the INTRO/END size, not the largest file, and an earlier draft of this step said so and was wrong. The banner must not mention 0xdc000 as a live constraint any more, and must still not claim `get_memory_ptr` validates anything.
 
 - [ ] **Step 7: Fix the test**
 
-`saturn/tests/test_vm_memory.c` asserts `get_memory_size() > DELTA_UNPACK_SCRATCH_BASE`. That constant describes a region no longer in the map, so the assertion is now meaningless. Replace it with the real bound — the largest byte any load site touches, 465,050 — naming the constant for what it is and updating the file banner to match. Keep the file-header-banner-only rule for test files.
+`saturn/tests/test_vm_memory.c` asserts `get_memory_size() > DELTA_UNPACK_SCRATCH_BASE`. That constant describes a region no longer in the map, so the assertion is now meaningless. Replace it with the real bound — the largest byte any load site touches, 469,146 — and compute it in the test from `DISC_MANIFEST_LIST` and the two named load bases rather than writing it down as a literal, because a literal is a claim nobody rechecks. Keep the file-header-banner-only rule for test files.
 
 - [ ] **Step 8: Verify**
 

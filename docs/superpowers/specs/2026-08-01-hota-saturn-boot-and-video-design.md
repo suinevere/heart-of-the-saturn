@@ -61,9 +61,11 @@ There are four call sites, and **all four** matter:
 
 - `main.c:116` — `ROOMSn.BIN` at offset `0xf900`. Largest room file is 370,688 bytes,
   so the highest byte touched is **434,432**.
-- `animation.c:869` — animations at `read_offset = 0x809a - fileoffset`, at most
-  `0x809a` when `fileoffset` is zero. Largest file loaded at that offset is 432,128
-  bytes, so the highest byte touched is **465,050**.
+- `animation.c:918` — animations at `read_offset = ANIMATION_LOAD_BASE - fileoffset`,
+  at most `0x809a` when `fileoffset` is zero. Largest file that can be loaded there is
+  `MAKE2MB.BIN` at 436,224 bytes, so the highest byte touched is **469,146**. This
+  read 432,128 / 465,050 until 2026-08-04; 432,128 is the INTRO/END size, not the
+  largest file on the disc.
 - `animation.c:746` — **`a0 = 0xdc000`, a hardcoded 901,120.** `unpack_animation_delta`
   writes a decoded stream through this pointer, and `a3 = a0 + d4` indexes above it.
   The region from `0xdc000` to the original `0x100000` ceiling is a **147,456-byte
@@ -98,8 +100,10 @@ The alternative, routing offsets above a threshold to a second buffer inside
 processor that will already be paying for the map living in LWRAM.
 
 With the scratch relocated, the map covers only the two real load sites — worst case
-465,050 — so `0x80000` (524,288) fits with ~59 KB of headroom, and this time the number
-describes every write that reaches the map.
+**469,146** — so `0x80000` (524,288) fits with **55,142** bytes of headroom, and this
+time the number describes every write that reaches the map. `test_vm_memory.c` derives
+both figures from `DISC_MANIFEST_LIST` and the two named load bases on every run, so
+they cannot drift from the disc.
 
 ## Decision: two arenas, split by access pattern
 
