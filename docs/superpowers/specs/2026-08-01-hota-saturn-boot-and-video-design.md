@@ -46,31 +46,60 @@ hands the entire 1 MB of LWRAM at `0x00200000` to one TLSF pool and reserves not
 1.8 MB of BSS against 770 KB of HWRAM is not a tuning problem. It decides the
 architecture.
 
-## The preflight: `memory[]` is twice the size it needs to be
+## The preflight: what actually occupies the map
 
-Every write into the emulated 68000 map goes through `get_memory_ptr()` (`vm.c:140`),
-and there are only four call sites. Three are load addresses fixed in the code:
+**Correction, 2026-08-04.** The first draft of this section claimed the map could
+halve to 512 KB because only three fixed load sites existed. That was wrong, it was
+implemented, and the review caught it as a live out-of-bounds write. The error is
+recorded here rather than quietly edited out, because the way it happened is the
+lesson: `animation.c:746` assigns `a0 = 0xdc000` two lines above its use, and reading
+only the `get_memory_ptr(a0)` line makes the offset look data-derived when it is a
+constant. A grep for the call sites found it; reading only the call sites did not.
+
+Every write into the emulated 68000 map goes through `get_memory_ptr()` (`vm.c:140`).
+There are four call sites, and **all four** matter:
 
 - `main.c:116` — `ROOMSn.BIN` at offset `0xf900`. Largest room file is 370,688 bytes,
   so the highest byte touched is **434,432**.
-- `animation.c:870` — animations at `read_offset = 0x809a - fileoffset`, which is at
-  most `0x809a` when `fileoffset` is zero. Largest animation file is `MAKE2MB.BIN` at
-  436,224 bytes, so the highest byte touched is **469,146**.
+- `animation.c:869` — animations at `read_offset = 0x809a - fileoffset`, at most
+  `0x809a` when `fileoffset` is zero. Largest file loaded at that offset is 432,128
+  bytes, so the highest byte touched is **465,050**.
+- `animation.c:746` — **`a0 = 0xdc000`, a hardcoded 901,120.** `unpack_animation_delta`
+  writes a decoded stream through this pointer, and `a3 = a0 + d4` indexes above it.
+  The region from `0xdc000` to the original `0x100000` ceiling is a **147,456-byte
+  delta-unpack scratch area**, reached on ordinary playback through `play_sequence`.
 - `game2bin.c:56` — reads into its own array; never touches the map.
-
-The fourth, `animation.c:748`, indexes with a value that comes from game data rather
-than from a constant, which is why the 512 KB figure below carries a runtime check
-rather than being taken on faith.
 
 Sizes are from the validated disc manifest in `disc_cue.c:101-119`, which the previous
 sub-project verified against the real Redump rip.
 
-So `memory[512*1024*2]` is roughly twice what the game uses. Shrinking it to
-`0x80000` (524,288) leaves ~55 KB of headroom over the worst measured case.
+So the map cannot simply shrink: the top 144 KB of it is a scratch buffer that the
+engine addresses by absolute offset. At its original 1 MB, `memory[]` and `game2bin[]`
+together need 1,458,176 bytes, which exceeds the whole 1 MB low arena — and the total
+requirement of 2,007,592 bytes exceeds all 1,818,624 bytes of usable work RAM before a
+single byte of heap. Left alone, the port does not fit at all.
 
-This is load-bearing, not an optimization. At the original 1 MB, `memory[]` and
-`game2bin[]` together need 1,458,176 bytes and there is no arrangement of the two
-arenas that fits them.
+## Decision: relocate the scratch, then shrink the map
+
+The scratch is not emulated 68000 state. It is a decode buffer that the engine parks
+inside the map because the original hardware had the address space to spare, and
+`animation.c:745` carries the upstream author's own note about it: `/* XXX: move into
+a local array */`.
+
+Moving it out is what makes the port fit, and it is contained. `unpack_animation_delta`
+already writes through a plain `unsigned char *`, so it needs no change at all. The
+consumer does: `anim_interesting(int a1, int a2, int a3, ...)` takes three **map
+offsets** and reads them with `get_byte(a2)` / `get_byte(a3)`. Its `a1` genuinely is
+map data — the loaded animation stream — and stays an offset. Its `a2` and `a3` are
+the two cursors into the scratch, and become real pointers read directly.
+
+The alternative, routing offsets above a threshold to a second buffer inside
+`get_byte`, was rejected: that puts a branch in the engine's hottest accessor, on a
+processor that will already be paying for the map living in LWRAM.
+
+With the scratch relocated, the map covers only the two real load sites — worst case
+465,050 — so `0x80000` (524,288) fits with ~59 KB of headroom, and this time the number
+describes every write that reaches the map.
 
 ## Decision: two arenas, split by access pattern
 
@@ -265,8 +294,8 @@ reads from the disc, which is the first thing that writes into either buffer.
 | | bytes |
 |---|---:|
 | text + rodata + data + SLPROG | ~125,000 |
-| `.bss` — `screen.o` 175,168, `animation.o` 204,896, `main.o` 34,976, rest ~5,900 | 420,944 |
-| **heap remaining** | **~224,000** |
+| `.bss` — `animation.o` 352,352 (incl. the relocated 147,456-byte scratch), `screen.o` 175,168, `main.o` 34,976, rest ~4,704 | 567,200 |
+| **heap remaining** | **~77,800** |
 
 The code figure is corroborated two ways: 14 engine TUs measured at 24,495 bytes of
 text+rodata+data compiled for SH-2 at the SDK's own `-O2 -m2`, plus roughly 12 KB for
@@ -275,6 +304,15 @@ Another-Saturn's measured total of 123,612 bytes for a comparable engine.
 
 **LWRAM** — 1,048,576-byte TLSF pool: `memory[]` 524,288 + `game2bin[]` 409,600 =
 **933,888**, leaving ~114,000.
+
+The relocated delta scratch stays in HWRAM rather than joining the two blobs in LWRAM,
+for two reasons: LWRAM has only ~114,000 bytes left after them, and
+`unpack_animation_delta` writes it a byte at a time, which is precisely the access
+pattern that belongs on the 32-bit bus.
+
+Heap is the number to watch now — ~77,800 bytes, down from the ~224,000 the first draft
+predicted, because the scratch had to go somewhere and HWRAM is where it fits. If that
+proves too tight, the SGL work-area trim below recovers roughly twice the shortfall.
 
 **VDP2 VRAM** — the 512×256 `Paletted256` display bitmap is 131,072 bytes of the
 512 KB VDP2 has. It never touches work RAM; the display buffer is free.

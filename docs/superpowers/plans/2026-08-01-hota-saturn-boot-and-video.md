@@ -338,6 +338,126 @@ git commit -m "Pin the emulated map size to MEMORY_SIZE and halve it to 512 KB."
 
 ---
 
+### Task 4b: Relocate the delta-unpack scratch out of the emulated map
+
+Added 2026-08-04 after the Task 4 review found that the map cannot shrink while a 144 KB
+decode buffer lives inside it. `animation.c:746` sets `a0 = 0xdc000` (901,120) and
+`unpack_animation_delta` writes a decoded stream through `get_memory_ptr(a0)`; the region
+from there to `0x100000` is scratch, not emulated 68000 state. `animation.c:745` carries
+the upstream author's own note about it: `/* XXX: move into a local array */`. Moving it
+out is what lets the map shrink, and the map shrinking is what lets the port fit in 2 MB.
+
+**Files:**
+- Modify: `saturn/src/animation.c` (`anim_interesting` signature and its `a2`/`a3` reads; the call site at 740-752)
+- Modify: `saturn/src/vm.h` (`MEMORY_SIZE` to `0x80000`, banner rewritten)
+- Modify: `saturn/tests/test_vm_memory.c` (the scratch-base assertion no longer describes the map)
+
+**Interfaces:**
+- Consumes: `MEMORY_SIZE` from Task 4
+- Produces: `static void anim_interesting(int a1, const unsigned char *a2, const unsigned char *a3, unsigned short color_mask)` — `a1` stays a map offset, `a2`/`a3` become direct pointers; `MEMORY_SIZE` becomes `0x80000`
+
+- [ ] **Step 1: Establish that nothing else reads the scratch through the map**
+
+Run: `cd saturn/src && grep -n "0xdc000\|get_memory_ptr" animation.c *.c`
+Expected: `0xdc000` appears at exactly one place, `animation.c:746`. If it appears anywhere else, STOP and report — the relocation is not self-contained and the plan needs revisiting.
+
+- [ ] **Step 2: Establish whether `a0`, `a2` and `a3` are read after the call site**
+
+The block at `animation.c:744-752` currently ends by assigning `a2 = a0;` and `a3 = a0 + d4;`. These are function-scope `int`s declared at `animation.c:553` and reused throughout `play_sequence`. Read the whole of `play_sequence` and determine whether any later code reads `a0`, `a2` or `a3` before reassigning them.
+
+Record the answer in your report. If they ARE read later, you must preserve their values; if they are not, the assignments go away with the rest.
+
+- [ ] **Step 3: Add the scratch buffer**
+
+In `saturn/src/animation.c`, beside the other file-scope buffers, with a banner:
+
+```c
+/*----------------------
+ | delta_scratch
+ | Description: Decode buffer for unpack_animation_delta. Lived at offset 0xdc000
+ |   inside the emulated 68000 map until 2026-08-04, which forced the map to stay
+ |   1 MB and put the Saturn port 189 KB over its total work RAM. It is not
+ |   emulated state -- nothing reads it through get_byte, and the original code
+ |   carried its own note to move it out. Sized 0x100000 - 0xdc000, the space the
+ |   original reserved above the scratch base, because unpack_animation_delta
+ |   writes a data-driven stream with no length of its own.
+ | Author: suinevere
+ ----------------------*/
+#define DELTA_SCRATCH_SIZE (0x100000 - 0xdc000)
+static unsigned char delta_scratch[DELTA_SCRATCH_SIZE];
+```
+
+- [ ] **Step 4: Change `anim_interesting` to take pointers**
+
+`saturn/src/animation.c:227` currently reads:
+
+```c
+static void anim_interesting(int a1, int a2, int a3, unsigned short color_mask)
+```
+
+Change `a2` and `a3` to `const unsigned char *`. Leave `a1` an `int` — it indexes the loaded animation stream, which is genuine map data.
+
+Inside the body, every `get_byte(a2)` becomes `*a2` and every `get_byte(a3)` becomes `*a3`. The `a2++` and `a3++` increments already work unchanged on pointers. Find them all:
+
+```
+cd saturn/src && grep -n "get_byte(a2)\|get_byte(a3)\|a2++\|a3++" animation.c
+```
+
+Update the function's banner to say why two of its three cursors are pointers and one is an offset — that asymmetry is the whole point and will look like an inconsistency to the next reader.
+
+- [ ] **Step 5: Rewrite the call site**
+
+`saturn/src/animation.c:744-752` currently reads:
+
+```c
+		/* XXX: move into a local array */
+		a0 = 0xdc000;
+		ptr = get_memory_ptr(a0);
+		unpack_animation_delta(a2, ptr);
+		a2 = a0;
+		a3 = a0 + d4;
+		anim_interesting(a1, a2, a3, (unsigned short)d3);
+```
+
+Replace with:
+
+```c
+		unpack_animation_delta(a2, delta_scratch);
+		anim_interesting(a1, delta_scratch, delta_scratch + d4, (unsigned short)d3);
+```
+
+Note the ordering: `a2` is the *source* offset here and must be read before it would have been overwritten. The `ptr` local and the `XXX` comment both go away. If Step 2 found that `a0`/`a2`/`a3` are read later, keep whatever assignments are needed to preserve that and say so in your report.
+
+- [ ] **Step 6: Shrink the map**
+
+In `saturn/src/vm.h`, change `MEMORY_SIZE` to `0x80000` and rewrite its banner. The true worst case is now 465,050 bytes — `animation.c:869` loads animations at up to offset `0x809a` and the largest file loaded there is 432,128 — leaving about 59 KB of headroom. The banner must not mention 0xdc000 as a live constraint any more, and must still not claim `get_memory_ptr` validates anything.
+
+- [ ] **Step 7: Fix the test**
+
+`saturn/tests/test_vm_memory.c` asserts `get_memory_size() > DELTA_UNPACK_SCRATCH_BASE`. That constant describes a region no longer in the map, so the assertion is now meaningless. Replace it with the real bound — the largest byte any load site touches, 465,050 — naming the constant for what it is and updating the file banner to match. Keep the file-header-banner-only rule for test files.
+
+- [ ] **Step 8: Verify**
+
+```bash
+sh saturn/tests/run_tests.sh
+make -C saturn/src
+```
+
+Then run the game from the repo root with a timeout: `timeout 20 ./saturn/src/alien.exe`.
+
+**This task's verification is different from every other task's, and the difference matters.** Every other task is verified by the game still booting. This one changes animation decoding, and the boot sequence may not reach a delta-encoded frame — that is exactly how the Task 4 defect survived its smoke test. So: let the intro play far enough to show animated character movement, and report what you actually saw. If you cannot get the game to render an animation, say so plainly rather than reporting a clean boot as if it proved something.
+
+Note that `saturn/src/Makefile` has no header dependency tracking, so a change to `vm.h` alone will not rebuild `vm.o`. Delete the objects and relink to be sure your change took effect.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add saturn/src/animation.c saturn/src/vm.h saturn/tests/test_vm_memory.c
+git commit -m "Move the delta-unpack scratch out of the emulated map and shrink it to 512 KB."
+```
+
+---
+
 ### Task 5: Route the two bulk buffers through an allocation seam
 
 `memory[]` (512 KB) and `game2bin[]` (400 KB) are the two allocations that must land in LWRAM on Saturn. The host keeps its static arrays so its `.bss` layout and behaviour are unchanged.
