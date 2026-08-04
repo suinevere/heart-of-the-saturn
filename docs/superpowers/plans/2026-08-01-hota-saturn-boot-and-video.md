@@ -290,11 +290,13 @@ In `saturn/src/vm.h`, above the `get_memory_size` banner:
  |   than taken with sizeof because vm.c's backing store is a static array on
  |   the host and an LWRAM allocation on Saturn -- sizeof would yield 4 on the
  |   pointer form and hand every caller a 4-byte buffer with no diagnostic.
- |   0x80000 rather than the original 0x100000 because the game's three fixed
- |   load sites top out at 469,146 bytes: main.c:116 loads ROOMSn.BIN at
- |   0xf900 (largest 370,688) and animation.c:870 loads animations at up to
- |   0x809a (largest 436,224). The remaining ~55 KB is headroom over that
- |   worst case, verified at runtime by the bound check in get_memory_ptr.
+ |   0x80000 rather than the original 0x100000 because the game's two fixed
+ |   load sites top out at 469,146 bytes: main.c:117 loads ROOMSn.BIN at
+ |   0xf900 (largest 370,688) and animation.c:918 loads animations at up to
+ |   0x809a (largest 436,224). The remaining 55,142 bytes are headroom over
+ |   that worst case. Nothing checks the bound at runtime -- get_memory_ptr is
+ |   a bare add -- so the guarantee is tests/test_vm_memory.c re-deriving it
+ |   from disc_manifest.h on every run.
  | Author: suinevere
  ----------------------*/
 #define MEMORY_SIZE 0x80000
@@ -1148,6 +1150,6 @@ git commit -m "Add the Saturn entry point and input stub so the disc links and b
 
 **Spec coverage.** Every spec section maps to a task: the memory placement to Tasks 4 and 5, `video.h` to Task 6, the host video backend to Task 6, the Saturn video backend to Task 11, the disc backend to Task 10, `platform.h` to Task 8, the shims to Task 9, the pure subtraction to Task 3, the build glob fix to Task 2, and the test-harness repair to Task 1. The spec's three verification levels appear as recurring steps rather than one task, which is deliberate — the host build and tests are re-run at the end of every task, since their value is catching the regression at the task that caused it.
 
-**One spec item is deliberately deferred within this plan.** The spec makes "the host bounds assert survives a full playthrough" an acceptance criterion. Task 4 adds the size contract and Task 4 Step 6 exercises it by running the game, but a *full* playthrough is a human activity and cannot be a plan step. It is called out for Suinevere at Task 12 Step 7 instead of being silently dropped.
+**One spec item was withdrawn, not deferred.** The spec used to make "the host bounds assert survives a full playthrough" an acceptance criterion, and this paragraph used to defer it to Suinevere at Task 12 Step 7 on the grounds that a full playthrough is a human activity. The assert was never written, so there was nothing to defer: `vm.c:190` is a bare add and `vm.h` says so. The criterion is withdrawn and replaced, in the spec and in Task 4 Step 7, by `test_vm_memory.c` deriving the bound from `disc_manifest.h` on every run — which is checkable by the plan rather than by a human remembering.
 
 **Type consistency.** `MEMORY_SIZE` is used identically in Tasks 4, 5 and 9. `vm_alloc_memory`/`game2bin_alloc` return `int` 1/0 in Tasks 5 and 9 and are called that way in Task 5 Step 5. The nine `video_*` names in Task 6 are the same nine implemented in Task 11. `check_events(void)` matches in Tasks 7 and 12. `saturn_lwram_alloc(unsigned long)` is declared in Task 9 and called in Task 5 — note the ordering, which is intentional: Task 5 compiles on the host, where the symbol is never referenced, and the Saturn arm only has to resolve once Task 9 lands.

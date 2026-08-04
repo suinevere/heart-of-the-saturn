@@ -56,11 +56,16 @@ lesson: `animation.c:746` assigns `a0 = 0xdc000` two lines above its use, and re
 only the `get_memory_ptr(a0)` line makes the offset look data-derived when it is a
 constant. A grep for the call sites found it; reading only the call sites did not.
 
-Every write into the emulated 68000 map goes through `get_memory_ptr()` (`vm.c:140`).
-There are four call sites, and **all four** matter:
+Every write into the emulated 68000 map goes through `get_memory_ptr()` (`vm.c:190`).
+At the time of the preflight there were four call sites, and **all four** matter.
+`game2bin.c:56` was listed here as a fifth until 2026-08-04 and contains no such call
+at all — it reads into `game2bin`'s own array and never touches the map. The real
+fourth site, the palette read, was missing from this list; it is the only one whose
+offset comes from disc data, which makes it the one entry that could not have been
+settled by reading a constant:
 
-- `main.c:116` — `ROOMSn.BIN` at offset `0xf900`. Largest room file is 370,688 bytes,
-  so the highest byte touched is **434,432**.
+- `main.c:117` — `ROOMSn.BIN` at `ROOMS_LOAD_BASE` `0xf900`. Largest room file is
+  370,688 bytes, so the highest byte touched is **434,432**.
 - `animation.c:918` — animations at `read_offset = ANIMATION_LOAD_BASE - fileoffset`,
   at most `0x809a` when `fileoffset` is zero. Largest file that can be loaded there is
   `MAKE2MB.BIN` at 436,224 bytes, so the highest byte touched is **469,146**. This
@@ -70,7 +75,16 @@ There are four call sites, and **all four** matter:
   writes a decoded stream through this pointer, and `a3 = a0 + d4` indexes above it.
   The region from `0xdc000` to the original `0x100000` ceiling is a **147,456-byte
   delta-unpack scratch area**, reached on ordinary playback through `play_sequence`.
-- `game2bin.c:56` — reads into its own array; never touches the map.
+- `animation.c:945` — `get_memory_ptr(palette_offset)` where
+  `palette_offset = get_long(0x809a) + (scene << 5)`, handed straight to
+  `video_set_palette_rgb12` as 32 bytes. **The only data-derived offset of the four:**
+  both the base long and `scene` are read out of the animation file, so nothing about
+  it can be settled by reading a constant at the call site. It reads 32 bytes rather
+  than writing, so it cannot corrupt the map, but a malformed file can point it past
+  the end and the palette is then read from whatever follows.
+
+Of these, the scratch site is the only one this sub-project removes; the other three
+survive, so the shipped engine has **three** `get_memory_ptr` call sites.
 
 Sizes are from the validated disc manifest in `disc_cue.c:101-119`, which the previous
 sub-project verified against the real Redump rip.
@@ -355,11 +369,23 @@ Three levels of verification:
 
 1. **Host unit tests.** `saturn/tests/run_tests.sh`, once its paths are repaired,
    keeps passing for the rest of the sub-project.
-2. **The 512 KB bound.** A bounds assert in `get_memory_ptr()`, compiled into the host
-   build where `assert` is real, exercised by a full playthrough. This is what turns
-   the static three-call-site analysis into evidence. Until it has run, 512 KB is a
-   hypothesis. `animation.c:748` indexes from game data and is the specific reason
-   this check exists.
+2. **The 512 KB bound.** A compile-time derivation in `saturn/tests/test_vm_memory.c`,
+   which folds `DISC_MANIFEST_LIST` and the two named load bases into the largest byte
+   any load site can touch and asserts `MEMORY_SIZE` covers it. It runs on every
+   `run_tests.sh` and prints the worst case, the map size and the headroom.
+
+   **Struck 2026-08-04.** This item previously claimed the bound was evidenced by "a
+   bounds assert in `get_memory_ptr()`, compiled into the host build, exercised by a
+   full playthrough." No such assert was ever written. `vm.c:190` is
+   `return (unsigned char *)memory + offset;` and nothing else, and `vm.h`'s own
+   `MEMORY_SIZE` banner says outright that nothing enforces the bound at runtime. The
+   claim is removed rather than implemented: an assert on the two constant sites would
+   check arithmetic already visible at the call site, and the third site
+   (`animation.c:945`, the data-derived palette read) is a 32-byte read into a
+   `video_set_palette_rgb12` that a playthrough would not fault on anyway. The
+   derivation above is a stronger guarantee for the load sites that actually bound the
+   map, because it re-derives from the disc manifest on every test run instead of
+   depending on someone having played far enough.
 3. **The disc boots.** `compile.bat` produces an ELF, and Suinevere runs Mednafen.
    Never launched from a tool call.
 
@@ -380,11 +406,15 @@ if the frame rate says otherwise.
 
 **`get_memory_size()` returning `sizeof` a pointer.** Compiles clean, fails at
 runtime, hands every caller a 4-byte buffer. Mitigated by the named constant in `vm.h`
-shared by both platforms, and caught immediately by the host bounds assert.
+shared by both platforms, and caught by `test_vm_memory.c`'s pointer-width assertion,
+which is the test written specifically for this failure.
 
-**The 512 KB figure is analysis, not measurement.** Three of four call sites are
-constants; the fourth is data-driven. Mitigated by test level 2 above, which must run
-before the number is trusted on hardware.
+**The 512 KB figure is analysis, not measurement.** Two of the three surviving call
+sites are constants; the third, the palette read at `animation.c:945`, is data-driven
+and reads rather than writes. Mitigated by test level 2 above, which re-derives the
+bound from the disc manifest on every run — but the data-derived site is genuinely
+unbounded and nothing checks it, on either platform. That is an accepted residual risk,
+not a mitigated one.
 
 **Unaligned access.** Another-Saturn found that the SH-2 raises an address error on
 unaligned word and long loads, and that its engine read words from byte-stepped
@@ -407,7 +437,8 @@ disc manifest — the previous sub-project settled those and they are not reopen
 - `compile.bat` produces `BuildDrop/Heart of the Alien (USA).{elf,iso,bin,cue,map}`.
 - `saturn/src/Makefile` still builds a working host binary against the same sources.
 - `saturn/tests/run_tests.sh` passes.
-- The host bounds assert survives a full playthrough at `MEMORY_SIZE = 0x80000`.
+- `test_vm_memory.c` derives the worst-case load end from `DISC_MANIFEST_LIST` and
+  asserts `MEMORY_SIZE = 0x80000` covers it, printing the headroom it computed.
 - The linker map shows `.bss` and heap inside HWRAM with the LWRAM allocations
   succeeding at startup.
 - The disc boots in Mednafen and the intro draws.
