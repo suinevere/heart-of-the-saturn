@@ -1,7 +1,14 @@
 # --- Host build output -------------------------------------------------------
-src/*.o
-src/alien
-src/alien.exe
+# Paths follow the engine to saturn/src/; the old src/ spellings stopped
+# matching at 6d31b11 and left the built binary showing as untracked.
+saturn/src/*.o
+saturn/src/alien
+saturn/src/alien.exe
+
+# --- Subagent-driven-development scratch -------------------------------------
+# Ledger, task briefs, reports and review packages for an in-flight plan.
+# Regenerated from the plan and git history; never part of the source tree.
+.superpowers/
 
 # --- Saturn build output -----------------------------------------------------
 saturn/BuildDrop/
