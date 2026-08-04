@@ -24,6 +24,9 @@
 - **`MEMORY_SIZE` is `0x80000`** (524,288) on both platforms. Both builds must use the same value or the host stops being a valid reference.
 - **No global or static object whose constructor allocates.** `malloc` and `operator new` route to an SRL arena that does not exist until `SRL::Core::Initialize()` runs at the top of `main()`.
 - **Never define `fflush`.** newlib has one and its own stdio pulls that object in, producing "multiple definition of `fflush'". Make it a no-op *macro* so the call site vanishes instead.
+- **Commit messages are one sentence.** No body, no bullets, no trailers, and never a
+  mention of Claude, AI or the session. The rationale belongs in the banner comments
+  and in this plan, not in the log — every task below gives the exact message to use.
 - **Never launch Mednafen from a tool call.** Build the disc and hand it to Suinevere.
 - **Host build and host tests must pass at the end of every task.** They are the reference the Saturn backend is bisected against; a task that breaks them is not done.
 
@@ -76,13 +79,7 @@ Expected: PASS, all discfmt assertions green, exit 0
 
 ```bash
 git add saturn/tests/run_tests.sh
-git commit -m "Repair host test harness paths after the src/ move.
-
-6d31b11 moved src/ to saturn/src/ but run_tests.sh still compiled
-../../src/discfmt.c with -I../../src, which after the move is the empty
-leftover directory at the repo root. The suite has been failing since,
-silently, because nothing re-ran it. It is the harness every task in the
-boot-and-video sub-project is verified against, so it is repaired first."
+git commit -m "Repair the host test harness paths broken by the src/ move."
 ```
 
 ---
@@ -149,15 +146,7 @@ Expected: engine links to `saturn/src/alien.exe`, tests PASS
 
 ```bash
 git add -A saturn/host saturn/src/Makefile saturn/src/host
-git commit -m "Move host disc backend out of the Saturn source glob.
-
-saturn/makefile globs \`find src/ -name '*.c'\`, so src/host/disc_cue.c
-would have been handed to the SH-2 compiler -- an SDL translation unit in
-a Saturn build. saturn/host/ sits outside that glob, which is the
-convention every host backend in this sub-project follows: the platform
-split is enforced by directory, not by #ifdef.
-
-Also drops the empty src/ and src/host/ husks 6d31b11 left behind."
+git commit -m "Move the host disc backend out of the Saturn source glob."
 ```
 
 ---
@@ -202,14 +191,7 @@ Expected: builds clean, tests PASS
 
 ```bash
 git add saturn/src/decode.c saturn/src/animation.c
-git commit -m "Drop the two dead SDL includes.
-
-decode.c and animation.c included <SDL.h> and referenced no SDL symbol at
-all. With only these two lines removed both compile clean for SH-2 at the
-SDK's own -O2 -m2.
-
-scale2x.c and scale3x.c name no SDL_* symbol either but type their buffers
-as Uint8, so their include is load-bearing and they stay host-only."
+git commit -m "Drop the two dead SDL includes from decode.c and animation.c."
 ```
 
 ---
@@ -351,18 +333,7 @@ Expected: builds clean; the game boots from the repo root and reaches the intro.
 
 ```bash
 git add saturn/src/vm.h saturn/src/vm.c saturn/tests/test_vm_memory.c saturn/tests/run_tests.sh
-git commit -m "Pin the emulated map size to MEMORY_SIZE and halve it.
-
-get_memory_size() returned sizeof(memory). The next commit turns memory
-into a pointer on Saturn, at which point sizeof yields 4 and every caller
-receives a 4-byte buffer -- it compiles clean and corrupts at runtime.
-Pinning the size first means that bug cannot be introduced.
-
-The value drops from 0x100000 to 0x80000 because the game's three fixed
-load sites top out at 469,146 bytes. Both blobs have to reach LWRAM for
-the port to fit in 2 MB, and at the original size memory[] and game2bin[]
-need 1,458,176 bytes between them -- no arrangement of the two arenas
-holds that."
+git commit -m "Pin the emulated map size to MEMORY_SIZE and halve it to 512 KB."
 ```
 
 ---
@@ -510,16 +481,7 @@ Expected: tests PASS, game boots to the intro exactly as before
 
 ```bash
 git add saturn/src/vm.c saturn/src/vm.h saturn/src/game2bin.c saturn/src/game2bin.h saturn/src/main.c saturn/tests/test_vm_memory.c
-git commit -m "Route the two bulk buffers through an allocation seam.
-
-memory[] at 512 KB and game2bin[] at 400 KB are the two allocations that
-must land in LWRAM: HWRAM offers 770,048 bytes for text+data+bss+heap and
-the engine's .bss alone measures 1,882,592. Everything the rasterizer
-touches per pixel stays in HWRAM on the 32-bit bus; these two are bulk
-blobs and tolerate LWRAM.
-
-The host keeps its static arrays so its .bss layout and behaviour are
-unchanged -- it is the reference Saturn frames get bisected against."
+git commit -m "Route the two bulk buffers through an allocation seam."
 ```
 
 ---
@@ -625,16 +587,7 @@ Expected: links clean, tests PASS, and the intro looks **identical** to before �
 
 ```bash
 git add -A saturn/src saturn/host saturn/src/Makefile
-git commit -m "Extract the video seam; render.c becomes the host backend.
-
-render.h was already the right interface -- nine functions, no SDL type in
-any signature -- so this formalizes rather than designs. video.h gains the
-banner and the ordering contract disc.h established, and render.c moves to
-saturn/host/video_sdl.c, outside the Saturn glob.
-
-The SDL backend is deliberately unchanged apart from the renames: it is
-the reference a wrong Saturn frame gets compared against, and behaviour
-drift here would destroy that."
+git commit -m "Extract the video seam and move render.c to the host backend."
 ```
 
 ---
@@ -731,16 +684,7 @@ Expected: builds clean, tests PASS, and the keyboard still drives the game — a
 
 ```bash
 git add -A saturn/src saturn/host saturn/src/Makefile
-git commit -m "Extract the input seam; check_events moves to the host backend.
-
-check_events() is 185 lines of SDL keyboard switch and the last big block
-of SDL in main.c. Input behaviour is out of scope for this sub-project but
-the seam has to exist or main.c cannot compile for SH-2.
-
-The nine key variables lose their static and are declared in input.h.
-They stay defined in main.c because the game loop reads them every frame
-while the backend only writes them; visibility is the minimum the move
-requires, not a redesign."
+git commit -m "Extract the input seam and move check_events to the host backend."
 ```
 
 ---
@@ -821,18 +765,7 @@ Expected: builds clean, tests PASS, game runs at the same speed with sound and m
 
 ```bash
 git add -A saturn/src saturn/host saturn/src/Makefile
-git commit -m "Extract the platform seam; main.c is now SDL-free.
-
-Startup, shutdown, the millisecond clock and the frame pump move behind
-platform.h. platform_frame has no SDL ancestor: on the host it is a no-op
-because the loop is free-running, and on Saturn it is
-SRL::Core::Synchronize(), without which the VDP2 layer is never presented
-and the screen stays black.
-
-The Mix_OpenAudioDevice block moves into the host backend rather than
-being abstracted. disc.h's banner already documents it as host-backend
-policy living in engine code: it exists to guarantee the host CD-DA
-precondition, and SRL::Sound::Cdda has no negotiated spec to guarantee."
+git commit -m "Extract the platform seam so main.c is free of SDL."
 ```
 
 ---
@@ -916,21 +849,7 @@ Expected: builds clean, tests PASS
 
 ```bash
 git add saturn/src/system saturn/makefile
-git commit -m "Add the libc and linkage shims; every engine TU now compiles for SH-2.
-
-The five include-path traps from Another-Saturn's srl-libc-shadowing,
-adapted rather than rediscovered: <cstdio> cannot be included at all, the
-<cXXX> wrappers hard-fail on functions this libc lacks, SGL's stdlib.h has
-no malloc and no exit, SGL's headers have no extern \"C\" guard, and
-srl_memory.hpp's operator new is inline so it must be defined in a TU that
-does not include <srl.hpp>.
-
-Adds saturn_lwram_alloc/free, which Another-Saturn had no need for: this
-engine's two bulk buffers need 933,888 bytes of the 1 MB low pool.
-
-scale2x.c, scale3x.c and sound.c are filtered out of the Saturn glob --
-the first two type their buffers as SDL's Uint8, sound.c is built on
-Mix_Chunk, and all three stay for the host build."
+git commit -m "Add the libc and linkage shims so every engine TU compiles for SH-2."
 ```
 
 ---
@@ -980,18 +899,7 @@ Expected: builds clean, tests PASS — this task adds a Saturn-only file and mus
 
 ```bash
 git add saturn/src/system/disc_srl.cxx
-git commit -m "Add the Saturn disc backend on SRL::Cd::File.
-
-Second implementation of the disc.h seam, and the reason the seam was
-built. Only disc_read_file does real work in this sub-project; the two
-music functions are silent no-ops until the audio sub-project, which the
-contract explicitly permits.
-
-disc_open accepts and ignores cue_path -- a Saturn disc has no cue sheet
-and there is one mounted disc -- as disc.h's banner anticipated.
-max_size is honoured as the hard bound it is: all three call sites pass
-raw addresses into the emulated 68000 map with no bounds check anywhere
-else in the engine."
+git commit -m "Add the Saturn disc backend on SRL::Cd::File."
 ```
 
 ---
@@ -1039,16 +947,7 @@ Expected: builds clean, tests PASS
 
 ```bash
 git add saturn/src/system/video_srl.cxx
-git commit -m "Add the Saturn video backend on a VDP2 NBG0 Paletted256 bitmap.
-
-The engine's screens are 8-bit paletted and SRL offers Paletted256, so
-video_render is a copy with no pixel conversion. VDP2 bitmaps are
-fixed-size, so 304x192 lives in a 512x256 layer: 192 per-line copies at a
-304-byte source pitch against a 512-byte destination stride.
-
-set_scroll stops being a copy. The SDL backend fakes the scroll register
-by shifting every row as it blits, in three separate branches; on VDP2 it
-is the layer's scroll position and the pixels do not move at all."
+git commit -m "Add the Saturn video backend on a VDP2 NBG0 Paletted256 bitmap."
 ```
 
 ---
@@ -1120,18 +1019,7 @@ Do **not** launch Mednafen from a tool call. Report the BuildDrop path and the m
 
 ```bash
 git add saturn/src/system saturn/makefile
-git commit -m "Add the Saturn entry point and input stub; the disc links and boots.
-
-SRL::Core::Initialize() runs first in platform_init, before any
-allocation, because malloc and operator new both route to an SRL arena
-that does not exist until it returns.
-
-check_events is an empty function on Saturn. Pad mapping is a later
-sub-project and the intro this sub-project boots to plays on a timer, so
-leaving the key state at zero is correct rather than merely convenient.
-
--DHOTA_SATURN selects the LWRAM arm of the allocation seam; without it the
-build compiles and then fails to link on .bss overrun."
+git commit -m "Add the Saturn entry point and input stub so the disc links and boots."
 ```
 
 ---
