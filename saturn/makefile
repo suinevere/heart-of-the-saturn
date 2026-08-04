@@ -55,12 +55,31 @@ SRL_INSTALL_ROOT ?= ../SaturnRingLib
 SOURCES  = $(patsubst ./%,%,$(shell find src/ -name '*.c'))
 SOURCES += $(patsubst ./%,%,$(shell find src/ -name '*.cxx'))
 
+# Host-only translation units. scale2x/scale3x type their buffers as SDL's
+# Uint8 and sound.c is built on Mix_Chunk, so none of the three compiles for
+# SH-2. They stay under src/ because the host build needs them, which means
+# the glob above finds them and they have to be removed by name. Sound is a
+# later sub-project; the pixel doublers have no Saturn equivalent at all.
+SOURCES := $(filter-out src/scale2x.c src/scale3x.c src/sound.c,$(SOURCES))
+
 # BYPASS_PROTECTION starts the game at GAME_PART2 (the intro) instead of
 # GAME_PART1, which is the original copy-protection wheel screen -- unplayable
 # without the physical code wheel. The old host CMake build defined this; the
 # engine's default without it (engine.cxx: `uint16_t part = GAME_PART1`) is the
 # protection screen, so leaving it undefined looks like a broken boot.
 SRL_CUSTOM_CCFLAGS += -DBYPASS_PROTECTION
+
+# The vendored GNU getopt (1998, src/getopt.{c,h}) declares getopt through the
+# three-state HAVE_DECL_GETOPT contract its own comment documents: undefined
+# means "no autoconf run, declare it without arguments", 0 means "checked and
+# not found, declare it fully prototyped". Undefined is what the host build
+# gets away with, because the host never compiles getopt.c -- glibc supplies
+# getopt_long. SH-2 does compile it, and under -std=c2x an empty parameter
+# list means (void), so the argument-less declaration and getopt.c's own
+# three-parameter definition are a hard type conflict. 0 is also the truthful
+# answer here: newlib declares getopt in <getopt.h> and <unistd.h>, neither of
+# which this build ever includes.
+SRL_CUSTOM_CCFLAGS += -DHAVE_DECL_GETOPT=0
 
 # src/ is flat today but will be split into per-concern subfolders as the
 # Saturn backend grows. Put src/ and every subfolder on the include path so the

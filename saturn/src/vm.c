@@ -26,6 +26,7 @@
 short variables[MAX_VARIABLES];
 
 #if defined(HOTA_SATURN)
+#include "saturn_compat.h"
 static unsigned char *memory = NULL;
 #else
 static unsigned char memory_storage[MEMORY_SIZE];

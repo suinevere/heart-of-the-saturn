@@ -25,6 +25,7 @@
 #define GAME2BIN_SIZE 409600
 
 #if defined(HOTA_SATURN)
+#include "saturn_compat.h"
 static char *game2bin = NULL;
 #else
 static char game2bin_storage[GAME2BIN_SIZE];
