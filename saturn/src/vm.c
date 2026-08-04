@@ -23,7 +23,7 @@
 #define MAX_VARIABLES 256
 
 short variables[MAX_VARIABLES];
-static unsigned char memory[512*1024*2]; 
+static unsigned char memory[MEMORY_SIZE];
 
 int auxptr;
 static int using_aux = 0;
@@ -143,12 +143,12 @@ unsigned char *get_memory_ptr(int offset)
 }
 
 /** Returns the total size of the emulated memory map
-    @returns sizeof(memory), so callers derive available space from the
-             array itself instead of a copy of the literal
+    @returns MEMORY_SIZE, not sizeof(memory) -- memory becomes an LWRAM
+             pointer on Saturn, where sizeof would silently yield 4
 */
 int get_memory_size(void)
 {
-	return (int)sizeof(memory);
+	return MEMORY_SIZE;
 }
 
 /** Resets VM, zeros all variables and aux memory

@@ -11,3 +11,7 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src \
     -o run_tests test_discfmt.c ../src/discfmt.c
 ./run_tests
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_vm test_vm_memory.c ../src/vm.c
+./run_tests_vm

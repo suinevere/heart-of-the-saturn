@@ -61,12 +61,29 @@ void copy_tls_to_global(int dst_index, int src_index, int count);
 unsigned char *get_memory_ptr(int offset);
 
 /*----------------------
+ | MEMORY_SIZE
+ | Description: Size of the emulated 68000 memory map, in bytes. Named rather
+ |   than taken with sizeof because vm.c's backing store is a static array on
+ |   the host and an LWRAM allocation on Saturn -- sizeof would yield 4 on the
+ |   pointer form and hand every caller a 4-byte buffer with no diagnostic.
+ |   0x80000 rather than the original 0x100000 because the game's three fixed
+ |   load sites top out at 469,146 bytes: main.c:116 loads ROOMSn.BIN at
+ |   0xf900 (largest 370,688) and animation.c:870 loads animations at up to
+ |   0x809a (largest 436,224). The remaining ~55 KB is headroom over that
+ |   worst case, verified at runtime by the bound check in get_memory_ptr.
+ | Author: suinevere
+ ----------------------*/
+#define MEMORY_SIZE 0x80000
+
+/*----------------------
  | get_memory_size
- | Description: Total size of the emulated 68000 memory map. disc_read_file
- |   call sites need to know how much room is left from an offset (their
- |   max_size argument) -- this lets them compute it as
- |   get_memory_size() - offset rather than duplicating the array's size as
- |   a literal that would silently drift if memory[] were ever resized.
+ | Description: Total size of the emulated 68000 memory map. Returns the
+ |   named constant MEMORY_SIZE rather than sizeof(memory) -- memory is a
+ |   static array on the host today but becomes an LWRAM pointer on Saturn,
+ |   at which point sizeof would silently yield 4 and hand every caller a
+ |   4-byte buffer with no diagnostic. disc_read_file call sites need to know
+ |   how much room is left from an offset (their max_size argument) -- this
+ |   lets them compute it as get_memory_size() - offset.
  | Author: suinevere
  ----------------------*/
 int get_memory_size(void);
