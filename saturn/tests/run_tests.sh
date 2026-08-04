@@ -15,3 +15,7 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src \
     -o run_tests_vm test_vm_memory.c ../src/vm.c
 ./run_tests_vm
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_cdtoc test_cdtoc.c ../src/cdtoc.c
+./run_tests_cdtoc
