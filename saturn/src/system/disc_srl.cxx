@@ -136,35 +136,52 @@ int disc_open(const char *cue_path)
 
 	disc_close();
 
-	if (!SRL::Cd::Initialize())
-	{
-		fprintf(stderr, "disc_open: SRL::Cd::Initialize failed\n");
-		return 0;
-	}
+	/* SRL::Cd::Initialize()'s return value must not be trusted, and this is
+	   the one place in the port that ever asked it. It sets its flag from
+	   (GFS_Init(...) <= 2), but GFS_Init returns the count of directory
+	   records it read -- 28 on this disc, 26 files plus . and .. -- not a
+	   status, and its error codes are negative. So the test rejects every
+	   healthy disc with more than two root entries and would accept a real
+	   failure. Measured 2026-08-04: GFS_Init returned 28 and the flag came
+	   back false, which is why the port panicked with the data sitting
+	   correctly on the disc.
 
-	bool manifestOk = true;
+	   Calling it is still right -- it performs the actual GFS_Init, and it
+	   is what SRL::Core::Initialize does, discarding the result exactly as
+	   here. SRL::Cd::File resolves names through GFS_NameToId without ever
+	   consulting the flag, which is why every other SRL project works.
+	   The manifest check below is the real proof the drive and filesystem
+	   are up, so it, not the flag, decides what this function returns. */
+	SRL::Cd::Initialize();
+
+	int missingCount = 0;
+	int sizeBadCount = 0;
+	const char *firstBad = 0;
+	int firstBadGot = 0;
+	int firstBadWant = 0;
 
 #define DISC_MANIFEST_CHECK(name, lba, size)                                          \
 	{                                                                                  \
 		SRL::Cd::File manifestFile(name);                                             \
 		if (!manifestFile.Exists())                                                   \
 		{                                                                              \
-			fprintf(stderr, "disc_open: FATAL: manifest file '%s' not found on disc\n", name); \
-			manifestOk = false;                                                       \
+			missingCount++;                                                           \
+			if (firstBad == 0) { firstBad = name; firstBadGot = -1; firstBadWant = (int)(size); } \
 		}                                                                              \
 		else if (manifestFile.Size.Bytes != (int32_t)(size))                          \
 		{                                                                              \
-			fprintf(stderr, "disc_open: FATAL: '%s' is %d bytes on disc, manifest expects %d\n", \
-				name, (int)manifestFile.Size.Bytes, (int)(size));                     \
-			manifestOk = false;                                                       \
+			sizeBadCount++;                                                            \
+			if (firstBad == 0) { firstBad = name; firstBadGot = (int)manifestFile.Size.Bytes; firstBadWant = (int)(size); } \
 		}                                                                              \
 	}
 
 	DISC_MANIFEST_LIST(DISC_MANIFEST_CHECK)
 #undef DISC_MANIFEST_CHECK
 
-	if (!manifestOk)
+	if (missingCount != 0 || sizeBadCount != 0)
 	{
+		printf("disc_open: %d missing, %d wrong size\n", missingCount, sizeBadCount);
+		printf("disc_open: %s got %d want %d\n", firstBad, firstBadGot, firstBadWant);
 		disc_close();
 		return 0;
 	}
@@ -195,13 +212,13 @@ int disc_read_file(const char *name, void *out, int max_size)
 
 	if (!g_discOpened)
 	{
-		fprintf(stderr, "disc_read_file: disc not open, can't read '%s'\n", name);
+		printf("disc_read_file: disc not open, can't read '%s'\n", name);
 		return -1;
 	}
 
 	if (!normalize_name(name, resolved, (int32_t)sizeof(resolved)))
 	{
-		fprintf(stderr, "disc_read_file: bad filename\n");
+		printf("disc_read_file: bad filename\n");
 		return -1;
 	}
 
@@ -209,20 +226,20 @@ int disc_read_file(const char *name, void *out, int max_size)
 
 	if (!file.Exists())
 	{
-		fprintf(stderr, "disc_read_file: '%s' not found on disc\n", resolved);
+		printf("disc_read_file: '%s' not found on disc\n", resolved);
 		return -1;
 	}
 
 	if (max_size < 0 || file.Size.Bytes > max_size)
 	{
-		fprintf(stderr, "disc_read_file: '%s' is %d bytes, only %d available at destination\n",
+		printf("disc_read_file: '%s' is %d bytes, only %d available at destination\n",
 			resolved, (int)file.Size.Bytes, max_size);
 		return -1;
 	}
 
 	if (!file.Open())
 	{
-		fprintf(stderr, "disc_read_file: can't open '%s'\n", resolved);
+		printf("disc_read_file: can't open '%s'\n", resolved);
 		return -1;
 	}
 
@@ -232,7 +249,7 @@ int disc_read_file(const char *name, void *out, int max_size)
 
 	if (got != file.Size.Bytes)
 	{
-		fprintf(stderr, "disc_read_file: error reading '%s'\n", resolved);
+		printf("disc_read_file: error reading '%s'\n", resolved);
 		return -1;
 	}
 

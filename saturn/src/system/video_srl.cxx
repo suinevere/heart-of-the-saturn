@@ -221,7 +221,7 @@ int video_create_surface(void)
 
 	if (cell == nullptr)
 	{
-		fprintf(stderr, "video_create_surface: no VDP2 VRAM for a 512x256 8bpp bitmap\n");
+		printf("video_create_surface: no VDP2 VRAM for a 512x256 8bpp bitmap\n");
 		return -1;
 	}
 
@@ -229,7 +229,7 @@ int video_create_surface(void)
 
 	if (bank < 0)
 	{
-		fprintf(stderr, "video_create_surface: no free 256-colour CRAM bank\n");
+		printf("video_create_surface: no free 256-colour CRAM bank\n");
 		return -2;
 	}
 
