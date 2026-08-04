@@ -8,6 +8,6 @@
 set -e
 cd "$(dirname "$0")"
 gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
-    -I../../src \
-    -o run_tests test_discfmt.c ../../src/discfmt.c
+    -I../src \
+    -o run_tests test_discfmt.c ../src/discfmt.c
 ./run_tests
