@@ -29,6 +29,7 @@
 #include "video.h"
 #include "common.h"
 #include "client.h"
+#include "input.h"
 #include "main.h"
 
 ///////
