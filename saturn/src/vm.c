@@ -18,12 +18,61 @@
  */
 
 #include <memory.h>
+#include <stddef.h>
 #include "vm.h"
 
 #define MAX_VARIABLES 256
 
 short variables[MAX_VARIABLES];
-static unsigned char memory[MEMORY_SIZE];
+
+#if defined(HOTA_SATURN)
+static unsigned char *memory = NULL;
+#else
+static unsigned char memory_storage[MEMORY_SIZE];
+static unsigned char *memory = NULL;
+#endif
+
+/*----------------------
+ | vm_alloc_memory
+ | Description: Acquires the MEMORY_SIZE-byte emulated 68000 map from LWRAM on
+ |   Saturn, or hands back the host's static array unchanged. Idempotent so a
+ |   retried startup path cannot strand LWRAM.
+ | Author: suinevere
+ | Dependencies: vm.h
+ ----------------------*/
+int vm_alloc_memory(void)
+{
+	if (memory != NULL)
+	{
+		return 1;
+	}
+
+#if defined(HOTA_SATURN)
+	memory = (unsigned char *)saturn_lwram_alloc(MEMORY_SIZE);
+#else
+	memory = memory_storage;
+#endif
+
+	return (memory != NULL);
+}
+
+/*----------------------
+ | vm_free_memory
+ | Description: Releases the LWRAM allocation backing the emulated 68000 map
+ |   on Saturn; no-op on the host, whose backing store is static.
+ | Author: suinevere
+ | Dependencies: vm.h
+ ----------------------*/
+void vm_free_memory(void)
+{
+#if defined(HOTA_SATURN)
+	if (memory != NULL)
+	{
+		saturn_lwram_free(memory);
+	}
+#endif
+	memory = NULL;
+}
 
 int auxptr;
 static int using_aux = 0;

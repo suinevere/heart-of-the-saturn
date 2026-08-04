@@ -215,6 +215,20 @@ static int initialize()
 		panic("failed to initialize renderer module");
 	}
 
+	/* Both buffers must exist before game2bin_init(), which is the first
+	   thing in the engine that reads from the disc and therefore the first
+	   thing that writes into either of them. On Saturn these are LWRAM
+	   allocations that can genuinely fail; on the host they cannot. */
+	if (!vm_alloc_memory())
+	{
+		panic("out of memory allocating the emulated 68000 map");
+	}
+
+	if (!game2bin_alloc())
+	{
+		panic("out of memory allocating the GAME2.BIN buffer");
+	}
+
 	if (game2bin_init() < 0)
 	{
 		panic("can't read GAME2.BIN file");

@@ -24,7 +24,54 @@
 
 #define GAME2BIN_SIZE 409600
 
-static char game2bin[GAME2BIN_SIZE];
+#if defined(HOTA_SATURN)
+static char *game2bin = NULL;
+#else
+static char game2bin_storage[GAME2BIN_SIZE];
+static char *game2bin = NULL;
+#endif
+
+/*----------------------
+ | game2bin_alloc
+ | Description: Acquires the GAME2BIN_SIZE-byte resident buffer from LWRAM on
+ |   Saturn, or hands back the host's static array unchanged. Idempotent so a
+ |   retried startup path cannot strand LWRAM.
+ | Author: suinevere
+ | Dependencies: game2bin.h
+ ----------------------*/
+int game2bin_alloc(void)
+{
+	if (game2bin != NULL)
+	{
+		return 1;
+	}
+
+#if defined(HOTA_SATURN)
+	game2bin = (char *)saturn_lwram_alloc(GAME2BIN_SIZE);
+#else
+	game2bin = game2bin_storage;
+#endif
+
+	return (game2bin != NULL);
+}
+
+/*----------------------
+ | game2bin_free
+ | Description: Releases the LWRAM allocation backing the GAME2.BIN buffer on
+ |   Saturn; no-op on the host, whose backing store is static.
+ | Author: suinevere
+ | Dependencies: game2bin.h
+ ----------------------*/
+void game2bin_free(void)
+{
+#if defined(HOTA_SATURN)
+	if (game2bin != NULL)
+	{
+		saturn_lwram_free(game2bin);
+	}
+#endif
+	game2bin = NULL;
+}
 
 /** Copies a chunk from game2bin
     @param dst     address to destination

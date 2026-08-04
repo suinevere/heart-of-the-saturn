@@ -96,11 +96,36 @@ static void test_size_is_not_a_pointer_width(void)
 	assert(get_memory_size() != (int)sizeof(void *));
 }
 
+static void test_alloc_then_pointer_is_usable(void)
+{
+	unsigned char *base;
+
+	assert(vm_alloc_memory() == 1);
+
+	base = get_memory_ptr(0);
+	assert(base != NULL);
+
+	/* Both ends of the map must be writable -- the engine loads at 0xf900
+	   and reads back at the very top, so a short allocation would pass a
+	   naive smoke test and fail only in game. */
+	base[0] = 0xAA;
+	base[MEMORY_SIZE - 1] = 0x55;
+	assert(base[0] == 0xAA);
+	assert(base[MEMORY_SIZE - 1] == 0x55);
+
+	/* Idempotent: calling twice must not leak or move the buffer. */
+	assert(vm_alloc_memory() == 1);
+	assert(get_memory_ptr(0) == base);
+
+	vm_free_memory();
+}
+
 int main(void)
 {
 	test_size_is_the_named_constant();
 	test_size_covers_the_largest_load();
 	test_size_is_not_a_pointer_width();
+	test_alloc_then_pointer_is_usable();
 	printf("test_vm_memory: all passed\n");
 	return 0;
 }

@@ -19,6 +19,23 @@
 #ifndef __GAME2BIN_INCLUDED__
 #define __GAME2BIN_INCLUDED__
 
+/*----------------------
+ | game2bin_alloc / game2bin_free
+ | Description: Acquires the GAME2BIN_SIZE-byte resident GAME2.BIN buffer.
+ |   Split from a plain static array because the Saturn build cannot afford it
+ |   in HWRAM alongside vm.c's memory map, code, and framebuffers, so this
+ |   buffer lives in LWRAM instead. The host keeps the static array -- it has
+ |   the address space, and keeping its layout unchanged is what makes it a
+ |   valid reference to bisect Saturn bugs against. Idempotent: a second call
+ |   returns the same pointer rather than leaking, so a retried startup path
+ |   cannot strand LWRAM. Returns 1 on success, 0 on failure; the caller must
+ |   treat failure as fatal, because game2bin_init would then read the disc
+ |   into a NULL buffer.
+ | Author: suinevere
+ ----------------------*/
+int game2bin_alloc(void);
+void game2bin_free(void);
+
 /** loads GAME2.BIN file into memory
     @returns 0 on success, negative value on error
 */

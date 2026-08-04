@@ -80,6 +80,23 @@ unsigned char *get_memory_ptr(int offset);
 #define MEMORY_SIZE 0x80000
 
 /*----------------------
+ | vm_alloc_memory / vm_free_memory
+ | Description: Acquires the MEMORY_SIZE-byte emulated 68000 map. Split from a
+ |   plain static array because the Saturn build cannot afford it in HWRAM:
+ |   measured .bss across the engine is 1,882,592 bytes against 770,048 of
+ |   HWRAM, so this buffer and game2bin's live in LWRAM instead. The host keeps
+ |   the static array -- it has the address space, and keeping its layout
+ |   unchanged is what makes it a valid reference to bisect Saturn bugs
+ |   against. Idempotent: a second call returns the same pointer rather than
+ |   leaking, so a retried startup path cannot strand a megabyte. Returns 1 on
+ |   success, 0 on failure; the caller must treat failure as fatal, because
+ |   every get_memory_ptr after it would return an offset from NULL.
+ | Author: suinevere
+ ----------------------*/
+int vm_alloc_memory(void);
+void vm_free_memory(void);
+
+/*----------------------
  | get_memory_size
  | Description: Total size of the emulated 68000 memory map. Returns the
  |   named constant MEMORY_SIZE rather than sizeof(memory) -- memory is a
