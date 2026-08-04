@@ -20,7 +20,6 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
-#include <SDL.h>
 
 #include "vm.h"
 #include "lzss.h"
