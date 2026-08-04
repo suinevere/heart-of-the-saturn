@@ -26,7 +26,7 @@
 #include "lzss.h"
 #include "debug.h"
 #include "disc.h"
-#include "render.h"
+#include "video.h"
 #include "common.h"
 #include "client.h"
 #include "main.h"
@@ -71,8 +71,8 @@ static void post_render(int fps)
 
 static void copy_to_screen(int a4)
 {
-	//set_scroll(0); /////////
-	render((char *)screen0 + a4);
+	//video_set_scroll(0); /////////
+	video_render((char *)screen0 + a4);
 }
 
 static void draw_pixel(unsigned char *out, int offset, int color)
@@ -584,7 +584,7 @@ int play_sequence(int offset, int fps)
 	/* This code is obscure. I have no idea why it's written this way,
 	 * or how the hell it works, but .. it just works!.
 	 */
-	set_scroll(0);
+	video_set_scroll(0);
 
 	/* d0c6 */
 	a5 = offset;
@@ -735,7 +735,7 @@ int play_sequence(int offset, int fps)
 
 	loc_d1d4:
 	/* clr.b   ($C0401).l */
-	//set_scroll(a4/304); ///////////////
+	//video_set_scroll(a4/304); ///////////////
 	copy_to_screen(a4);
 	post_render(fps);
 	/* LOG(("d1d4\n")); */
@@ -914,7 +914,7 @@ int play_animation(const char *filename, int fileoffset)
 
 		palette_offset = get_long(0x809a) + (scene << 5);
 		ptr = get_memory_ptr(palette_offset);
-		set_palette_rgb12(ptr);
+		video_set_palette_rgb12(ptr);
 
 		scene_offset = get_long(0x80a6 + (pattern << 2));
 		stop = play_sequence(scene_offset, fps_);

@@ -34,7 +34,7 @@
 #include "common.h"
 #include "disc.h"
 #include "decode.h"
-#include "render.h"
+#include "video.h"
 #include "screen.h"
 #include "sprites.h"
 #include "game2bin.h"
@@ -210,7 +210,7 @@ static int initialize()
 		sound_init();
 	}
 
-	if (render_init() < 0)
+	if (video_init() < 0)
 	{
 		panic("failed to initialize renderer module");
 	}
@@ -239,7 +239,7 @@ static int initialize()
 	vm_reset();
 	set_variable(227, 1);
 
-	if (render_create_surface() < 0)
+	if (video_create_surface() < 0)
 	{
 		panic("failed to create video surface");
 	}
@@ -417,7 +417,7 @@ void quickload()
 
 	load_room(current_room);
 	load_room_screen(0, current_backdrop);
-	set_palette(palette_used);
+	video_set_palette(palette_used);
 
 	/* must be ran out of thread loop, so no active thread */
 	toggle_aux(0);
@@ -471,7 +471,7 @@ void quicksave()
 
 	fputc(current_room, fp);
 	fputc(current_backdrop, fp);
-	fputc(get_current_palette(), fp);
+	fputc(video_get_current_palette(), fp);
 
 	/* must be ran out of thread loop, so no active thread */
 	toggle_aux(0);
@@ -670,7 +670,7 @@ void check_events()
 				case SDLK_RETURN:
 				if (event.key.keysym.mod & KMOD_ALT)
 				{
-					toggle_fullscreen();
+					video_toggle_fullscreen();
 				}
 				break;
 				#endif
@@ -920,7 +920,7 @@ void sprite_test()
 	cls.quit = 0;
 
 	redraw = 1;
-	set_palette(0x11);
+	video_set_palette(0x11);
 	rest(0);
 	while (cls.quit == 0)
 	{
@@ -939,7 +939,7 @@ void sprite_test()
 			memset(background, 0xff, 304*192);
 
 			render_sprite(0);
-			render(background);
+			video_render(background);
 			redraw = 0;
 			print_sprite(0);
 		}

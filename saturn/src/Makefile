@@ -6,7 +6,7 @@ SDL_LIBS = `sdl2-config --libs`
 CFLAGS=-ggdb -DENABLE_DEBUG -O2 -Wall -I. -Ihost $(SDL_CFLAGS)
 OBJS=\
 	client.o common.o vm.o      sprites.o decode.o   animation.o   \
-	rooms.o  render.o main.o    debug.o    lzss.o                  \
+	rooms.o  video_sdl.o main.o debug.o    lzss.o                  \
 	sound.o  screen.o scale2x.o scale3x.o game2bin.o discfmt.o     \
 	disc_cue.o
 
@@ -25,6 +25,13 @@ alien: $(OBJS)
 # for the SH-2 build, which would otherwise compile this SDL file for Saturn.
 disc_cue.o: ../host/disc_cue.c
 	$(CC) $(CFLAGS) -c ../host/disc_cue.c -o disc_cue.o
+
+# video_sdl.o lives under ../host/ for the same reason disc_cue.o does -- the
+# .c.o suffix rule above only looks in the current directory, and this SDL
+# file must stay out of saturn/makefile's `find src/ -name '*.c'` glob for
+# the SH-2 build.
+video_sdl.o: ../host/video_sdl.c
+	$(CC) $(CFLAGS) -c ../host/video_sdl.c -o video_sdl.o
 
 clean:
 	@rm $(OBJS)

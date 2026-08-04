@@ -24,7 +24,7 @@
 #include "sound.h"
 #include "common.h"
 #include "decode.h"
-#include "render.h"
+#include "video.h"
 #include "screen.h"
 #include "sprites.h"
 #include "animation.h"
@@ -1723,7 +1723,7 @@ int decode(int current_task, int start_pc)
 			/* set palette imm8 */
 			imm8 = next_pc();
 
-			set_palette(imm8);
+			video_set_palette(imm8);
 			LOG(("set palette %d\n", imm8));
 			break;
 
@@ -2585,7 +2585,7 @@ int decode(int current_task, int start_pc)
 			case 0x8b:
 			var1 = next_pc();
 			imm16 = get_variable(var1);
-			set_palette(imm16);
+			video_set_palette(imm16);
 
 			LOG(("set palette var[%d] (%d)\n", var1, imm16));
 			break;
@@ -2593,7 +2593,7 @@ int decode(int current_task, int start_pc)
 			case 0x8c:
 			imm8 = next_pc();
 			LOG(("scroll reg = %d\n", extw(imm8)));
-			set_scroll(extw(imm8));
+			video_set_scroll(extw(imm8));
 			break;
 
 			/*

@@ -19,7 +19,7 @@
 #include <string.h>
 #include <SDL.h>
 #include "debug.h"
-#include "render.h"
+#include "video.h"
 #include "game2bin.h"
 
 #include "client.h"
@@ -50,7 +50,7 @@ static SDL_Color palette[256];
 
     Palettes are stored in game2.bin
 */
-int get_current_palette()
+int video_get_current_palette()
 {
 	return current_palette;
 }
@@ -58,7 +58,7 @@ int get_current_palette()
 /** Sets VSCROLL value
     @param scroll
 */
-void set_scroll(int scroll)
+void video_set_scroll(int scroll)
 {
 	scroll_reg = scroll;
 }
@@ -66,7 +66,7 @@ void set_scroll(int scroll)
 /** Returns VSCROLL register value
     @returns vscroll
 */
-int get_scroll_register()
+int video_get_scroll_register()
 {
 	return scroll_reg;
 }
@@ -254,7 +254,7 @@ void render3x(char *src)
 /** Renders a virtual screen
     @param src
 */
-void render(char *src)
+void video_render(char *src)
 {
 	Uint32 *texture_pixels;
 	Uint8 *screen_pixels;
@@ -323,7 +323,7 @@ void render(char *src)
 /** Module initializer
     @returns zero on success
 */
-int render_init()
+int video_init()
 {
 	return 0;
 }
@@ -331,7 +331,7 @@ int render_init()
 /** Converts a Sega CD RGB444 to RGB888
     @param rgb12   pointer to 16x2 of palette data
 */
-void set_palette_rgb12(unsigned char *rgb12)
+void video_set_palette_rgb12(unsigned char *rgb12)
 {
 	int i;
 
@@ -354,21 +354,21 @@ void set_palette_rgb12(unsigned char *rgb12)
 	palette_changed = 1;
 }
 
-void set_palette(int which)
+void video_set_palette(int which)
 {
 	unsigned char rgb12[16*2];
 
 	copy_from_game2bin(rgb12, 0x5cb8 + (which * 16 * 2), sizeof(rgb12));
 
 	current_palette = which;
-	set_palette_rgb12(rgb12);
+	video_set_palette_rgb12(rgb12);
 
 	palette[255].r = 255;
 	palette[255].g = 0;
 	palette[255].b = 255;
 }
 
-void toggle_fullscreen()
+void video_toggle_fullscreen()
 {
 	fullscreen = 1 ^ fullscreen;
 
@@ -405,7 +405,7 @@ static void atexit_callback(void)
 	SDL_DestroyWindow(window);
 }
 
-int render_create_surface()
+int video_create_surface()
 {
 	Uint32 flags, format;
 	int index;
@@ -489,7 +489,7 @@ int render_create_surface()
 
 	if (fullscreen_flag)
 	{
-		toggle_fullscreen();
+		video_toggle_fullscreen();
 	}
 
 	atexit(atexit_callback);

@@ -22,7 +22,7 @@
 
 #include "vm.h"
 #include "debug.h"
-#include "render.h"
+#include "video.h"
 #include "screen.h"
 
 #define VAR_VSCROLL 249
@@ -206,7 +206,7 @@ void update_screen(int which)
 		src = screen_visible;
 	}
 
-	render(src);
+	video_render(src);
 }
 
 /** Returns the identifier of the working-screen
