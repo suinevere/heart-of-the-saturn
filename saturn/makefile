@@ -69,6 +69,15 @@ SOURCES := $(filter-out src/scale2x.c src/scale3x.c src/sound.c,$(SOURCES))
 # protection screen, so leaving it undefined looks like a broken boot.
 SRL_CUSTOM_CCFLAGS += -DBYPASS_PROTECTION
 
+# Selects the Saturn arm of the allocation seam in vm.c and game2bin.c, which
+# routes the two bulk buffers to LWRAM instead of leaving them in .bss. Without
+# it the SH-2 build compiles cleanly and then fails to link, because the
+# 1,882,592 bytes of .bss do not fit the 770,048 HWRAM offers.
+#
+# main.c reads it too, to drop the command-line and cue-lookup paths: a Saturn
+# has no argv for getopt_long to walk and no cue sheet for opendir to find.
+SRL_CUSTOM_CCFLAGS += -DHOTA_SATURN
+
 # The vendored GNU getopt (1998, src/getopt.{c,h}) declares getopt through the
 # three-state HAVE_DECL_GETOPT contract its own comment documents: undefined
 # means "no autoconf run, declare it without arguments", 0 means "checked and

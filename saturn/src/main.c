@@ -145,14 +145,16 @@ static void atexit_callback(void)
 	platform_quit();
 }
 
+/*----------------------
+ | initialize
+ | Description: Engine bring-up after the disc is open: the renderer, the two
+ |   bulk buffers, GAME2.BIN and the first screen. platform_init() and the
+ |   atexit registration used to head this function and now run in main()
+ |   ahead of disc_open(), for the reason main()'s banner gives.
+ | Author: suinevere
+ ----------------------*/
 static int initialize()
 {
-	if (!platform_init())
-	{
-		panic("platform_init failed\n");
-	}
-	atexit(atexit_callback);
-
 	if (video_init() < 0)
 	{
 		panic("failed to initialize renderer module");
@@ -757,6 +759,7 @@ void sprite_test()
 	}
 }
 
+#ifndef HOTA_SATURN
 static void help()
 {
 	printf("Heart of The Alien Redux %s\n", VERSION);
@@ -857,10 +860,38 @@ static struct option options[] =
 	{"fastest", no_argument, &fastest_flag, 1},
 	{0, no_argument, 0, 0}
 };
+#endif /* !HOTA_SATURN */
 
+/*----------------------
+ | main
+ | Description: Entry point. Parses the command line, opens the disc, brings
+ |   the platform up and runs the game or one of the two test modes.
+ |
+ |   Everything above between #ifndef HOTA_SATURN and its #endif -- help(),
+ |   find_cue_path() and the long-option table -- plus the getopt_long loop
+ |   below is host-only, and gated out rather than merely unused. SRL enters
+ |   at `int main()` with no arguments at all (see SaturnRingLib/Samples), so
+ |   argc and argv here name registers the startup never wrote; and opendir()
+ |   is a stub that always fails (saturn_filestub.c), so find_cue_path() would
+ |   return NULL and panic on "no disc cue file given". A Saturn has one
+ |   mounted disc and no cue sheet, which is why disc_open's cue_path
+ |   parameter is documented as accepted-and-ignored in disc_srl.cxx -- the
+ |   literal passed below is never read.
+ |
+ |   platform_init() and the atexit registration moved here out of
+ |   initialize() so that they precede disc_open(). On Saturn platform_init is
+ |   SRL::Core::Initialize(), which must run before the CD, the VDP2 layer or
+ |   the first malloc; on the host it is SDL_Init plus the audio-device
+ |   negotiation, which disc.h names as the CD-DA path's precondition, so
+ |   running it before the disc opens is right on both backends. It stays
+ |   after option parsing because it reads cls.nosound.
+ | Author: suinevere
+ ----------------------*/
 int main(int argc, char **argv)
 {
+#ifndef HOTA_SATURN
 	int options_index;
+#endif
 	const char *cue_path;
 
 	next_script = 0;
@@ -872,6 +903,7 @@ int main(int argc, char **argv)
 	cls.paused = 0;
 	cls.nosound = 0;
 
+#ifndef HOTA_SATURN
 	options_index = 0;
 	while (1)
 	{
@@ -950,6 +982,17 @@ int main(int argc, char **argv)
 	{
 		panic("no disc cue file given, and none found under cd/*.cue");
 	}
+#else
+	(void)argc;
+	(void)argv;
+	cue_path = "cd";
+#endif
+
+	if (!platform_init())
+	{
+		panic("platform_init failed\n");
+	}
+	atexit(atexit_callback);
 
 	if (!disc_open(cue_path))
 	{

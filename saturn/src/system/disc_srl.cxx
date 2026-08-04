@@ -102,7 +102,7 @@ extern "C" {
 
 /*----------------------
  | disc_open
- | Description: Initializes SRL::Cd and validates the 19-file manifest
+ | Description: Confirms SRL::Cd is up and validates the 19-file manifest
  |   against live GFS lookups before returning success, matching
  |   disc_cue.c's "fail loudly at startup, not quietly three minutes later"
  |   contract. cue_path is accepted and ignored: a Saturn disc has no cue
@@ -113,6 +113,14 @@ extern "C" {
  |   disc_close() up front makes this idempotent: a re-open always starts
  |   from a clean slate rather than layering state on a previous one, and a
  |   failure here leaves g_discOpened false, exactly as disc.h requires.
+ |
+ |   The SRL::Cd::Initialize() call is now a re-check, not the bring-up:
+ |   SRL::Core::Initialize() runs GFS_Init itself (srl_core.hpp) and
+ |   platform_srl.cxx's platform_init is ordered ahead of this function in
+ |   main(). Cd::Initialize guards on its own isInitialized flag, so the
+ |   second call just returns the cached result -- kept because it is the only
+ |   place a CD bring-up failure is reported, and Core::Initialize discards
+ |   the return value.
  | Author: suinevere
  | Params: cue_path -- unused on Saturn
  | Returns: 1 on success, 0 on failure
