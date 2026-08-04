@@ -4,17 +4,23 @@ CC=gcc
 SDL_CFLAGS = `sdl2-config --cflags`
 SDL_LIBS = `sdl2-config --libs`
 CFLAGS=-DNDEBUG -O2 -Wall -I. -Ihost $(SDL_CFLAGS) -DPYRA -march=armv7ve+simd -mcpu=cortex-a15 -mtune=cortex-a15 -mfpu=neon-vfpv4 -mfloat-abi=hard -mthumb
-# The old standalone music player and the old ISO/CD-image loader source
-# files were deleted by the bincue-disc-backend port (Tasks 4 and 5) in
-# favor of the disc.h seam -- discfmt (format arithmetic) and disc_cue (the
-# host FILE*-backed implementation) below replace them. Mirrors
-# src/Makefile's OBJS list exactly; see that file for why disc_cue's object
-# needs its own rule below instead of a plain OBJS entry.
+# Cross-compile target for the DragonBox Pyra. Unrelated to the Saturn port,
+# but not dead: input_sdl.c still carries a live `#ifdef PYRA` branch, which
+# is why this is repaired rather than deleted.
+#
+# OBJS below and the four explicit rules under it must stay identical to
+# src/Makefile's, which they now are -- the only difference between the two
+# files is CFLAGS. They have drifted twice: the bincue port deleted music.o
+# and cd_iso.o, and the platform-seam port deleted render.o and added
+# input_sdl.o/platform_sdl.o, and both times this file kept naming files that
+# no longer existed. Nothing here compiles in CI, so the check that catches
+# it is `make -n -f Makefile-Pyra` after clearing src/*.o: a dry run needs no
+# ARM toolchain and still fails on a missing source.
 OBJS=\
 	client.o common.o vm.o      sprites.o decode.o   animation.o   \
-	rooms.o  render.o main.o    debug.o    lzss.o                  \
+	rooms.o  video_sdl.o main.o debug.o    lzss.o                  \
 	sound.o  screen.o scale2x.o scale3x.o game2bin.o discfmt.o     \
-	disc_cue.o
+	disc_cue.o input_sdl.o platform_sdl.o
 
 LIBS=$(SDL_LIBS) -lSDL2_mixer
 
@@ -24,11 +30,22 @@ alien: $(OBJS)
 .c.o:
 	$(CC) $(CFLAGS) -c $< -o $@
 
-# disc_cue.o lives under host/ -- the .c.o suffix rule above only looks in
-# the current directory, so a plain OBJS entry for it would silently never
-# compile. Explicit rule beats the implicit suffix rule for the same target.
-disc_cue.o: host/disc_cue.c
-	$(CC) $(CFLAGS) -c host/disc_cue.c -o disc_cue.o
+# The four host backends live under ../host/ -- the .c.o suffix rule above
+# only looks in the current directory, so a plain OBJS entry would silently
+# never compile. They sit outside src/ because saturn/makefile globs
+# `find src/ -name '*.c'` for the SH-2 build, which would otherwise compile
+# these SDL files for Saturn.
+disc_cue.o: ../host/disc_cue.c
+	$(CC) $(CFLAGS) -c ../host/disc_cue.c -o disc_cue.o
+
+video_sdl.o: ../host/video_sdl.c
+	$(CC) $(CFLAGS) -c ../host/video_sdl.c -o video_sdl.o
+
+input_sdl.o: ../host/input_sdl.c
+	$(CC) $(CFLAGS) -c ../host/input_sdl.c -o input_sdl.o
+
+platform_sdl.o: ../host/platform_sdl.c
+	$(CC) $(CFLAGS) -c ../host/platform_sdl.c -o platform_sdl.o
 
 clean:
 	@rm $(OBJS)
