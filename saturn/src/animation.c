@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "vm.h"
+#include "disc_manifest.h"
 #include "lzss.h"
 #include "debug.h"
 #include "disc.h"
@@ -49,6 +50,13 @@ static unsigned char screen4[192*304];
  |   carried its own note to move it out. Sized 0x100000 - 0xdc000, the space the
  |   original reserved above the scratch base, because unpack_animation_delta
  |   writes a data-driven stream with no length of its own.
+ |   The read side moved too: unpack_animation_delta back-references with
+ |   src = out - d3, and while out was &memory[0xdc000] a back-reference past
+ |   the first written byte landed on low map bytes -- in bounds and defined.
+ |   The same read now falls before this array and is genuinely out of bounds.
+ |   Well-formed streams never reach back that far, so behaviour is unchanged,
+ |   but a malformed one now has undefined behaviour where it used to have
+ |   merely wrong pixels.
  | Author: suinevere
  ----------------------*/
 #define DELTA_SCRATCH_SIZE (0x100000 - 0xdc000)
@@ -877,7 +885,7 @@ int play_animation(const char *filename, int fileoffset)
 	LOG(("playing animation %s\n", filename));
 
 	/* animations are loaded into a fixed place in 68000 memory */
-	read_offset = 0x809a - fileoffset;
+	read_offset = ANIMATION_LOAD_BASE - fileoffset;
 	ptr = get_memory_ptr(read_offset);
 	if (disc_read_file(filename, ptr, get_memory_size() - read_offset) < 0)
 	{

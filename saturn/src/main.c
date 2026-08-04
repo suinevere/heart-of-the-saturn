@@ -27,6 +27,7 @@
 
 #include "client.h"
 #include "vm.h"
+#include "disc_manifest.h"
 #include "rooms.h"
 #include "debug.h"
 #include "sound.h"
@@ -113,8 +114,8 @@ static int load_room(int index)
 	filename[5] = (index + '0');
 
 	LOG(("loading %s\n", filename));
-	ptr = get_memory_ptr(0xf900);
-	if (disc_read_file(filename, ptr, get_memory_size() - 0xf900) < 0)
+	ptr = get_memory_ptr(ROOMS_LOAD_BASE);
+	if (disc_read_file(filename, ptr, get_memory_size() - ROOMS_LOAD_BASE) < 0)
 	{
 		panic("load_room failed");
 	}

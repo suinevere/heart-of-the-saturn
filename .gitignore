@@ -29,12 +29,15 @@ SaturnRingLib/tools/bin/
 # cmake-build-*/ at any depth would match, which is not intended.
 /cmake-build-*/
 
-# --- Host unit-test binary ---------------------------------------------------
-# saturn/tests/run_tests.sh builds this with the host gcc, not the SH-2 cross
-# compiler, so the pure disc-format logic can be tested off-target. Build
-# output, not source. Both spellings: MSYS gcc emits .exe on Windows.
+# --- Host unit-test binaries -------------------------------------------------
+# saturn/tests/run_tests.sh builds these with the host gcc, not the SH-2 cross
+# compiler, so the pure disc-format logic and the map-size contract can be
+# tested off-target. Build output, not source. Both spellings: MSYS gcc emits
+# .exe on Windows.
 saturn/tests/run_tests
 saturn/tests/run_tests.exe
+saturn/tests/run_tests_vm
+saturn/tests/run_tests_vm.exe
 
 # --- Extractor binary --------------------------------------------------------
 tools/extract_disc

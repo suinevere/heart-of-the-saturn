@@ -16,7 +16,7 @@
  | Author: suinevere
  | Dependencies: stdio.h, stdlib.h, string.h, dirent-free (the caller
  |   resolves the cd directory's cue sheet, not this file); discfmt.h,
- |   disc.h. Also SDL.h/SDL_mixer.h, for Mix_HookMusic -- disc_play_track
+ |   disc.h, disc_manifest.h. Also SDL.h/SDL_mixer.h, for Mix_HookMusic -- disc_play_track
  |   streams CD-DA straight off an audio track's FILE * through the same
  |   device sound.c already opened, so this file crosses the platform
  |   boundary SDL-side as well as stdio-side. client.h for cls.nosound: on
@@ -34,6 +34,7 @@
 
 #include "discfmt.h"
 #include "disc.h"
+#include "disc_manifest.h"
 #include "client.h"
 
 #define DISC_SECTOR_USER_BYTES 2048
@@ -87,6 +88,9 @@ static int disc_music_eof = 0;
  |   offsets against the real disc (verified: offset == lba*2048 for all 19,
  |   exactly, no drift) -- so this is not new knowledge, it is the same 19
  |   facts in the form disc_open can check against a live directory read.
+ |   The rows themselves come from DISC_MANIFEST_LIST in disc_manifest.h,
+ |   because test_vm_memory.c derives the map's size bound from the same
+ |   sizes and a second copy of the table would let the two disagree.
  | Author: suinevere
  ----------------------*/
 typedef struct
@@ -98,25 +102,9 @@ typedef struct
 
 static const disc_manifest_entry_t disc_manifest[] =
 {
-    { "END1.BIN",     2593, 432128 },
-    { "END2.BIN",     2804, 432128 },
-    { "END3.BIN",     3015, 432128 },
-    { "END4.BIN",     3226, 432128 },
-    { "GAME2.BIN",    1082, 409600 },
-    { "INTRO1.BIN",    238, 432128 },
-    { "INTRO2.BIN",    449, 432128 },
-    { "INTRO3.BIN",    660, 432128 },
-    { "INTRO4.BIN",    871, 432128 },
-    { "MAKE2MB.BIN",  3650, 436224 },
-    { "MID2.BIN",     3863, 432128 },
-    { "ROOMS1.BIN",   4501, 370688 },
-    { "ROOMS2.BIN",   1282, 370688 },
-    { "ROOMS3.BIN",   1463, 370688 },
-    { "ROOMS4.BIN",   1644, 370688 },
-    { "ROOMS5.BIN",   1825, 370688 },
-    { "ROOMS6.BIN",   4139, 370688 },
-    { "ROOMS7.BIN",   2006, 160826 },
-    { "ROOMS8.BIN",   4320, 370688 }
+#define DISC_MANIFEST_ROW(name, lba, size) { name, lba, size },
+    DISC_MANIFEST_LIST(DISC_MANIFEST_ROW)
+#undef DISC_MANIFEST_ROW
 };
 
 #define DISC_MANIFEST_COUNT (sizeof(disc_manifest) / sizeof(disc_manifest[0]))
