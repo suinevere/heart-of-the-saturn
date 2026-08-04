@@ -78,9 +78,14 @@ void video_set_palette(int which);
 /*----------------------
  | video_set_palette_rgb12
  | Description: Applies a raw 16-entry RGB444 palette (the Sega CD's
- |   native format) directly, bypassing game2.bin lookup. Each 4-bit
- |   channel maps to the backend's native depth by a left shift -- RGB888
- |   on the host, RGB555 in Saturn CRAM.
+ |   native format) directly, bypassing game2.bin lookup. Each 4-bit channel
+ |   widens to the backend's native depth by bit replication, not by a left
+ |   shift: the host does r | (r >> 4) to reach 8 bits and the Saturn backend
+ |   does (v << 1) | (v >> 3) to reach the 5 bits of CRAM RGB555. A bare shift
+ |   would leave the low bits zero, so full-intensity 15 would land at 30 of 31
+ |   instead of 31 and every step of the ramp would sit low -- the whole image
+ |   comes out slightly dark rather than visibly wrong, which is why this is
+ |   stated here instead of left to the backends.
  | Author: suinevere
  ----------------------*/
 void video_set_palette_rgb12(unsigned char *rgb12);

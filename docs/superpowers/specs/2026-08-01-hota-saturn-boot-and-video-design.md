@@ -225,7 +225,13 @@ On `SRL::VDP2::NBG0`, declared `BmpScreen<NBG0, scnNBG0, NBG0ON>` (`srl_vdp2.hpp
   writes the register; `video_get_scroll_register` returns the shadow value, because
   the engine reads it back.
 - **Palette.** `set_palette_rgb12` receives 16 entries of 4-bit-per-channel RGB. Each
-  channel maps to RGB555 by one left shift. Another-Saturn established that the "565"
+  channel widens to RGB555 by **bit replication**, `(v << 1) | (v >> 3)`, not by one
+  left shift — this said "one left shift" until 2026-08-04 and was wrong. A bare
+  `v << 1` leaves the low bit zero, so 15 maps to 30 of 31 rather than 31: full
+  intensity is never reached and the whole ramp is biased dark. It is the same
+  correction `video_sdl.c` already makes going to 8 bits with `r | (r >> 4)`, which is
+  the reference the Saturn output is compared against, so a shift here would also make
+  the two backends disagree on every colour. Another-Saturn established that the "565"
   comment in the equivalent Another World code is wrong and that the nibble order
   already matches; both findings are re-verified here rather than assumed, because
   HOTA is a different codebase with the same Sega-CD-era heritage.
