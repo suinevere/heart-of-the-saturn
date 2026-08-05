@@ -133,7 +133,7 @@ State, file-static alongside the existing `g_discOpened`:
 
 | Name | Meaning |
 | --- | --- |
-| `g_toc[102]`, `g_tocReady` | the raw BIOS TOC, fetched once by `CDC_TgetToc` |
+| `g_toc[102]` | the raw BIOS TOC, fetched once by `CDC_TgetToc`; no separate "is it fetched" flag, since nothing reads it except through a live `g_musicTrack`, which only a successful `disc_open` can produce |
 | `g_maxAudioTrack` | highest real audio track; 0 on a data-only disc |
 | `g_musicTrack` | engine index currently requested, −1 for none |
 | `g_musicLoop` | whether it was requested looping |
@@ -149,8 +149,12 @@ State, file-static alongside the existing `g_discOpened`:
 2. `cue = discfmt_cue_track_for_music(engine_index)`; a return of 0 (out of range) is a
    no-op. The `+ 2` is not re-derived here — it stays in the one tested function that
    both backends share.
-3. **TOC guard**: `cue > g_maxAudioTrack` is a no-op that clears music state. This is
-   what makes the default 12 MB data-only disc safe rather than undefined.
+3. **TOC guard**: refuse unless `cue` exists on the disc and is audio --
+   `cdtoc_is_audio(g_toc, cue)`, not the weaker `cue > g_maxAudioTrack` range check,
+   which would still admit a data track sitting below the highest audio track. A
+   refusal leaves `g_musicTrack` untouched rather than clearing it, matching
+   `disc_cue.c`: whatever was already playing keeps playing and stays tracked. This
+   is what makes the default 12 MB data-only disc safe rather than undefined.
 4. If the request is identical to what the drive is confirmably doing — same cue track,
    both looping, status `CDC_ST_PLAY` — return without touching the drive. Re-issuing
    `CDC_CdPlay` costs a seek and an audible gap, and "play T looping" when T is already

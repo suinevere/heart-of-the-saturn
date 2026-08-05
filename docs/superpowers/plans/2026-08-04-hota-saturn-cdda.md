@@ -776,20 +776,29 @@ Replace the whole existing `disc_play_track` function and its banner — the no-
 ```cpp
 /*----------------------
  | disc_play_track
- | Description: Starts a CD-DA track for the engine's music index. Refuses,
- |   silently and by contract, before disc_open, after disc_close, with
- |   cls.nosound set, for an index outside 0..40, and -- the case that matters
- |   for every routine build -- for any track the disc does not carry, which
- |   is all of them on the 12 MB HOTA_AUDIO=none disc. That last guard is not
- |   defensive programming: CDC_CdPlay for a track outside the TOC is
+ | Description: Starts a CD-DA track for the engine's music index. Refuses
+ |   silently before disc_open, after disc_close, and with cls.nosound set.
+ |   Refuses with a printf -- the one place this function is not silent --
+ |   for an index outside 0..40 or, the case that matters for every routine
+ |   build, for any track that does not exist on the disc or exists but is
+ |   not audio, which is every index on the 12 MB HOTA_AUDIO=none disc. That
+ |   last guard is not defensive programming: CDC_CdPlay for a track outside
+ |   the TOC, or for a data track sitting below the highest audio track, is
  |   undefined, and the failure mode to avoid is one that leaves the CD block
  |   unable to serve the file reads the game is about to make.
+ |   cdtoc_is_audio(g_toc, cue) is the precise predicate for both halves of
+ |   that hazard at once -- host-tested in cdtoc.c -- rather than a
+ |   cue > g_maxAudioTrack range check, which would admit a data track
+ |   sitting below the highest audio track.
  |
  |   A refusal leaves g_musicTrack untouched: whatever was already playing
  |   keeps playing and stays correctly tracked, matching disc_cue.c's host
- |   implementation, which runs every refusal check before it ever touches
- |   playback state. The two backends share one disc.h contract, and this is
- |   what keeps it literally true of both.
+ |   implementation for every refusal check but one -- disc_cue.c's own
+ |   fopen failure for a missing track file runs after its disc_stop_track()
+ |   has already silenced whatever was playing, so that one host path does
+ |   touch playback state ahead of a failure it could not yet foresee. Every
+ |   other refusal on both backends, including this one, runs before
+ |   touching state.
  |
  |   The +2 mapping is not repeated here. discfmt_cue_track_for_music owns it
  |   for both backends and returns 0, an invalid track, when out of range.
@@ -798,7 +807,7 @@ Replace the whole existing `disc_play_track` function and its banner — the no-
  |   not: it is CDC_CdPlay by track number and never consults the table of
  |   contents SRL cannot read.
  | Author: suinevere
- | Globals: g_discOpened, g_maxAudioTrack, g_musicTrack, g_musicLoop
+ | Globals: g_discOpened, g_toc, g_musicTrack, g_musicLoop
  | Params: engine_index -- music index 0..40; loop -- nonzero to repeat
  |   forever
  | Returns: N/A
@@ -814,8 +823,9 @@ void disc_play_track(int engine_index, int loop)
 
 	cue = discfmt_cue_track_for_music(engine_index);
 
-	if (cue == 0 || cue > g_maxAudioTrack)
+	if (cue == 0 || !cdtoc_is_audio(g_toc, cue))
 	{
+		printf("disc_play_track: refused, track %d not playable\n", cue);
 		return;
 	}
 
@@ -1106,8 +1116,15 @@ static void cdda_suspend(void)
  |   in this codebase g_maxAudioTrack is 0 whenever the TOC is unreadable, so
  |   disc_play_track refuses every index and g_musicTrack never leaves -1,
  |   meaning this call returns at the guard below before cdda_classify ever
- |   sees that input. The fallback exists for cdda_classify's own contract,
- |   not because this call is known to exercise it.
+ |   sees that input in practice. The fallback exists for cdda_classify's own
+ |   contract, not because this call is known to exercise it -- but the
+ |   CDDA_RESTART case does not lean on that invariant to stay safe: it
+ |   re-checks cdtoc_is_audio(g_toc, cue) itself before issuing PlaySingle,
+ |   closing the same CDC_CdPlay-on-an-unplayable-track hazard disc_play_track
+ |   guards against, a second time, rather than arguing it unreachable here.
+ |   A classifier result that cannot be honoured this way is treated the same
+ |   as CDDA_FORGET: g_musicTrack is cleared rather than left pointing at a
+ |   track this call just declined to play.
  | Author: suinevere
  | Globals: g_toc, g_musicTrack, g_musicLoop, g_pauseFad, g_wasPlaying,
  |   g_musicObserved
@@ -1141,6 +1158,7 @@ static void cdda_restore(void)
 	switch (action)
 	{
 	case CDDA_FORGET:
+		printf("cdda_restore: restore classified as finished or never-started\n");
 		g_musicTrack = -1;
 		return;
 
@@ -1159,6 +1177,13 @@ static void cdda_restore(void)
 
 	case CDDA_RESTART:
 	default:
+		if (!cdtoc_is_audio(g_toc, cue))
+		{
+			printf("cdda_restore: restore classified as finished or never-started\n");
+			g_musicTrack = -1;
+			return;
+		}
+
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
 		return;
 	}
@@ -1217,7 +1242,7 @@ int disc_read_file(const char *name, void *out, int max_size)
 
 - [ ] **Step 8: Add the repeat guard to `disc_play_track`, and clear `g_musicObserved` wherever a track is (re)commanded or stopped**
 
-In `disc_play_track`, immediately after the `cue == 0 || cue > g_maxAudioTrack` block and before the `PlaySingle` call, insert:
+In `disc_play_track`, immediately after the `cue == 0 || !cdtoc_is_audio(g_toc, cue)` block and before the `PlaySingle` call, insert:
 
 ```cpp
 	if (g_musicTrack == engine_index && g_musicLoop != 0 && loop != 0)
@@ -1361,7 +1386,7 @@ Hand over the path and ask for these four, specifically:
 3. No stutter, restart or gap partway through an animation.
 4. Silence after the intro ends.
 
-**Do not run the emulator from a tool call.** If music is absent on all four, the likely causes in order are: the TOC guard rejecting valid tracks (check the `disc_open: N audio tracks` line reads 41), `cdda_restore` classifying as finished (`g_pauseFad >= end` with a stale FAD), or Mednafen not modelling the contention. Add a `printf` in `cdda_restore` reporting which branch it took and rebuild — instrument before theorising; that is what settled the first-boot panic in one round after three wrong theories.
+**Do not run the emulator from a tool call.** If music is absent on all four, the likely causes in order are: the TOC guard refusing valid tracks (check the `disc_open: highest audio track N` line reads 42, and watch for a `disc_play_track: refused` line), `cdda_restore` classifying every restore as `CDDA_FORGET` or as a `CDDA_RESTART` it then declines because the track fails `cdtoc_is_audio` (watch for `cdda_restore: restore classified as finished or never-started` — see `cdda_classify.h` for the `was_playing`/`loop`/`observed`/`fad`/`start`/`end` conditions that reach it), or Mednafen not modelling the contention. All three diagnostics already exist in the build; the next listening test tells these apart without a rebuild.
 
 - [ ] **Step 16: Commit**
 
