@@ -93,22 +93,29 @@ int disc_read_file(const char *name, void *out, int max_size);
 
 /*----------------------
  | disc_play_track / disc_stop_track
- | Description: Streams the raw CD-DA audio track named by
- |   discfmt_cue_track_for_music(engine_index) through Mix_HookMusic --
- |   fread straight into the mixer's buffer, no decode, no resample, since
- |   the track and the audio device are the same format (44100/S16/stereo).
- |   disc_stop_track is the unhook-then-close half of disc_play_track's
- |   track-change sequence, exposed on its own for the callers that only
- |   need to stop. See src/host/disc_cue.c for the implementation and the
- |   ordering reason.
+ | Description: Starts and stops the disc's CD-DA music for the engine's
+ |   music index, mapped to a cue track by discfmt_cue_track_for_music.
+ |
+ |   The two backends differ in kind, not just in API. src/host/disc_cue.c
+ |   streams the raw track through Mix_HookMusic -- fread straight into the
+ |   mixer's buffer, no decode, no resample -- and a concurrent
+ |   disc_read_file cannot disturb it, because reads and playback are separate
+ |   file handles. A Saturn has one drive: any read seeks away from the
+ |   playing track and silences it, and main.c's play_anm calls
+ |   disc_play_track and then immediately reads a whole animation file, so a
+ |   backend that merely forwards these calls is silent for exactly the
+ |   content the game has music for. saturn/src/system/disc_srl.cxx therefore
+ |   owns playback state and brackets every read with a suspend and a
+ |   restore. A third backend must do the same or accept silence.
  |
  |   disc_play_track requires the same precondition as disc_read_file (a
  |   disc_open that succeeded, no disc_close since) -- called any other time
- |   it is a silent no-op, same as calling it with cls.nosound set. Call it
- |   any number of times; it always stops whatever was previously hooked
- |   first. disc_stop_track is always safe, including before disc_open,
- |   after disc_close, or with nothing playing -- it degrades to a harmless
- |   unhook no-op rather than touching disc state, which is why
+ |   it is a silent no-op, same as calling it with cls.nosound set, or with a
+ |   track the mounted disc does not carry. Call it any number of times; it
+ |   always supersedes whatever was playing, except for a request identical to
+ |   what the drive is confirmably already looping, which the Saturn backend
+ |   drops to avoid a needless seek. disc_stop_track is always safe, including
+ |   before disc_open, after disc_close, or with nothing playing, which is why
  |   atexit_callback can call it unconditionally right before disc_close.
  | Author: suinevere
  ----------------------*/

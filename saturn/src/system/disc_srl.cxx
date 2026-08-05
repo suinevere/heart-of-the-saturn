@@ -74,6 +74,19 @@ static int g_musicTrack = -1;
 static int g_musicLoop = 0;
 
 /*----------------------
+ | g_pauseFad / g_wasPlaying
+ | Description: What the drive was doing when the last file read took it away.
+ |   g_wasPlaying separates two states that look identical afterwards and need
+ |   opposite treatment: a track genuinely interrupted mid-play, and a track
+ |   commanded microseconds earlier that never got going because the read beat
+ |   it to the drive -- which is what happens on every animation, since
+ |   play_anm calls disc_play_track and then immediately reads a whole file.
+ | Author: suinevere
+ ----------------------*/
+static uint32_t g_pauseFad = 0;
+static bool g_wasPlaying = false;
+
+/*----------------------
  | normalize_name
  | Description: Turns the engine's filename into the 8.3 uppercase form GFS
  |   matches on the disc: drop any directory part, upper-case the rest,
@@ -157,6 +170,99 @@ static void cdda_halt(void)
 
 	CDC_POS_PTYPE(&pos) = CDC_PTYPE_DFL;
 	CDC_CdSeek(&pos);
+}
+
+/*----------------------
+ | cdda_suspend
+ | Description: Gives the drive up for a file read, remembering enough to put
+ |   the music back. Reads the head position and play status before seeking,
+ |   because the seek is what silences output and there is no way to ask
+ |   afterwards where it had reached. A no-op when no music is wanted, which
+ |   is what keeps the cost off every read on a data-only disc.
+ | Author: suinevere
+ | Globals: g_musicTrack, g_pauseFad, g_wasPlaying
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void cdda_suspend(void)
+{
+	CdcStat stat;
+
+	if (g_musicTrack < 0)
+	{
+		return;
+	}
+
+	CDC_GetCurStat(&stat);
+	g_wasPlaying = (CDC_GET_STC(&stat) == CDC_ST_PLAY);
+	g_pauseFad = (uint32_t)CDC_STAT_FAD(&stat);
+
+	cdda_halt();
+}
+
+/*----------------------
+ | cdda_restore
+ | Description: Puts the music back after a file read, choosing between three
+ |   outcomes by where the head was when the read took over.
+ |
+ |   Not playing and at or past the track's end means the track finished on
+ |   its own; restoring it would restart a one-shot minutes after it ended, so
+ |   this forgets it instead. Playing, inside the track, and not looping means
+ |   a genuine interruption, and the remainder is played as its own range so
+ |   the listener hears the track continue rather than restart. Everything
+ |   else -- the head below the track's start (the animation case, where
+ |   playback never began), a looping track, or a table of contents that
+ |   cannot answer -- restarts the track.
+ |
+ |   Looping tracks restart deliberately. A frame-range play is a one-shot, so
+ |   resuming one would drop the repeat and leave the room silent once the
+ |   remainder ended; restarting is audible, silence is not recoverable. The
+ |   sibling port zaturn solved this with a per-frame music tick, which this
+ |   seam has no equivalent of and does not want.
+ |
+ |   An unreadable TOC restarts for the same reason: restarting is a far
+ |   better failure than silence.
+ | Author: suinevere
+ | Globals: g_toc, g_musicTrack, g_musicLoop, g_pauseFad, g_wasPlaying
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void cdda_restore(void)
+{
+	int cue;
+	uint32_t start;
+	uint32_t end;
+
+	if (g_musicTrack < 0)
+	{
+		return;
+	}
+
+	cue = discfmt_cue_track_for_music(g_musicTrack);
+	start = cdtoc_track_start(g_toc, cue);
+	end = cdtoc_track_end(g_toc, cue);
+
+	if (!g_wasPlaying && end != 0 && g_pauseFad >= end)
+	{
+		g_musicTrack = -1;
+		return;
+	}
+
+	if (g_wasPlaying && g_musicLoop == 0 && end != 0 &&
+		g_pauseFad >= start && g_pauseFad < end)
+	{
+		CdcPly ply;
+
+		CDC_PLY_STYPE(&ply) = CDC_PTYPE_FAD;
+		CDC_PLY_SFAD(&ply) = g_pauseFad;
+		CDC_PLY_ETYPE(&ply) = CDC_PTYPE_FAD;
+		CDC_PLY_EFAS(&ply) = end - g_pauseFad;
+		CDC_PLY_PMODE(&ply) = CDC_PM_DFL;
+		CDC_CdPlay(&ply);
+		return;
+	}
+
+	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
 }
 
 /*----------------------
@@ -254,7 +360,7 @@ int disc_open(const char *cue_path)
 }
 
 /*----------------------
- | disc_read_file
+ | disc_read_file_body
  | Description: Opens name by 8.3 uppercase match through SRL::Cd::File and
  |   reads the whole file into out, refusing anything the file's size would
  |   overrun past max_size. That bound is not optional: all three callers
@@ -264,12 +370,15 @@ int disc_open(const char *cue_path)
  |   internal sector buffer rather than GFS_Load's sector-rounded
  |   destination write, so it cannot overshoot max_size the way a raw
  |   LoadBytes into a tight buffer could.
+ |
+ |   Private because it must not be called without the CD-DA bracket around
+ |   it; disc_read_file below is the only caller.
  | Author: suinevere
  | Params: name -- disc filename; out -- destination; max_size -- capacity
  |   of out in bytes
  | Returns: 0 on success, negative on failure
  ----------------------*/
-int disc_read_file(const char *name, void *out, int max_size)
+static int disc_read_file_body(const char *name, void *out, int max_size)
 {
 	char resolved[32];
 
@@ -320,6 +429,34 @@ int disc_read_file(const char *name, void *out, int max_size)
 }
 
 /*----------------------
+ | disc_read_file
+ | Description: disc_read_file_body with the drive handed over and taken back.
+ |   There is one drive: a read seeks away from whatever CD-DA was playing and
+ |   silences it, so every read is bracketed. The split exists because the
+ |   body has six early returns and an inline bracket would need a restore on
+ |   each -- a missed one leaves the music off for the rest of the session,
+ |   with nothing to indicate why.
+ |
+ |   Both halves are no-ops when no music is wanted, so a data-only disc pays
+ |   two branches per read and nothing else.
+ | Author: suinevere
+ | Globals: via cdda_suspend and cdda_restore
+ | Params: name -- disc filename; out -- destination; max_size -- capacity of
+ |   out in bytes
+ | Returns: 0 on success, negative on failure
+ ----------------------*/
+int disc_read_file(const char *name, void *out, int max_size)
+{
+	int result;
+
+	cdda_suspend();
+	result = disc_read_file_body(name, out, max_size);
+	cdda_restore();
+
+	return result;
+}
+
+/*----------------------
  | disc_play_track
  | Description: Starts a CD-DA track for the engine's music index. Refuses,
  |   silently and by contract, before disc_open, after disc_close, with
@@ -342,6 +479,14 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   SRL::Sound::Cdda::PlaySingle is safe to use where the rest of Cdda is
  |   not: it is CDC_CdPlay by track number and never consults the table of
  |   contents SRL cannot read.
+ |
+ |   A request for the track the drive is confirmably already looping is
+ |   dropped. Re-issuing CDC_CdPlay costs a seek and an audible gap, and "play
+ |   T looping" while T loops is a no-op by definition. This is the one place
+ |   this backend deliberately differs from src/host/disc_cue.c, where
+ |   restarting an already-hooked stream is free. The status check is what
+ |   makes it safe: a track that stopped for any reason we did not cause is
+ |   started again rather than assumed to be running.
  | Author: suinevere
  | Globals: g_discOpened, g_maxAudioTrack, g_musicTrack, g_musicLoop
  | Params: engine_index -- music index 0..40; loop -- nonzero to repeat
@@ -364,9 +509,21 @@ void disc_play_track(int engine_index, int loop)
 		return;
 	}
 
+	if (g_musicTrack == engine_index && g_musicLoop != 0 && loop != 0)
+	{
+		CdcStat stat;
+
+		CDC_GetCurStat(&stat);
+
+		if (CDC_GET_STC(&stat) == CDC_ST_PLAY)
+		{
+			return;
+		}
+	}
+
 	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
 	g_musicTrack = engine_index;
-	g_musicLoop = loop;
+	g_musicLoop = (loop != 0);
 }
 
 /*----------------------

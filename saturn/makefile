@@ -1,9 +1,11 @@
 # CD-DA audio on the built disc. `full` lays all 41 tracks (~425 MB, ~41 min);
 # `none` builds a data-only disc of about 12 MB.
 #
-# Default none on purpose: while video and input are being brought up, every
-# compile.bat would otherwise re-lay 41 audio tracks for a build that never
-# plays them. Flip to full for a release or to test music.
+# Default none on purpose: the tracks are ~425 MB and only the music needs
+# them, so a build that is iterating on video, input or gameplay should not
+# re-lay 41 of them. The Saturn backend's TOC guard makes a data-only disc
+# silently music-free rather than undefined, so this is safe to leave at none.
+# Flip to full for a release or to test music.
 #
 # Matched exactly against the string "full" (below: ifneq ($(HOTA_AUDIO),full))
 # -- must be lowercase, no surrounding whitespace. Anything else (FULL, Full,
