@@ -46,8 +46,14 @@ and `0` on keyup; nothing anywhere reads a press *transition*. `SRL::Input::Digi
 
 ## Architecture
 
-One file changes. No new files, no new seam, no engine change, and `input.h` itself is
-untouched — the contract it already documents simply stops being the one in use.
+One file gains code. No new files, no new seam, no engine change.
+
+`input.h` changes by exactly one sentence of its file banner, which currently says
+`input_srl.cxx` "is deliberately empty for now -- pad mapping is a later sub-project".
+That stops being true. `check_events`'s own banner in that header is left alone: its
+statement that a backend with no input source may implement an empty function is still
+true and still the documented contract, it is simply no longer the one the Saturn
+backend uses.
 
 ```
 engine game loop (main.c:594, animation.c:85)
