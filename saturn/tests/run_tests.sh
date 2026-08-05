@@ -19,3 +19,7 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src \
     -o run_tests_cdtoc test_cdtoc.c ../src/cdtoc.c
 ./run_tests_cdtoc
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_cdda_classify test_cdda_classify.c ../src/cdda_classify.c
+./run_tests_cdda_classify
