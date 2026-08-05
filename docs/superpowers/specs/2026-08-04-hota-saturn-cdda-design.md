@@ -15,7 +15,7 @@ block, and teaches `disc_read_file` to coexist with it.
 
 Done means: with `HOTA_AUDIO=full`, the disc boots and each of the four intro
 animations plays with its music under it, the music survives the whole-file load that
-immediately precedes it, and playback stops when the intro ends. With the default
+immediately precedes it, and playback stops when the intro ends. With a
 `HOTA_AUDIO=none` disc, everything behaves exactly as it does today — no music, and
 no CD-block damage from asking for tracks that are not there.
 
@@ -262,9 +262,14 @@ room change          disc_read_file
 
 ## Build and test
 
-`HOTA_AUDIO` stays `none`. Routine builds remain a 12 MB data-only disc, and the TOC
-guard makes them silently music-free. Music verification is an explicit
-`HOTA_AUDIO=full ./compile.bat` from `saturn/`, producing the ~425 MB disc with all 41
+`HOTA_AUDIO` defaulted to `none` while this sub-project was being built, so that
+routine builds stayed a 12 MB data-only disc and the TOC guard kept them silently
+music-free. **That default was flipped to `full` on 2026-08-04**, once the data-only
+disc had been verified to boot unchanged: music is now part of what the disc is for,
+and a build without it cannot be listened to. `HOTA_AUDIO=none` remains a supported
+and safe build for a fast iteration loop on video, input or gameplay.
+
+A `full` build produces the ~425 MB disc with all 41
 CD-DA tracks laid from `saturn/cd/music/*.raw` in the order given by
 `saturn/cd/music/tracklist` (present, 41 entries, header says do not resort).
 
@@ -348,8 +353,9 @@ implied.
 1. `sh saturn/tests/run_tests.sh` passes, including the new `test_cdtoc` cases.
 2. `make -C saturn/src` still builds. `disc_cue.c` is byte-identical, so the host's
    music path carries no regression risk and is not re-tested by hand.
-3. `./compile.bat` with the default `HOTA_AUDIO=none` produces a disc that boots and
-   renders the intro exactly as `3051d5c` does, with no music and no CD-block error.
+3. `HOTA_AUDIO=none ./compile.bat` produces a disc that boots and renders the intro
+   exactly as `3051d5c` does, with no music and no CD-block error. **Met 2026-08-04**,
+   which is what cleared the way for the default to flip to `full`.
 4. `HOTA_AUDIO=full ./compile.bat` produces a disc on which all four intro animations
    play with their music, the music survives the load preceding each animation, and
    playback stops when the intro ends — confirmed by Suinevere on the emulator.

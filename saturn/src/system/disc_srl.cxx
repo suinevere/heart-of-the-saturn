@@ -27,7 +27,7 @@
  |
  |   This file's own static state also comes out of that same HWRAM. Measured
  |   2026-08-04 by building this branch's tip (24f387f) and the commit just
- |   before it (3051d5c) in separate worktrees, both default HOTA_AUDIO=none
+ |   before it (3051d5c) in separate worktrees, both HOTA_AUDIO=none
  |   via the same compile.bat: total .bss went from 581,200 to 581,632 bytes,
  |   a 432-byte increase (the linker map's own .bss line, not an estimate).
  |   This file's own object carries 420 of those bytes (disc_srl.o's .bss
@@ -70,7 +70,7 @@ static bool g_discOpened = false;
  | Description: The disc's BIOS table of contents, fetched once by disc_open
  |   and decoded through cdtoc.h -- never through SRL::Cd::TableOfContents,
  |   which reads the wrong track (see cdtoc.h). g_maxAudioTrack is 0 on the
- |   data-only disc HOTA_AUDIO=none builds by default, and that 0 is what
+ |   data-only disc a HOTA_AUDIO=none build produces, and that 0 is what
  |   turns every music request on such a disc into a no-op instead of a
  |   CDC_CdPlay for a track the drive cannot find. No separate "is it fetched"
  |   flag: nothing reads either of these except through a live g_musicTrack,
@@ -368,8 +368,7 @@ static void cdda_restore(void)
  |
  |   The TOC is read here, once, because it cannot change while a disc is
  |   mounted and because disc_play_track must not be the thing that discovers
- |   the disc has no audio -- on the default HOTA_AUDIO=none build that is
- |   every call.
+ |   the disc has no audio -- on a HOTA_AUDIO=none build that is every call.
  | Author: suinevere
  | Params: cue_path -- unused on Saturn
  | Returns: 1 on success, 0 on failure

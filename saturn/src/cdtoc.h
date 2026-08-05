@@ -98,9 +98,9 @@ uint32_t cdtoc_track_end(const uint32_t *toc, int track);
  | cdtoc_max_audio_track
  | Description: Highest audio track number on the disc, walking only the range
  |   the TOC says exists so absent slots are never consulted. Returns 0 for a
- |   data-only disc, which is what the default HOTA_AUDIO=none build produces
- |   -- that 0 is what makes asking for music on such a disc a no-op instead
- |   of an undefined CD command.
+ |   data-only disc, which is what a HOTA_AUDIO=none build produces -- that 0
+ |   is what makes asking for music on such a disc a no-op instead of an
+ |   undefined CD command.
  | Author: suinevere
  | Params: toc -- CDTOC_WORDS longwords from CDC_TgetToc
  | Returns: the track number, or 0 if the disc has no audio or the TOC is

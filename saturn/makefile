@@ -1,18 +1,20 @@
 # CD-DA audio on the built disc. `full` lays all 41 tracks (~425 MB, ~41 min);
 # `none` builds a data-only disc of about 12 MB.
 #
-# Default none on purpose: the tracks are ~425 MB and only the music needs
-# them, so a build that is iterating on video, input or gameplay should not
-# re-lay 41 of them. The Saturn backend's TOC guard makes a data-only disc
-# silently music-free rather than undefined, so this is safe to leave at none.
-# Flip to full for a release or to test music.
+# Default full since the CD-DA backend landed and the data-only disc was
+# verified to boot unchanged: music is now part of what this disc is for, and
+# a build without it cannot be listened to. Set none for a fast iteration loop
+# on video, input or gameplay -- the Saturn backend's TOC guard makes a
+# data-only disc silently music-free rather than undefined, so that stays a
+# safe build rather than a broken one.
 #
 # Matched exactly against the string "full" (below: ifneq ($(HOTA_AUDIO),full))
-# -- must be lowercase, no surrounding whitespace. Anything else (FULL, Full,
-# a typo, unset) silently falls back to the data-only default rather than
-# erroring; that is safe (12 MB, not 425 MB) but means a mistyped value here
-# builds a disc with no music and no warning.
-HOTA_AUDIO ?= none
+# -- must be lowercase, no surrounding whitespace. Anything other than "full"
+# builds the 12 MB data-only disc rather than erroring, so a mistyped value
+# here silently downgrades a music build to a mute one. That now costs more
+# than it used to: before the default flipped, a typo landed on the intended
+# behaviour anyway.
+HOTA_AUDIO ?= full
 
 # Configuration
 SRL_MAX_TEXTURES = 100          # Number of VDP1 texture slots
