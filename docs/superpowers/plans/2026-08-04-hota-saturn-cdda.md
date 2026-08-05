@@ -785,6 +785,12 @@ Replace the whole existing `disc_play_track` function and its banner — the no-
  |   undefined, and the failure mode to avoid is one that leaves the CD block
  |   unable to serve the file reads the game is about to make.
  |
+ |   A refusal leaves g_musicTrack untouched: whatever was already playing
+ |   keeps playing and stays correctly tracked, matching disc_cue.c's host
+ |   implementation, which runs every refusal check before it ever touches
+ |   playback state. The two backends share one disc.h contract, and this is
+ |   what keeps it literally true of both.
+ |
  |   The +2 mapping is not repeated here. discfmt_cue_track_for_music owns it
  |   for both backends and returns 0, an invalid track, when out of range.
  |
@@ -810,7 +816,6 @@ void disc_play_track(int engine_index, int loop)
 
 	if (cue == 0 || cue > g_maxAudioTrack)
 	{
-		g_musicTrack = -1;
 		return;
 	}
 
