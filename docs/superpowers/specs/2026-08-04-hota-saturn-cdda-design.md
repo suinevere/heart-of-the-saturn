@@ -330,6 +330,32 @@ Saturn at all, so in-game looping tracks, the loop-restart rule and mid-room loa
 reasoned about here but will not be proven by this sub-project. Stated rather than
 implied.
 
+## Known gaps left behind
+
+Recorded here rather than in the execution ledger, which is gitignored scratch and
+vanishes on `git clean -fdx`. All were raised in review, judged non-blocking, and
+deliberately not fixed.
+
+- **`cdda_classify`'s RESUME rule has an unpinned `start != 0` term.** The test table
+  pins the FORGET rule's copy only; the new row's `was_playing = 0` short-circuits
+  RESUME, so deleting `start != 0` from that rule alone leaves the suite green. Pinning
+  it needs a `was_playing = 1, loop = 0, start = 0, end != 0, fad < end` row expecting
+  RESTART.
+- **Three seeks where one would do.** `disc_play_track`'s first `PlaySingle` is always
+  discarded when a read follows immediately, which is every animation. Removing it
+  would let the read start sooner; it would not shorten the half-second music delay.
+- **`cdda_restore`'s `g_musicObserved` fold checks `end != 0` but not `start != 0`,**
+  unlike the classifier it feeds. Provably unreachable, since `cdtoc_track_start`
+  returns 0 only where `cdtoc_track_end` does too.
+- **`disc_read_file`'s wrapper brackets unconditionally** while only its body enforces
+  `g_discOpened`. A `disc_close` without a preceding `disc_stop_track` would leave
+  `g_musicTrack` live. Not reachable: `atexit_callback` stops first.
+- **Pre-existing build warnings on both targets** — `getopt.c` old-style declarations,
+  the linker's RWX-segment note, `screen.c`'s pointer-to-int cast. Untouched by this
+  sub-project; each deserves its own commit.
+- **The `fprintf` silent-failure bug is still open.** Diagnostics here use `printf`
+  throughout to avoid it, but the cause was never found.
+
 ## Deferred / stubbed
 
 - **Sound effects.** `play_sample` and `sound_flush_cache` stay no-ops in
