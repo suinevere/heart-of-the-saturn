@@ -34,6 +34,7 @@
 #include "disc.h"
 #include "discfmt.h"
 #include "cdtoc.h"
+#include "cdda_classify.h"
 #include "client.h"
 
 /*----------------------
@@ -85,6 +86,20 @@ static int g_musicLoop = 0;
  ----------------------*/
 static uint32_t g_pauseFad = 0;
 static bool g_wasPlaying = false;
+
+/*----------------------
+ | g_musicObserved
+ | Description: Whether the current g_musicTrack has actually been caught
+ |   playing -- CDC_ST_PLAY, head inside its own bounds -- at any suspend
+ |   since it was last commanded. Separate from g_wasPlaying, which is only
+ |   this instant's status: a track that was only ever commanded, never
+ |   observed, must not be treated as "finished" by a stale head position
+ |   left over from whatever played before it (see cdda_classify.h). Cleared
+ |   whenever a new track is commanded or stopped, so observation never
+ |   carries across tracks.
+ | Author: suinevere
+ ----------------------*/
+static bool g_musicObserved = false;
 
 /*----------------------
  | normalize_name
@@ -202,28 +217,38 @@ static void cdda_suspend(void)
 
 /*----------------------
  | cdda_restore
- | Description: Puts the music back after a file read, choosing between three
- |   outcomes by where the head was when the read took over.
+ | Description: Puts the music back after a file read, delegating the
+ |   three-way choice to cdda_classify (cdda_classify.h) so that decision
+ |   carries host-compiled test coverage instead of being provable only by
+ |   listening to an emulator.
  |
- |   Not playing and at or past the track's end means the track finished on
- |   its own; restoring it would restart a one-shot minutes after it ended, so
- |   this forgets it instead. Playing, inside the track, and not looping means
- |   a genuine interruption, and the remainder is played as its own range so
- |   the listener hears the track continue rather than restart. Everything
- |   else -- the head below the track's start (the animation case, where
- |   playback never began), a looping track, or a table of contents that
- |   cannot answer -- restarts the track.
+ |   Before classifying, this call's g_wasPlaying/g_pauseFad are folded into
+ |   g_musicObserved: the track is marked observed once it is caught actually
+ |   playing inside its own bounds. The fold happens before the classify
+ |   call, not after, and that order is deliberate rather than incidental --
+ |   CDDA_FORGET requires !was_playing while the fold only sets observed when
+ |   was_playing is true, so this call's own fold can never be what lets this
+ |   call's own classify return CDDA_FORGET. It can only affect a later
+ |   suspend/restore of the same track. The fold only ever sets observed to
+ |   true, never clears it, so a track observed once stays observed until
+ |   disc_play_track or disc_stop_track resets it for the next track.
  |
- |   Looping tracks restart deliberately. A frame-range play is a one-shot, so
- |   resuming one would drop the repeat and leave the room silent once the
- |   remainder ended; restarting is audible, silence is not recoverable. The
- |   sibling port zaturn solved this with a per-frame music tick, which this
- |   seam has no equivalent of and does not want.
- |
- |   An unreadable TOC restarts for the same reason: restarting is a far
- |   better failure than silence.
+ |   CDDA_RESUME plays the remainder as its own frame range so the listener
+ |   hears the track continue rather than restart. CDDA_RESTART is what a
+ |   looping track gets even when it looks finished -- resuming one would
+ |   drop the repeat and leave the room silent once the remainder ended, and
+ |   an infinite-repeat play re-seeking past its own end looks identical, on
+ |   was_playing/fad alone, to a one-shot finishing; cdda_classify's loop
+ |   exclusion is what tells them apart. CDDA_RESTART is also the fallback
+ |   cdda_classify reaches for an unreadable TOC (start or end reading 0) --
+ |   in this codebase g_maxAudioTrack is 0 whenever the TOC is unreadable, so
+ |   disc_play_track refuses every index and g_musicTrack never leaves -1,
+ |   meaning this call returns at the guard below before cdda_classify ever
+ |   sees that input. The fallback exists for cdda_classify's own contract,
+ |   not because this call is known to exercise it.
  | Author: suinevere
- | Globals: g_toc, g_musicTrack, g_musicLoop, g_pauseFad, g_wasPlaying
+ | Globals: g_toc, g_musicTrack, g_musicLoop, g_pauseFad, g_wasPlaying,
+ |   g_musicObserved
  | Params: N/A
  | Returns: N/A
  ----------------------*/
@@ -232,6 +257,7 @@ static void cdda_restore(void)
 	int cue;
 	uint32_t start;
 	uint32_t end;
+	cdda_action action;
 
 	if (g_musicTrack < 0)
 	{
@@ -242,14 +268,21 @@ static void cdda_restore(void)
 	start = cdtoc_track_start(g_toc, cue);
 	end = cdtoc_track_end(g_toc, cue);
 
-	if (!g_wasPlaying && end != 0 && g_pauseFad >= end)
+	if (g_wasPlaying && end != 0 && g_pauseFad >= start && g_pauseFad < end)
 	{
-		g_musicTrack = -1;
-		return;
+		g_musicObserved = true;
 	}
 
-	if (g_wasPlaying && g_musicLoop == 0 && end != 0 &&
-		g_pauseFad >= start && g_pauseFad < end)
+	action = cdda_classify(g_wasPlaying ? 1 : 0, g_musicLoop,
+		g_musicObserved ? 1 : 0, g_pauseFad, start, end);
+
+	switch (action)
+	{
+	case CDDA_FORGET:
+		g_musicTrack = -1;
+		return;
+
+	case CDDA_RESUME:
 	{
 		CdcPly ply;
 
@@ -262,7 +295,11 @@ static void cdda_restore(void)
 		return;
 	}
 
-	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
+	case CDDA_RESTART:
+	default:
+		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
+		return;
+	}
 }
 
 /*----------------------
@@ -487,8 +524,16 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   restarting an already-hooked stream is free. The status check is what
  |   makes it safe: a track that stopped for any reason we did not cause is
  |   started again rather than assumed to be running.
+ |
+ |   A freshly commanded track also clears g_musicObserved: nothing has
+ |   confirmed it actually playing yet, so a later cdda_restore must not
+ |   trust a stale observed flag left over from whatever track played before
+ |   it (see cdda_classify.h). The repeat-guard's early return skips this on
+ |   purpose -- the same track keeps playing, so whatever it had already
+ |   observed is still true.
  | Author: suinevere
- | Globals: g_discOpened, g_maxAudioTrack, g_musicTrack, g_musicLoop
+ | Globals: g_discOpened, g_maxAudioTrack, g_musicTrack, g_musicLoop,
+ |   g_musicObserved
  | Params: engine_index -- music index 0..40; loop -- nonzero to repeat
  |   forever
  | Returns: N/A
@@ -524,17 +569,20 @@ void disc_play_track(int engine_index, int loop)
 	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
 	g_musicTrack = engine_index;
 	g_musicLoop = (loop != 0);
+	g_musicObserved = false;
 }
 
 /*----------------------
  | disc_stop_track
  | Description: Stops the music and forgets it. Clearing g_musicTrack is the
  |   load-bearing half: it is what stops the next disc_read_file from putting
- |   back a track the engine deliberately silenced. Safe before disc_open,
- |   after disc_close, and with nothing playing, exactly as disc.h requires,
- |   which is what lets atexit_callback call it unconditionally.
+ |   back a track the engine deliberately silenced. g_musicObserved is
+ |   cleared alongside it so a later track never inherits this one's
+ |   observed history. Safe before disc_open, after disc_close, and with
+ |   nothing playing, exactly as disc.h requires, which is what lets
+ |   atexit_callback call it unconditionally.
  | Author: suinevere
- | Globals: g_musicTrack
+ | Globals: g_musicTrack, g_musicObserved
  | Params: N/A
  | Returns: N/A
  ----------------------*/
@@ -546,6 +594,7 @@ void disc_stop_track(void)
 	}
 
 	g_musicTrack = -1;
+	g_musicObserved = false;
 	cdda_halt();
 }
 

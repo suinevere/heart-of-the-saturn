@@ -934,14 +934,21 @@ git commit -m "Play CD-DA tracks the disc actually carries, and refuse the ones 
 Adds the suspend/restore bracket that makes music coexist with `disc_read_file`, and with it the classification and loop rules. This is the task that makes the intro audible.
 
 **Files:**
-- Modify: `saturn/src/system/disc_srl.cxx` — new state, two helpers, `disc_read_file` split into a wrapper and a body, `disc_play_track` repeat guard
+- Create: `saturn/src/cdda_classify.h`
+- Create: `saturn/src/cdda_classify.c`
+- Create: `saturn/tests/test_cdda_classify.c`
+- Modify: `saturn/tests/run_tests.sh` (add a fourth compile-and-run)
+- Modify: `saturn/src/system/disc_srl.cxx` — new state (including `g_musicObserved`), two helpers, `disc_read_file` split into a wrapper and a body, `disc_play_track` repeat guard, `disc_play_track`/`disc_stop_track` clearing `g_musicObserved`
 - Modify: `saturn/src/disc.h:94-116` (the `disc_play_track`/`disc_stop_track` banner)
 - Modify: `saturn/makefile:1-13` (the `HOTA_AUDIO` comment)
 
 **Interfaces:**
 - Consumes from Task 1: `cdtoc_track_start(const uint32_t *toc, int track)`, `cdtoc_track_end(const uint32_t *toc, int track)`.
 - Consumes from Task 2: `g_toc`, `g_musicTrack`, `g_musicLoop`, `cdda_halt()`, `discfmt_cue_track_for_music()`.
+- Produces internally, consumed only by `cdda_restore` in this file: `cdda_action` and `cdda_classify(int was_playing, int loop, int observed, uint32_t fad, uint32_t start, uint32_t end)` in `cdda_classify.h`. This is a pure module with no SRL, stdio or engine dependency, host-tested the same way `cdtoc.c` is, because the three-way classification is the entire risk surface of the read bracket and a wrong classification fails plausibly (wrong music behavior) rather than loudly.
 - Produces: nothing consumed by later tasks — this is the last one.
+
+**Design note carried from review:** the classifier needs a third signal beyond "was it playing" and "where was the head" -- `observed`, whether this track has actually been caught playing at any earlier suspend since it was last commanded. Two states look identical to `was_playing`/`fad` alone but need opposite treatment: a looping track sampled mid-re-seek (not playing, head at or past its own end -- indistinguishable from a one-shot that just finished) and a backwards track jump (play a high-numbered track, then a low-numbered one, then read immediately -- the head is still parked high from the previous track, at or past the new one's end, even though the new track never played). `observed`, plus excluding `loop != 0` from the forget rule, is what keeps both out of `CDDA_FORGET`. See `cdda_classify.h` for the full reasoning.
 
 - [ ] **Step 1: Add the suspend state**
 
@@ -962,7 +969,82 @@ static uint32_t g_pauseFad = 0;
 static bool g_wasPlaying = false;
 ```
 
-- [ ] **Step 2: Add the suspend and restore helpers**
+Immediately after, add:
+
+```cpp
+/*----------------------
+ | g_musicObserved
+ | Description: Whether the current g_musicTrack has actually been caught
+ |   playing -- CDC_ST_PLAY, head inside its own bounds -- at any suspend
+ |   since it was last commanded. Separate from g_wasPlaying, which is only
+ |   this instant's status: a track that was only ever commanded, never
+ |   observed, must not be treated as "finished" by a stale head position
+ |   left over from whatever played before it (see cdda_classify.h). Cleared
+ |   whenever a new track is commanded or stopped, so observation never
+ |   carries across tracks.
+ | Author: suinevere
+ ----------------------*/
+static bool g_musicObserved = false;
+```
+
+- [ ] **Step 2: Create the classifier header**
+
+Create `saturn/src/cdda_classify.h`, modeled on `cdtoc.h`: pure C, `<stdint.h>` only, `extern "C"` guard, public functions bannered in the header. It declares an enum and a single function:
+
+```c
+typedef enum
+{
+    CDDA_FORGET  = 0,
+    CDDA_RESUME  = 1,
+    CDDA_RESTART = 2
+} cdda_action;
+
+cdda_action cdda_classify(int was_playing, int loop, int observed,
+                          uint32_t fad, uint32_t start, uint32_t end);
+```
+
+Its banner must explain, in full, why `observed` exists (a track can only have "run to completion" if it was seen running at some earlier suspend — this is what keeps a backwards track jump out of `CDDA_FORGET`), why `loop != 0` is excluded from the forget rule even though the fad/was_playing signals can look identical to a finished one-shot (an infinite-repeat play re-seeks to its own start on reaching its end, and mid-re-seek is indistinguishable from "just finished" on those two signals alone), and why `start != 0`/`end != 0` are checked explicitly everywhere a bound is compared rather than relying on the fact that today's `cdtoc_track_end` only returns 0 alongside a start of 0 — see the shipped header for the exact wording, since it is the load-bearing part of this module.
+
+Full decision order:
+
+1. `!was_playing && loop == 0 && observed && start != 0 && end != 0 && fad >= end` → `CDDA_FORGET`
+2. `was_playing && loop == 0 && start != 0 && end != 0 && fad >= start && fad < end` → `CDDA_RESUME`
+3. otherwise → `CDDA_RESTART`
+
+- [ ] **Step 3: Write the failing test**
+
+Create `saturn/tests/test_cdda_classify.c`, table-driven, sibling of `test_cdtoc.c`. Cover at minimum, each its own named case: a one-shot interrupted mid-track (RESUME); the animation case, head below start, not playing (RESTART); a one-shot that ran to completion, observed (FORGET); a looping track sampled mid-wrap, not playing, `fad >= end`, observed (RESTART — regression for the "ran to completion" defect this task's own review caught); a backwards track jump, not playing, `fad >= end`, not observed (RESTART — regression for the same defect's other half); a looping track interrupted mid-track (RESTART, the loop rule); an unreadable TOC, `start == 0 && end == 0` (RESTART); the boundary `fad == end` exactly with an observed one-shot (FORGET); the boundary `fad == start` exactly while playing (RESUME); and `end == 0` with a plausible-looking fad (RESTART).
+
+Verify it fails before the implementation exists:
+
+```bash
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g -I saturn/src -o /tmp/run_tests_cdda_classify saturn/tests/test_cdda_classify.c saturn/src/cdda_classify.c
+```
+
+Expected: FAIL — `cdda_classify.c: No such file or directory`.
+
+- [ ] **Step 4: Write the implementation**
+
+Create `saturn/src/cdda_classify.c`, implementing the three-rule decision order from Step 2 directly — no other statics, no lookup tables, it is three comparisons. Then verify it passes:
+
+```bash
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g -I saturn/src -o /tmp/run_tests_cdda_classify saturn/tests/test_cdda_classify.c saturn/src/cdda_classify.c && /tmp/run_tests_cdda_classify
+```
+
+Expected: PASS — `cdda_classify: all checks passed`, exit 0.
+
+- [ ] **Step 5: Wire it into the test runner**
+
+In `saturn/tests/run_tests.sh`, after the `run_tests_cdtoc` block, append:
+
+```sh
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_cdda_classify test_cdda_classify.c ../src/cdda_classify.c
+./run_tests_cdda_classify
+```
+
+- [ ] **Step 6: Add the suspend and restore helpers**
 
 Inside the `extern "C" {` block, immediately after `cdda_halt`, add:
 
@@ -997,28 +1079,38 @@ static void cdda_suspend(void)
 
 /*----------------------
  | cdda_restore
- | Description: Puts the music back after a file read, choosing between three
- |   outcomes by where the head was when the read took over.
+ | Description: Puts the music back after a file read, delegating the
+ |   three-way choice to cdda_classify (cdda_classify.h) so that decision
+ |   carries host-compiled test coverage instead of being provable only by
+ |   listening to an emulator.
  |
- |   Not playing and at or past the track's end means the track finished on
- |   its own; restoring it would restart a one-shot minutes after it ended, so
- |   this forgets it instead. Playing, inside the track, and not looping means
- |   a genuine interruption, and the remainder is played as its own range so
- |   the listener hears the track continue rather than restart. Everything
- |   else -- the head below the track's start (the animation case, where
- |   playback never began), a looping track, or a table of contents that
- |   cannot answer -- restarts the track.
+ |   Before classifying, this call's g_wasPlaying/g_pauseFad are folded into
+ |   g_musicObserved: the track is marked observed once it is caught actually
+ |   playing inside its own bounds. The fold happens before the classify
+ |   call, not after, and that order is deliberate rather than incidental --
+ |   CDDA_FORGET requires !was_playing while the fold only sets observed when
+ |   was_playing is true, so this call's own fold can never be what lets this
+ |   call's own classify return CDDA_FORGET. It can only affect a later
+ |   suspend/restore of the same track. The fold only ever sets observed to
+ |   true, never clears it, so a track observed once stays observed until
+ |   disc_play_track or disc_stop_track resets it for the next track.
  |
- |   Looping tracks restart deliberately. A frame-range play is a one-shot, so
- |   resuming one would drop the repeat and leave the room silent once the
- |   remainder ended; restarting is audible, silence is not recoverable. The
- |   sibling port zaturn solved this with a per-frame music tick, which this
- |   seam has no equivalent of and does not want.
- |
- |   An unreadable TOC restarts for the same reason: restarting is a far
- |   better failure than silence.
+ |   CDDA_RESUME plays the remainder as its own frame range so the listener
+ |   hears the track continue rather than restart. CDDA_RESTART is what a
+ |   looping track gets even when it looks finished -- resuming one would
+ |   drop the repeat and leave the room silent once the remainder ended, and
+ |   an infinite-repeat play re-seeking past its own end looks identical, on
+ |   was_playing/fad alone, to a one-shot finishing; cdda_classify's loop
+ |   exclusion is what tells them apart. CDDA_RESTART is also the fallback
+ |   cdda_classify reaches for an unreadable TOC (start or end reading 0) --
+ |   in this codebase g_maxAudioTrack is 0 whenever the TOC is unreadable, so
+ |   disc_play_track refuses every index and g_musicTrack never leaves -1,
+ |   meaning this call returns at the guard below before cdda_classify ever
+ |   sees that input. The fallback exists for cdda_classify's own contract,
+ |   not because this call is known to exercise it.
  | Author: suinevere
- | Globals: g_toc, g_musicTrack, g_musicLoop, g_pauseFad, g_wasPlaying
+ | Globals: g_toc, g_musicTrack, g_musicLoop, g_pauseFad, g_wasPlaying,
+ |   g_musicObserved
  | Params: N/A
  | Returns: N/A
  ----------------------*/
@@ -1027,6 +1119,7 @@ static void cdda_restore(void)
 	int cue;
 	uint32_t start;
 	uint32_t end;
+	cdda_action action;
 
 	if (g_musicTrack < 0)
 	{
@@ -1037,14 +1130,21 @@ static void cdda_restore(void)
 	start = cdtoc_track_start(g_toc, cue);
 	end = cdtoc_track_end(g_toc, cue);
 
-	if (!g_wasPlaying && end != 0 && g_pauseFad >= end)
+	if (g_wasPlaying && end != 0 && g_pauseFad >= start && g_pauseFad < end)
 	{
-		g_musicTrack = -1;
-		return;
+		g_musicObserved = true;
 	}
 
-	if (g_wasPlaying && g_musicLoop == 0 && end != 0 &&
-		g_pauseFad >= start && g_pauseFad < end)
+	action = cdda_classify(g_wasPlaying ? 1 : 0, g_musicLoop,
+		g_musicObserved ? 1 : 0, g_pauseFad, start, end);
+
+	switch (action)
+	{
+	case CDDA_FORGET:
+		g_musicTrack = -1;
+		return;
+
+	case CDDA_RESUME:
 	{
 		CdcPly ply;
 
@@ -1057,11 +1157,15 @@ static void cdda_restore(void)
 		return;
 	}
 
-	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
+	case CDDA_RESTART:
+	default:
+		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
+		return;
+	}
 }
 ```
 
-- [ ] **Step 3: Split `disc_read_file` into a body and a wrapper**
+- [ ] **Step 7: Split `disc_read_file` into a body and a wrapper**
 
 `disc_read_file` has six early returns. Bracketing it inline means six chances to miss a restore, so the existing body becomes a private function and the public one wraps it.
 
@@ -1111,7 +1215,7 @@ int disc_read_file(const char *name, void *out, int max_size)
 }
 ```
 
-- [ ] **Step 4: Add the repeat guard to `disc_play_track`**
+- [ ] **Step 8: Add the repeat guard to `disc_play_track`, and clear `g_musicObserved` wherever a track is (re)commanded or stopped**
 
 In `disc_play_track`, immediately after the `cue == 0 || cue > g_maxAudioTrack` block and before the `PlaySingle` call, insert:
 
@@ -1140,9 +1244,25 @@ and append to `disc_play_track`'s banner `Description`:
  |   restarting an already-hooked stream is free. The status check is what
  |   makes it safe: a track that stopped for any reason we did not cause is
  |   started again rather than assumed to be running.
+ |
+ |   A freshly commanded track also clears g_musicObserved: nothing has
+ |   confirmed it actually playing yet, so a later cdda_restore must not
+ |   trust a stale observed flag left over from whatever track played before
+ |   it (see cdda_classify.h). The repeat-guard's early return skips this on
+ |   purpose -- the same track keeps playing, so whatever it had already
+ |   observed is still true.
 ```
 
-- [ ] **Step 5: Build both targets and run the suite**
+On the success path (after `g_musicTrack = engine_index; g_musicLoop = loop != 0;`), add `g_musicObserved = false;` and add `g_musicObserved` to the function's `Globals` list.
+
+In `disc_stop_track`, after `g_musicTrack = -1;` and before `cdda_halt();`, add `g_musicObserved = false;`, add `g_musicObserved` to the function's `Globals` list, and append to its banner `Description`:
+
+```
+ |   g_musicObserved is cleared alongside it so a later track never inherits
+ |   this one's observed history.
+```
+
+- [ ] **Step 9: Build both targets and run the suite**
 
 ```bash
 sh saturn/tests/run_tests.sh
@@ -1151,7 +1271,7 @@ rm -f saturn/src/*.o
 cd saturn && ./compile.bat
 ```
 
-Expected: all pass. `cdtoc`'s tests still pass unchanged — nothing in this task touches it.
+Expected: all four suites pass (`cdtoc` and `cdda_classify` both unmodified in behavior; `discfmt` and `vm` untouched by this task).
 
 Then confirm no forbidden SRL call slipped in anywhere in the port (spec acceptance criterion 5):
 
@@ -1161,11 +1281,11 @@ grep -rn "TableOfContents\|Cdda::Resume\|Cdda::StopPause" saturn/src
 
 Expected: no matches. Any hit is a call into the table SRL lays out wrong, and it will read the wrong track rather than fail — replace it with the `cdtoc` equivalent before going further.
 
-- [ ] **Step 6: Regression-test the default disc again**
+- [ ] **Step 10: Regression-test the default disc again**
 
-Hand the `HOTA_AUDIO=none` disc from Step 5 to Suinevere: boots, intro renders, no music, no hang, no new stall at animation boundaries. The bracket now runs on every read, so this confirms it costs nothing when there is no music. **Do not run the emulator from a tool call.**
+Hand the `HOTA_AUDIO=none` disc from Step 9 to Suinevere: boots, intro renders, no music, no hang, no new stall at animation boundaries. The bracket now runs on every read, so this confirms it costs nothing when there is no music. **Do not run the emulator from a tool call.**
 
-- [ ] **Step 7: Rewrite the `disc.h` seam banner**
+- [ ] **Step 11: Rewrite the `disc.h` seam banner**
 
 The banner at `saturn/src/disc.h:94-116` describes `Mix_HookMusic` as though it were the implementation and tells a future reader that playback is a clean drop-in. It is not. Replace the `Description` body of the `disc_play_track / disc_stop_track` banner with:
 
@@ -1196,7 +1316,7 @@ The banner at `saturn/src/disc.h:94-116` describes `Mix_HookMusic` as though it 
  |   atexit_callback can call it unconditionally right before disc_close.
 ```
 
-- [ ] **Step 8: Correct the `HOTA_AUDIO` comment**
+- [ ] **Step 12: Correct the `HOTA_AUDIO` comment**
 
 `saturn/makefile:5-7` currently reads "every compile.bat would otherwise re-lay 41 audio tracks for a build that never plays them", which stops being true with this task. Replace those three lines with:
 
@@ -1208,7 +1328,7 @@ The banner at `saturn/src/disc.h:94-116` describes `Mix_HookMusic` as though it 
 # Flip to full for a release or to test music.
 ```
 
-- [ ] **Step 9: Verify the `tracklist` before trusting any listening test**
+- [ ] **Step 13: Verify the `tracklist` before trusting any listening test**
 
 ```bash
 grep -vc '^#' saturn/cd/music/tracklist
@@ -1217,7 +1337,7 @@ ls saturn/cd/music/*.raw | wc -l
 
 Expected: `41` and `41`. If they disagree, stop — `shared.mk` numbers tracks sequentially from 2 in the order this file lists, so a short or resorted list plays a different song for every cue with no error, and any listening test after that is measuring the wrong thing.
 
-- [ ] **Step 10: Build the music disc**
+- [ ] **Step 14: Build the music disc**
 
 ```bash
 rm -f saturn/src/*.o
@@ -1232,7 +1352,7 @@ grep -c '^  TRACK' "saturn/BuildDrop/Heart of the Alien (USA).cue"
 
 Expected: `42`.
 
-- [ ] **Step 11: Have Suinevere verify the music**
+- [ ] **Step 15: Have Suinevere verify the music**
 
 Hand over the path and ask for these four, specifically:
 
@@ -1243,9 +1363,11 @@ Hand over the path and ask for these four, specifically:
 
 **Do not run the emulator from a tool call.** If music is absent on all four, the likely causes in order are: the TOC guard rejecting valid tracks (check the `disc_open: N audio tracks` line reads 41), `cdda_restore` classifying as finished (`g_pauseFad >= end` with a stale FAD), or Mednafen not modelling the contention. Add a `printf` in `cdda_restore` reporting which branch it took and rebuild — instrument before theorising; that is what settled the first-boot panic in one round after three wrong theories.
 
-- [ ] **Step 12: Commit**
+- [ ] **Step 16: Commit**
 
 ```bash
+git add saturn/src/cdda_classify.h saturn/src/cdda_classify.c saturn/tests/test_cdda_classify.c saturn/tests/run_tests.sh
+git commit -m "Classify what CD-DA should do after a read as a pure, host-tested function."
 git add saturn/src/system/disc_srl.cxx saturn/src/disc.h saturn/makefile
 git commit -m "Hand the drive over for file reads and put the music back afterwards."
 ```
