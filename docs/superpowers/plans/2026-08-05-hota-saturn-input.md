@@ -14,7 +14,7 @@
 
 These apply to the whole plan. Exact values are copied verbatim from the spec.
 
-- **`check_events` reads only. It must not call `RefreshPeripherals()` or any other refresh.** `SRL::Core::Synchronize()` (`srl_core.hpp:125`) already calls `Input::Management::RefreshPeripherals()`, and `platform_frame()` already calls `Synchronize()`. Adding a refresh here would double-refresh in the animation loop, collapsing current and previous state and silently breaking `WasPressed`/`WasReleased` for any future consumer.
+- **`check_events` reads only. It must not call `RefreshPeripherals()` or any other refresh.** `SRL::Core::Synchronize()` (`srl_core.hpp`) already calls `Input::Management::RefreshPeripherals()`, and `platform_frame()` already calls `Synchronize()`. Adding a refresh here would double-refresh in the animation loop, collapsing current and previous state and silently breaking `WasPressed`/`WasReleased` for any future consumer.
 - **Use `IsHeld` only.** Never `WasPressed` or `WasReleased`. The engine's key model is level, not edges: the host sets `key_x = 1` on keydown and `0` on keyup, and nothing anywhere reads a transition.
 - **Port 0 only.** No scanning, no `FindNthConnectedPeripheral`, no hot-swap handling.
 - **Literal A/B/C mapping.** Saturn `A` → `key_a`, `B` → `key_b`, `C` → `key_c`. No X/Y/Z, no remapping.
@@ -214,7 +214,7 @@ If the Saturn build fails on `SRL::Input::Digital` being undeclared, the cause i
 grep -n "RefreshPeripherals\|WasPressed\|WasReleased\|FindNthConnectedPeripheral\|key_select\|key_reset_record\|cls.quit" saturn/src/system/input_srl.cxx
 ```
 
-Expected: no matches. Each would be a Global Constraint violation — a refresh call, edge detection the engine cannot use, port scanning, or writing a global the spec says stays at zero.
+Expected: matches only inside the banner comment, which names these identifiers while explaining their absence. What must be clean is the function body (`void check_events(void) { ... }`) — a match there is the Global Constraint violation: a refresh call, edge detection the engine cannot use, port scanning, or writing a global the spec says stays at zero.
 
 - [ ] **Step 6: Commit**
 

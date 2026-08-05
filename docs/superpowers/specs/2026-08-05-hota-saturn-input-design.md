@@ -35,7 +35,7 @@ and input recording. None of those are in scope:
 
 ## Two things that are already solved
 
-**Peripheral refresh is free.** `SRL::Core::Synchronize()` (`srl_core.hpp:125`) calls
+**Peripheral refresh is free.** `SRL::Core::Synchronize()` (`srl_core.hpp`) calls
 `SRL::Input::Management::RefreshPeripherals()`, and `platform_frame()` already calls
 `Synchronize()`. The Saturn `check_events` is a pure read: no polling, no event queue,
 no per-frame plumbing to add.
@@ -80,6 +80,15 @@ the wrong port, leaves every key at zero — which is exactly the stubbed behavi
 has been running since the boot sub-project, so it degrades to something already known
 good rather than to something new.
 
+**Port 0 plus `IsConnected` is the only safe pairing, not an arbitrary choice.**
+`SRL::Input::Management::Peripherals[]` (`srl_input.hpp`) sets only port 0's `id` to
+`NotConnected`; ports 1-11 default to `id` 0, which reads as
+`PeripheralFamily::Digital` — connected — with `data` 0, and the pad is active-low, so
+every button would read held. `SRL::Core::Initialize()` never calls
+`RefreshPeripherals()`, only `Synchronize()` does, so a `check_events()` call on any
+port but 0, or without the `IsConnected` guard, would degrade a pre-`Synchronize` call
+to "everything pressed" rather than "nothing pressed".
+
 **Literal A/B/C.** The Sega CD original used a Genesis pad's A/B/C, and the Saturn
 pad's A/B/C occupy the same bottom row, so muscle memory from the original transfers.
 Any other assignment would be a guess about what each button does in play, and the
@@ -122,12 +131,23 @@ at `main.c:652`. So the main game loop reads state refreshed at the end of the
 16 ms is imperceptible in a game this deliberate. The banner states the staleness so it
 is not rediscovered as "the controls feel laggy".
 
+A third call site exists, `sprite_test()` (`main.c:707`), whose loop calls
+`check_events()` and `rest(12)` but never `platform_frame()`, so it would read frozen
+pad state rather than merely stale state. It does not matter in practice: `test_flag`
+defaults to 0 and is only set through `getopt` long options (`main.c:850-851`) inside
+the host-only `#ifndef HOTA_SATURN` branch, and the Saturn build takes the `#else` at
+`main.c:985` and ignores `argv`, so `sprite_test()` is unreachable on Saturn; on the
+host, `input_sdl.c` drains SDL itself.
+
 ## What stays at zero
 
-- **`key_select`** is vestigial: declared in `input.h`, never written by the host
-  backend, never read by the engine. Left alone rather than wired to a button that
-  nothing would observe.
-- **`key_reset_record`** drives host input recording, which has no Saturn counterpart.
+- **`key_select` and `key_reset_record`** are host input-recording state, not gameplay
+  state. `key_select` is written and read only by `read_keys_from_record`/
+  `add_keys_to_record` (`main.c`) — `input_sdl.c` never writes it, and `update_keys`
+  (`main.c:285`) never reads it, so gameplay never observes it either way.
+  `key_reset_record` is host-only recording control set by `input_sdl.c` and has no
+  Saturn counterpart. Left alone rather than wired to buttons that gameplay would never
+  observe.
 - **`cls.quit`** is never set. A console has no quit, and `run()`'s
   `while (cls.quit == 0)` running forever is the correct behaviour.
 
