@@ -74,6 +74,20 @@ static const test_case CASES[] = {
 
     { "end == 0 with a plausible-looking fad -> RESTART",
       0, 0, 1, 1500, 1000, 0, CDDA_RESTART },
+
+    /* Regression for the start != 0 term itself: end != 0 and fad >= end are
+       both already satisfied here, so the end-side checks alone would let
+       this row wrongly return CDDA_FORGET. Only the start != 0 term blocks
+       it -- deleting that term from cdda_classify.c turns this row green
+       for the wrong reason and the whole suite still passes. */
+    { "start unreadable, end readable, observed, fad past end -> RESTART (start != 0 term regression)",
+      0, 0, 1, 2500, 0, 2000, CDDA_RESTART },
+
+    /* Pins fad < end, not fad <= end, in the resume rule: a resumed range
+       has length end - fad, and fad == end would issue CDC_CdPlay with a
+       zero-length EFAS if that comparison were ever relaxed to <=. */
+    { "boundary: fad == end exactly, playing, no loop -> RESTART (fad < end pin)",
+      1, 0, 0, 2000, 1000, 2000, CDDA_RESTART },
 };
 
 static void run_cases(void)
