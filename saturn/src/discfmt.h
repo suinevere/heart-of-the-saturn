@@ -23,6 +23,12 @@
 #include <stdint.h>
 #include <stddef.h>
 
+/* The Saturn backend is C++; without this its callers would look for mangled
+   names and fail to link. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*----------------------
  | discfmt_mode1_user_offset
  | Description: Byte offset of a sector's 2048 bytes of user data within a
@@ -175,5 +181,9 @@ int discfmt_iso_root(const uint8_t *pvd_user, uint32_t *lba, uint32_t *len);
  | Author: suinevere
  ----------------------*/
 int discfmt_iso_find(const uint8_t *dir, uint32_t dir_len, const char *name, uint32_t *lba, uint32_t *size);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* DISCFMT_H */

@@ -5,9 +5,14 @@
  |   there is one drive and one mounted disc, so disc_open validates the
  |   19-file manifest (disc_manifest.h) against live GFS lookups instead of a
  |   cached ISO9660 directory, and disc_read_file bounds every read at
- |   max_size the same way the host backend does. CD-DA (disc_play_track/
- |   disc_stop_track) is a later sub-project; both are silent no-ops here,
- |   which disc.h's contract explicitly allows.
+ |   max_size the same way the host backend does. CD-DA plays through
+ |   SRL::Sound::Cdda::PlaySingle and raw CDC_* calls -- not through
+ |   Cdda::Resume or Cdda::StopPause, and not through
+ |   SRL::Cd::TableOfContents, all of which read a table SRL lays out wrong
+ |   (see cdtoc.h). There is one drive, so playback and file reads contend:
+ |   disc_read_file brackets itself with a suspend and a restore, which is
+ |   the only reason music survives the whole-file load that follows every
+ |   disc_play_track in play_anm.
  |
  |   Heap cost, which is not obvious from anything in this file:
  |   srl_cd.hpp:441 allocates SectorSize * SectorsToReadAtOnce = 2048 * 5 =
@@ -27,6 +32,9 @@
 #include "saturn_compat.h"
 
 #include "disc.h"
+#include "discfmt.h"
+#include "cdtoc.h"
+#include "client.h"
 
 /*----------------------
  | g_discOpened
@@ -37,6 +45,33 @@
  | Author: suinevere
  ----------------------*/
 static bool g_discOpened = false;
+
+/*----------------------
+ | g_toc / g_maxAudioTrack
+ | Description: The disc's BIOS table of contents, fetched once by disc_open
+ |   and decoded through cdtoc.h -- never through SRL::Cd::TableOfContents,
+ |   which reads the wrong track (see cdtoc.h). g_maxAudioTrack is 0 on the
+ |   data-only disc HOTA_AUDIO=none builds by default, and that 0 is what
+ |   turns every music request on such a disc into a no-op instead of a
+ |   CDC_CdPlay for a track the drive cannot find. No separate "is it fetched"
+ |   flag: nothing reads either of these except through a live g_musicTrack,
+ |   which only a successful disc_open can produce.
+ | Author: suinevere
+ ----------------------*/
+static uint32_t g_toc[CDTOC_WORDS];
+static int g_maxAudioTrack = 0;
+
+/*----------------------
+ | g_musicTrack / g_musicLoop
+ | Description: The music this backend believes it is playing -- engine index,
+ |   -1 for none, plus whether it was asked to repeat. The engine has no way
+ |   to tell us what is playing and the CD block cannot be asked what it was
+ |   asked for, so this is the only record of intent, and it is what lets a
+ |   file read put the music back afterwards.
+ | Author: suinevere
+ ----------------------*/
+static int g_musicTrack = -1;
+static int g_musicLoop = 0;
 
 /*----------------------
  | normalize_name
@@ -106,6 +141,25 @@ static bool normalize_name(const char *name, char *out, int32_t outSize)
 extern "C" {
 
 /*----------------------
+ | cdda_halt
+ | Description: Stops CD-DA output. The seek is what silences it -- there is
+ |   no stop command as such; SRL::Sound::Cdda::StopPause does the same two
+ |   things, but also stashes the frame address into a private static that
+ |   only its broken Resume consumes, so this port issues the pair itself.
+ | Author: suinevere
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void cdda_halt(void)
+{
+	CdcPos pos;
+
+	CDC_POS_PTYPE(&pos) = CDC_PTYPE_DFL;
+	CDC_CdSeek(&pos);
+}
+
+/*----------------------
  | disc_open
  | Description: Confirms SRL::Cd is up and validates the 19-file manifest
  |   against live GFS lookups before returning success, matching
@@ -126,6 +180,11 @@ extern "C" {
  |   second call just returns the cached result -- kept because it is the only
  |   place a CD bring-up failure is reported, and Core::Initialize discards
  |   the return value.
+ |
+ |   The TOC is read here, once, because it cannot change while a disc is
+ |   mounted and because disc_play_track must not be the thing that discovers
+ |   the disc has no audio -- on the default HOTA_AUDIO=none build that is
+ |   every call.
  | Author: suinevere
  | Params: cue_path -- unused on Saturn
  | Returns: 1 on success, 0 on failure
@@ -185,6 +244,10 @@ int disc_open(const char *cue_path)
 		disc_close();
 		return 0;
 	}
+
+	CDC_TgetToc(g_toc);
+	g_maxAudioTrack = cdtoc_max_audio_track(g_toc);
+	printf("disc_open: %d audio tracks\n", g_maxAudioTrack > 1 ? g_maxAudioTrack - 1 : 0);
 
 	g_discOpened = true;
 	return 1;
@@ -258,30 +321,70 @@ int disc_read_file(const char *name, void *out, int max_size)
 
 /*----------------------
  | disc_play_track
- | Description: No-op. CD-DA playback is a later sub-project's work --
- |   disc.h's contract explicitly permits a silent no-op here, the same as
- |   the host backend gives when cls.nosound is set.
+ | Description: Starts a CD-DA track for the engine's music index. Refuses,
+ |   silently and by contract, before disc_open, after disc_close, with
+ |   cls.nosound set, for an index outside 0..40, and -- the case that matters
+ |   for every routine build -- for any track the disc does not carry, which
+ |   is all of them on the 12 MB HOTA_AUDIO=none disc. That last guard is not
+ |   defensive programming: CDC_CdPlay for a track outside the TOC is
+ |   undefined, and the failure mode to avoid is one that leaves the CD block
+ |   unable to serve the file reads the game is about to make.
+ |
+ |   The +2 mapping is not repeated here. discfmt_cue_track_for_music owns it
+ |   for both backends and returns 0, an invalid track, when out of range.
+ |
+ |   SRL::Sound::Cdda::PlaySingle is safe to use where the rest of Cdda is
+ |   not: it is CDC_CdPlay by track number and never consults the table of
+ |   contents SRL cannot read.
  | Author: suinevere
- | Params: engine_index -- unused; loop -- unused
+ | Globals: g_discOpened, g_maxAudioTrack, g_musicTrack, g_musicLoop
+ | Params: engine_index -- music index 0..40; loop -- nonzero to repeat
+ |   forever
  | Returns: N/A
  ----------------------*/
 void disc_play_track(int engine_index, int loop)
 {
-	(void)engine_index;
-	(void)loop;
+	int cue;
+
+	if (!g_discOpened || cls.nosound != 0)
+	{
+		return;
+	}
+
+	cue = discfmt_cue_track_for_music(engine_index);
+
+	if (cue == 0 || cue > g_maxAudioTrack)
+	{
+		g_musicTrack = -1;
+		return;
+	}
+
+	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
+	g_musicTrack = engine_index;
+	g_musicLoop = loop;
 }
 
 /*----------------------
  | disc_stop_track
- | Description: No-op, for the same reason as disc_play_track: CD-DA is a
- |   later sub-project. Safe to call with nothing playing, before disc_open,
- |   or after disc_close, exactly as disc.h requires.
+ | Description: Stops the music and forgets it. Clearing g_musicTrack is the
+ |   load-bearing half: it is what stops the next disc_read_file from putting
+ |   back a track the engine deliberately silenced. Safe before disc_open,
+ |   after disc_close, and with nothing playing, exactly as disc.h requires,
+ |   which is what lets atexit_callback call it unconditionally.
  | Author: suinevere
+ | Globals: g_musicTrack
  | Params: N/A
  | Returns: N/A
  ----------------------*/
 void disc_stop_track(void)
 {
+	if (g_musicTrack < 0)
+	{
+		return;
+	}
+
+	g_musicTrack = -1;
+	cdda_halt();
 }
 
 /*----------------------
@@ -290,12 +393,18 @@ void disc_stop_track(void)
  |   SRL::Cd::File this backend touches is stack-local and already closed by
  |   its own destructor, so there is nothing to release here but the flag --
  |   safe before disc_open, after a failed disc_open, and twice in a row.
+ |
+ |   Stopping the music here as well means a bare disc_close and the
+ |   atexit stop-then-close pair land in the same state, and that a re-open
+ |   cannot inherit a track request made against the previous disc.
  | Author: suinevere
  | Params: N/A
  | Returns: N/A
  ----------------------*/
 void disc_close(void)
 {
+	disc_stop_track();
+	g_maxAudioTrack = 0;
 	g_discOpened = false;
 }
 
