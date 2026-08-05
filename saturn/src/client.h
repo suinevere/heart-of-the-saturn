@@ -19,6 +19,13 @@
 #ifndef __CLIENT_INCLUDED__
 #define __CLIENT_INCLUDED__
 
+/* disc_srl.cxx includes this from C++ outside its own extern "C" block; cls
+   links today unguarded only because variable names aren't mangled, but a
+   function added here later would fail the way the six headers in 7f66fe3 did. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct
 {
 	int paused;
@@ -32,5 +39,9 @@ typedef struct
 } client_static_t;
 
 extern client_static_t cls;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
