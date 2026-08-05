@@ -1,33 +1,90 @@
 /*----------------------
  | input_srl.cxx
- | Description: Saturn implementation of input.h. Sibling of host/input_sdl.c,
- |   and deliberately empty: pad mapping is a later sub-project, and the intro
- |   this sub-project boots to plays on a timer with no input at all. Leaving
- |   the key state at the zero main.c initialises it to makes the engine see
- |   nothing pressed every frame, which is exactly what an untouched pad would
- |   report -- so the game loop needs no branch for "no input backend yet".
- |   input.h names an empty check_events as the supported way to defer input
- |   rather than refusing to link.
+ | Description: Saturn implementation of input.h, over SRL::Input::Digital.
+ |   Sibling of host/input_sdl.c, and far smaller than it: that backend drains
+ |   an SDL event queue and also carries quit, quicksave, a speed throttle, a
+ |   debug toggle and input recording, all of which are host development
+ |   conveniences reached by keyboard. A console has no quit, saturn_filestub.c
+ |   has no filesystem to quicksave into, and the rest have no pad equivalent
+ |   worth inventing, so this file maps seven buttons and nothing else.
+ |
+ |   Reads only. SRL::Core::Synchronize() already calls
+ |   Input::Management::RefreshPeripherals() (srl_core.hpp), and
+ |   platform_frame() already calls Synchronize(), so the pad state is
+ |   refreshed once per presented frame by machinery that already exists.
+ |   Refreshing again here would collapse current and previous state and
+ |   silently break WasPressed/WasReleased for anything that later wants an
+ |   edge -- this file wants none, because the engine's key model is level:
+ |   main.c sets a key and reads it, and nothing anywhere reads a transition.
+ |
+ |   That leaves one wrinkle worth knowing: animation.c's post_render calls
+ |   platform_frame before check_events, so the animation loop reads pad state
+ |   refreshed by the same sync, while run()'s loop reads at main.c:594 and
+ |   refreshes at main.c:652 -- one frame, about 16 ms, older. Accepted rather
+ |   than fixed: refreshing here breaks edges for good, and reordering run()
+ |   perturbs the present/frame ordering verified on hardware in the boot
+ |   sub-project. 16 ms is imperceptible in a game this deliberate.
+ |
+ |   Design: docs/superpowers/specs/2026-08-05-hota-saturn-input-design.md
  | Author: suinevere
- | Dependencies: input.h
+ | Dependencies: srl.hpp, input.h
  ----------------------*/
+
+#include <srl.hpp>
 
 #include "input.h"
 
-extern "C" {
-
 /*----------------------
  | check_events
- | Description: No-op. There is no event queue to drain and no pad read yet;
- |   see the file banner. Costs nothing per frame and keeps the key state at
- |   its initial zero.
+ | Description: Copies port 0's pad into the seven key globals the game loop
+ |   reads. Port 0 only: this is a single-player game and port 0 is player 1,
+ |   so a pad in another port reads as nothing pressed -- the same thing the
+ |   stub did before this file had a body, which makes a mis-plugged pad
+ |   degrade to known-good behaviour rather than to something new.
+ |
+ |   A and B and C map to key_a and key_b and key_c by label rather than by
+ |   function. The Sega CD original ran on a Genesis pad whose A/B/C sit in
+ |   the same bottom row as the Saturn pad's, so muscle memory transfers; any
+ |   other assignment would be a guess about what each button does in play,
+ |   and update_keys (main.c:285) is not clear enough to redesign a control
+ |   scheme around.
+ |
+ |   The Digital handle is a local rather than a file-static on purpose. Its
+ |   constructor is trivial, but a file-static C++ object with a constructor
+ |   runs at static-init time, before SRL::Core::Initialize() -- a local
+ |   costs nothing and cannot be ordered wrong.
+ |
+ |   key_select and key_reset_record are deliberately not written: the first
+ |   is vestigial, declared in input.h but read nowhere in the engine, and the
+ |   second drives host input recording that has no Saturn counterpart.
+ |   cls.quit is likewise never set, because run()'s while (cls.quit == 0)
+ |   running forever is correct on a console.
  | Author: suinevere
- | Globals: N/A
+ | Globals: key_up, key_down, key_left, key_right, key_a, key_b, key_c
  | Params: N/A
  | Returns: N/A
  ----------------------*/
 void check_events(void)
 {
-}
+	SRL::Input::Digital pad(0);
 
+	if (!pad.IsConnected())
+	{
+		key_up = 0;
+		key_down = 0;
+		key_left = 0;
+		key_right = 0;
+		key_a = 0;
+		key_b = 0;
+		key_c = 0;
+		return;
+	}
+
+	key_up = pad.IsHeld(SRL::Input::Digital::Button::Up) ? 1 : 0;
+	key_down = pad.IsHeld(SRL::Input::Digital::Button::Down) ? 1 : 0;
+	key_left = pad.IsHeld(SRL::Input::Digital::Button::Left) ? 1 : 0;
+	key_right = pad.IsHeld(SRL::Input::Digital::Button::Right) ? 1 : 0;
+	key_a = pad.IsHeld(SRL::Input::Digital::Button::A) ? 1 : 0;
+	key_b = pad.IsHeld(SRL::Input::Digital::Button::B) ? 1 : 0;
+	key_c = pad.IsHeld(SRL::Input::Digital::Button::C) ? 1 : 0;
 }

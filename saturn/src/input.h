@@ -11,9 +11,8 @@
  |   until the backend moved out; that is the only reason they are visible.
  |
  |   saturn/host/input_sdl.c is the SDL keyboard implementation.
- |   src/system/input_srl.cxx is the Saturn implementation and is deliberately
- |   empty for now -- pad mapping is a later sub-project, and the intro this
- |   sub-project boots to plays on a timer with no input at all.
+ |   src/system/input_srl.cxx is the Saturn implementation, over port 0's
+ |   digital pad.
  | Author: suinevere
  | Dependencies: none
  ----------------------*/
