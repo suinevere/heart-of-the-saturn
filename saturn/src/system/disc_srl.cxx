@@ -25,11 +25,23 @@
  |   future allocator sharing this heap has to be sized against what is left
  |   after it, not against the whole.
  |
- |   This file's own static state also comes out of that same HWRAM: this
- |   branch measured .bss growing by 416 bytes (581,200 -> 581,616), 408 of
- |   which is g_toc -- CDTOC_WORDS longwords, unavoidable since CDC_TgetToc
- |   writes the whole table at once. Static, not transient, so it is already
- |   subtracted from the 69,440-byte figure above rather than stacking on it.
+ |   This file's own static state also comes out of that same HWRAM. Measured
+ |   2026-08-04 by building this branch's tip (24f387f) and the commit just
+ |   before it (3051d5c) in separate worktrees, both default HOTA_AUDIO=none
+ |   via the same compile.bat: total .bss went from 581,200 to 581,632 bytes,
+ |   a 432-byte increase (the linker map's own .bss line, not an estimate).
+ |   This file's own object carries 420 of those bytes (disc_srl.o's .bss
+ |   went from 1 byte, g_discOpened alone, to 421). CDTOC_WORDS(102) * 4 = 408
+ |   of that 420 is g_toc, unavoidable since CDC_TgetToc writes the whole
+ |   table at once, leaving 12 bytes for g_maxAudioTrack, g_musicLoop,
+ |   g_pauseFad, g_wasPlaying and g_musicObserved combined (g_musicTrack
+ |   initialises to -1, so it lives in .data, not .bss). The other 12 bytes
+ |   of the 432-byte total fall outside this file -- plausibly alignment
+ |   padding from linking in cdtoc.o and cdda_classify.o, both of which
+ |   contribute 0 bytes of their own .bss -- and were not chased further,
+ |   since they are not this file's own state. Static, not transient, so it
+ |   is already subtracted from the 69,440-byte figure above rather than
+ |   stacking on it.
  | Author: suinevere
  | Dependencies: srl.hpp, disc.h, disc_manifest.h, saturn_compat.h
  ----------------------*/
@@ -257,8 +269,17 @@ static void cdda_suspend(void)
  |   closing the same CDC_CdPlay-on-an-unplayable-track hazard disc_play_track
  |   guards against, a second time, rather than arguing it unreachable here.
  |   A classifier result that cannot be honoured this way is treated the same
- |   as CDDA_FORGET: g_musicTrack is cleared rather than left pointing at a
- |   track this call just declined to play.
+ |   as CDDA_FORGET -- g_musicTrack is cleared rather than left pointing at a
+ |   track this call just declined to play -- but it prints its own message,
+ |   not CDDA_FORGET's. cdda_classify returned CDDA_RESTART here, not
+ |   finished and not never-started, so "classified as finished or
+ |   never-started" would be false on this branch: the decline came from
+ |   cdtoc_is_audio, which points at the TOC or the disc, not from
+ |   cdda_classify's was_playing/loop/observed/fad inputs. A listening test
+ |   with no rebuild available cannot tell those two causes apart without
+ |   separate messages, which is why this file emits four diagnostics
+ |   against the design's stated budget of three -- see the design spec's
+ |   diagnostics paragraph.
  | Author: suinevere
  | Globals: g_toc, g_musicTrack, g_musicLoop, g_pauseFad, g_wasPlaying,
  |   g_musicObserved
@@ -313,7 +334,7 @@ static void cdda_restore(void)
 	default:
 		if (!cdtoc_is_audio(g_toc, cue))
 		{
-			printf("cdda_restore: restore classified as finished or never-started\n");
+			printf("cdda_restore: restart declined, track %d not playable\n", cue);
 			g_musicTrack = -1;
 			return;
 		}

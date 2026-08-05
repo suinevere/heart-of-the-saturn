@@ -291,8 +291,14 @@ Verification, in ascending cost:
    no restart stutter; silence after `play_anm` ends.
 
 Diagnostics use `printf`, never `fprintf` — `fprintf` renders nothing on Saturn and the
-cause is still unknown. At most three: TOC track count at open, a play refused by the
-guard, and a restore classified as finished or never-started.
+cause is still unknown. Four, one over this design's original budget of three: TOC track
+count at open, a play refused by the guard, a restore classified as finished or
+never-started, and — added after review found the fourth case sharing the third
+message even though it has the opposite fix — a restore's `CDDA_RESTART` declined by
+the same TOC guard `disc_play_track` uses. "Classified as finished" points at
+`cdda_classify`'s inputs; "declined as unplayable" points at the TOC or the disc. A
+listening test with no rebuild available cannot tell them apart from one shared
+message, and a fourth message that is true is worth more than the budget it breaks.
 
 ## Risks and mitigations
 
