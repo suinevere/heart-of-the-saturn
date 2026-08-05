@@ -31,11 +31,14 @@ extern int key_reset_record;
 
 /*----------------------
  | check_events
- | Description: Drains the platform event queue and updates the key state and
- |   cls.quit. Called once per frame from the game loop. A backend with no
- |   input source implements this as an empty function rather than refusing to
- |   link -- that is the supported way to defer input, and it leaves the key
- |   state at its initial zero so the engine simply sees nothing pressed.
+ | Description: Updates the key state from whatever the platform offers.
+ |   Called once per frame from the game loop. Draining an event queue and
+ |   setting cls.quit are the SDL backend's shape of that contract, not the
+ |   seam's requirement -- the Saturn backend samples pad state instead and
+ |   never touches cls.quit. A backend with no input source implements this as
+ |   an empty function rather than refusing to link -- that is the supported
+ |   way to defer input, and it leaves the key state at its initial zero so
+ |   the engine simply sees nothing pressed.
  | Author: suinevere
  ----------------------*/
 void check_events(void);

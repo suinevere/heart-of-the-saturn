@@ -25,6 +25,11 @@
  |   perturbs the present/frame ordering verified on hardware in the boot
  |   sub-project. 16 ms is imperceptible in a game this deliberate.
  |
+ |   No extern "C" block wraps the include of input.h below, unlike the four
+ |   sibling backends (platform_srl.cxx, video_srl.cxx, sound_srl.cxx,
+ |   disc_srl.cxx): input.h guards its own declarations with #ifdef
+ |   __cplusplus, so check_events() already gets C linkage without one here.
+ |
  |   Design: docs/superpowers/specs/2026-08-05-hota-saturn-input-design.md
  | Author: suinevere
  | Dependencies: srl.hpp, input.h
@@ -42,6 +47,16 @@
  |   stub did before this file had a body, which makes a mis-plugged pad
  |   degrade to known-good behaviour rather than to something new.
  |
+ |   Port 0 plus the IsConnected check below is the only safe pairing, not an
+ |   arbitrary choice: SRL::Input::Management::Peripherals[] (srl_input.hpp)
+ |   sets only port 0's id to NotConnected; ports 1-11 default to id 0, which
+ |   reads as PeripheralFamily::Digital -- connected -- with data 0, and the
+ |   pad is active-low, so every button would read held. SRL::Core::
+ |   Initialize() never calls RefreshPeripherals(), only Synchronize() does,
+ |   so a check_events() on any other port, or without this guard, would
+ |   degrade a pre-Synchronize call to "everything pressed" instead of
+ |   "nothing pressed".
+ |
  |   A and B and C map to key_a and key_b and key_c by label rather than by
  |   function. The Sega CD original ran on a Genesis pad whose A/B/C sit in
  |   the same bottom row as the Saturn pad's, so muscle memory transfers; any
@@ -54,11 +69,14 @@
  |   runs at static-init time, before SRL::Core::Initialize() -- a local
  |   costs nothing and cannot be ordered wrong.
  |
- |   key_select and key_reset_record are deliberately not written: the first
- |   is vestigial, declared in input.h but read nowhere in the engine, and the
- |   second drives host input recording that has no Saturn counterpart.
- |   cls.quit is likewise never set, because run()'s while (cls.quit == 0)
- |   running forever is correct on a console.
+ |   key_select and key_reset_record are deliberately not written: both are
+ |   host input-recording state, not gameplay state. key_select is written and
+ |   read only by read_keys_from_record/add_keys_to_record (main.c);
+ |   key_reset_record is host-only recording control set by input_sdl.c.
+ |   input_sdl.c never writes key_select, and update_keys (main.c:285) reads
+ |   neither, so gameplay never observes them. cls.quit is likewise never set,
+ |   because run()'s while (cls.quit == 0) running forever is correct on a
+ |   console.
  | Author: suinevere
  | Globals: key_up, key_down, key_left, key_right, key_a, key_b, key_c
  | Params: N/A
