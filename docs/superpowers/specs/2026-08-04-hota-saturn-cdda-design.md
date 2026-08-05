@@ -359,5 +359,21 @@ implied.
 4. `HOTA_AUDIO=full ./compile.bat` produces a disc on which all four intro animations
    play with their music, the music survives the load preceding each animation, and
    playback stops when the intro ends — confirmed by Suinevere on the emulator.
+   **Met 2026-08-05.**
+
+   Observed and expected: music arrives about half a second after an animation starts.
+   That is the drive seeking from the data area, where the preloading read left it,
+   out to cue tracks 33-36 past sector 180,000 — close to a full-stroke seek. It
+   cannot be overlapped: one drive, and the music can only be re-issued once the read
+   has finished. Not a defect, and not fixable without a second drive. Removing the
+   discarded first `PlaySingle` (see the deferred "three seeks where one would do")
+   would let the read start sooner but would not shorten this seek.
+
+   Still unverifiable: everything past the intro. Saturn input is stubbed by design, so
+   nothing can drive the game into rooms or gameplay. The loop rule -- a file read
+   during a looping track restarts it from the top rather than resuming, because a
+   frame-range resume would silently drop the repeat -- therefore has never been
+   exercised. Room transitions are where it will first be audible, and that needs the
+   input sub-project before it can be tested at all.
 5. No `SRL::Cd::TableOfContents`, `Cdda::Resume` or `Cdda::StopPause` call exists in
    the port.
