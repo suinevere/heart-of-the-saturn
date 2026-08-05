@@ -208,9 +208,20 @@ should be recorded rather than absorbed into it.
 
 ## Acceptance
 
-1. `sh saturn/tests/run_tests.sh` still passes.
-2. `make -C saturn/src` still builds.
-3. `./compile.bat` links and produces a disc.
+1. `sh saturn/tests/run_tests.sh` still passes. **Met.**
+2. `make -C saturn/src` still builds. **Met.**
+3. `./compile.bat` links and produces a disc. **Met.**
 4. On the emulator: the four directions move Tausar, and A, B and C each do something
-   distinct in play — confirmed by Suinevere.
-5. `check_events` reads port 0 only, uses `IsHeld` only, and calls no refresh.
+   distinct in play — confirmed by Suinevere. **Outstanding.**
+5. `check_events` reads port 0 only, uses `IsHeld` only, and calls no refresh. **Met** —
+   verified in review by tracing the SRL call chain, not merely by the absence of a
+   literal `RefreshPeripherals()` call.
+
+**Cheaper smoke test to run before criterion 4.** Hold A during the intro: it should
+skip. `post_render` (`animation.c:82`) calls `check_events` every animation frame,
+`update_keys` sets variable 250 from `key_a` (`main.c:337`), and `animation.c:782`
+reads it to abort; `play_anm` is called with `skippable == 0`, so it breaks out of the
+whole intro. That exercises the pad read alone, with none of the gameplay code behind
+it — so if it works, any later failure belongs to code this sub-project did not touch.
+It is also a behaviour change to the one path ever verified on hardware, which is worth
+knowing about before it surprises someone.
