@@ -24,6 +24,12 @@
  |   here stacks two open files to make it worse, and it is transient, but any
  |   future allocator sharing this heap has to be sized against what is left
  |   after it, not against the whole.
+ |
+ |   This file's own static state also comes out of that same HWRAM: this
+ |   branch measured .bss growing by 416 bytes (581,200 -> 581,616), 408 of
+ |   which is g_toc -- CDTOC_WORDS longwords, unavoidable since CDC_TgetToc
+ |   writes the whole table at once. Static, not transient, so it is already
+ |   subtracted from the 69,440-byte figure above rather than stacking on it.
  | Author: suinevere
  | Dependencies: srl.hpp, disc.h, disc_manifest.h, saturn_compat.h
  ----------------------*/
@@ -244,8 +250,15 @@ static void cdda_suspend(void)
  |   in this codebase g_maxAudioTrack is 0 whenever the TOC is unreadable, so
  |   disc_play_track refuses every index and g_musicTrack never leaves -1,
  |   meaning this call returns at the guard below before cdda_classify ever
- |   sees that input. The fallback exists for cdda_classify's own contract,
- |   not because this call is known to exercise it.
+ |   sees that input in practice. The fallback exists for cdda_classify's own
+ |   contract, not because this call is known to exercise it -- but the
+ |   CDDA_RESTART case does not lean on that invariant to stay safe: it
+ |   re-checks cdtoc_is_audio(g_toc, cue) itself before issuing PlaySingle,
+ |   closing the same CDC_CdPlay-on-an-unplayable-track hazard disc_play_track
+ |   guards against, a second time, rather than arguing it unreachable here.
+ |   A classifier result that cannot be honoured this way is treated the same
+ |   as CDDA_FORGET: g_musicTrack is cleared rather than left pointing at a
+ |   track this call just declined to play.
  | Author: suinevere
  | Globals: g_toc, g_musicTrack, g_musicLoop, g_pauseFad, g_wasPlaying,
  |   g_musicObserved
@@ -279,6 +292,7 @@ static void cdda_restore(void)
 	switch (action)
 	{
 	case CDDA_FORGET:
+		printf("cdda_restore: restore classified as finished or never-started\n");
 		g_musicTrack = -1;
 		return;
 
@@ -297,6 +311,13 @@ static void cdda_restore(void)
 
 	case CDDA_RESTART:
 	default:
+		if (!cdtoc_is_audio(g_toc, cue))
+		{
+			printf("cdda_restore: restore classified as finished or never-started\n");
+			g_musicTrack = -1;
+			return;
+		}
+
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
 		return;
 	}
@@ -390,7 +411,7 @@ int disc_open(const char *cue_path)
 
 	CDC_TgetToc(g_toc);
 	g_maxAudioTrack = cdtoc_max_audio_track(g_toc);
-	printf("disc_open: %d audio tracks\n", g_maxAudioTrack > 1 ? g_maxAudioTrack - 1 : 0);
+	printf("disc_open: highest audio track %d\n", g_maxAudioTrack);
 
 	g_discOpened = true;
 	return 1;
@@ -495,20 +516,29 @@ int disc_read_file(const char *name, void *out, int max_size)
 
 /*----------------------
  | disc_play_track
- | Description: Starts a CD-DA track for the engine's music index. Refuses,
- |   silently and by contract, before disc_open, after disc_close, with
- |   cls.nosound set, for an index outside 0..40, and -- the case that matters
- |   for every routine build -- for any track the disc does not carry, which
- |   is all of them on the 12 MB HOTA_AUDIO=none disc. That last guard is not
- |   defensive programming: CDC_CdPlay for a track outside the TOC is
+ | Description: Starts a CD-DA track for the engine's music index. Refuses
+ |   silently before disc_open, after disc_close, and with cls.nosound set.
+ |   Refuses with a printf -- the one place this function is not silent --
+ |   for an index outside 0..40 or, the case that matters for every routine
+ |   build, for any track that does not exist on the disc or exists but is
+ |   not audio, which is every index on the 12 MB HOTA_AUDIO=none disc. That
+ |   last guard is not defensive programming: CDC_CdPlay for a track outside
+ |   the TOC, or for a data track sitting below the highest audio track, is
  |   undefined, and the failure mode to avoid is one that leaves the CD block
  |   unable to serve the file reads the game is about to make.
+ |   cdtoc_is_audio(g_toc, cue) is the precise predicate for both halves of
+ |   that hazard at once -- host-tested in cdtoc.c -- rather than the weaker
+ |   cue > g_maxAudioTrack range check this used to be, which would have
+ |   admitted a data track sitting below the highest audio track.
  |
  |   A refusal leaves g_musicTrack untouched: whatever was already playing
  |   keeps playing and stays correctly tracked, matching disc_cue.c's host
- |   implementation, which runs every refusal check before it ever touches
- |   playback state. The two backends share one disc.h contract, and this is
- |   what keeps it literally true of both.
+ |   implementation for every refusal check but one -- disc_cue.c's own
+ |   fopen failure for a missing track file runs after its disc_stop_track()
+ |   has already silenced whatever was playing, so that one host path does
+ |   touch playback state ahead of a failure it could not yet foresee. Every
+ |   other refusal on both backends, including this one, runs before
+ |   touching state.
  |
  |   The +2 mapping is not repeated here. discfmt_cue_track_for_music owns it
  |   for both backends and returns 0, an invalid track, when out of range.
@@ -532,8 +562,7 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   purpose -- the same track keeps playing, so whatever it had already
  |   observed is still true.
  | Author: suinevere
- | Globals: g_discOpened, g_maxAudioTrack, g_musicTrack, g_musicLoop,
- |   g_musicObserved
+ | Globals: g_discOpened, g_toc, g_musicTrack, g_musicLoop, g_musicObserved
  | Params: engine_index -- music index 0..40; loop -- nonzero to repeat
  |   forever
  | Returns: N/A
@@ -549,8 +578,9 @@ void disc_play_track(int engine_index, int loop)
 
 	cue = discfmt_cue_track_for_music(engine_index);
 
-	if (cue == 0 || cue > g_maxAudioTrack)
+	if (cue == 0 || !cdtoc_is_audio(g_toc, cue))
 	{
+		printf("disc_play_track: refused, track %d not playable\n", cue);
 		return;
 	}
 
