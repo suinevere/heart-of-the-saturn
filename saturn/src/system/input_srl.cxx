@@ -37,7 +37,51 @@
 
 #include <srl.hpp>
 
+#include "saturn_compat.h"
+
 #include "input.h"
+
+/*----------------------
+ | pad_probe
+ | Description: TEMPORARY instrumentation for the code-entry cursor that will
+ |   not move. Prints port 0's raw peripheral record and the resulting key
+ |   globals whenever either changes, so one emulator run splits the chain
+ |   instead of another theory: a connected flag of 0 means this seam zeroes
+ |   every key and nothing downstream can work; an id or data word that never
+ |   changes while buttons are pressed means the refresh is not reaching us;
+ |   a data word that changes while the key globals do not means the button
+ |   mapping is wrong; and both changing while the cursor stays put means the
+ |   fault is downstream of this file entirely, in code identical to the host's.
+ |
+ |   Prints only on change, because the debug layer scrolls and a per-frame
+ |   print would bury the answer. Remove once the cause is known.
+ | Author: suinevere
+ | Globals: key_up, key_down, key_left, key_right, key_a, key_b, key_c
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void pad_probe(void)
+{
+	static int lastConn = -1;
+	static int lastId = -1;
+	static int lastData = -1;
+	static int lastKeys = -1;
+
+	PerDigital *raw = SRL::Input::Management::GetRawData(0);
+	int conn = SRL::Input::Management::IsConnected(0) ? 1 : 0;
+	int keys = (key_up ? 1 : 0) | (key_down ? 2 : 0) | (key_left ? 4 : 0)
+		| (key_right ? 8 : 0) | (key_a ? 16 : 0) | (key_b ? 32 : 0) | (key_c ? 64 : 0);
+
+	if (conn != lastConn || (int)raw->id != lastId || (int)raw->data != lastData || keys != lastKeys)
+	{
+		printf("pad conn=%d id=%02x data=%04x keys=%02x\n",
+			conn, (int)raw->id, (int)raw->data, keys);
+		lastConn = conn;
+		lastId = (int)raw->id;
+		lastData = (int)raw->data;
+		lastKeys = keys;
+	}
+}
 
 /*----------------------
  | check_events
@@ -95,14 +139,17 @@ void check_events(void)
 		key_a = 0;
 		key_b = 0;
 		key_c = 0;
-		return;
+	}
+	else
+	{
+		key_up = pad.IsHeld(SRL::Input::Digital::Button::Up) ? 1 : 0;
+		key_down = pad.IsHeld(SRL::Input::Digital::Button::Down) ? 1 : 0;
+		key_left = pad.IsHeld(SRL::Input::Digital::Button::Left) ? 1 : 0;
+		key_right = pad.IsHeld(SRL::Input::Digital::Button::Right) ? 1 : 0;
+		key_a = pad.IsHeld(SRL::Input::Digital::Button::A) ? 1 : 0;
+		key_b = pad.IsHeld(SRL::Input::Digital::Button::B) ? 1 : 0;
+		key_c = pad.IsHeld(SRL::Input::Digital::Button::C) ? 1 : 0;
 	}
 
-	key_up = pad.IsHeld(SRL::Input::Digital::Button::Up) ? 1 : 0;
-	key_down = pad.IsHeld(SRL::Input::Digital::Button::Down) ? 1 : 0;
-	key_left = pad.IsHeld(SRL::Input::Digital::Button::Left) ? 1 : 0;
-	key_right = pad.IsHeld(SRL::Input::Digital::Button::Right) ? 1 : 0;
-	key_a = pad.IsHeld(SRL::Input::Digital::Button::A) ? 1 : 0;
-	key_b = pad.IsHeld(SRL::Input::Digital::Button::B) ? 1 : 0;
-	key_c = pad.IsHeld(SRL::Input::Digital::Button::C) ? 1 : 0;
+	pad_probe();
 }
