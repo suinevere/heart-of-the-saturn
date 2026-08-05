@@ -36,10 +36,23 @@ static unsigned char *memory = NULL;
 /*----------------------
  | vm_alloc_memory
  | Description: Acquires the MEMORY_SIZE-byte emulated 68000 map from LWRAM on
- |   Saturn, or hands back the host's static array unchanged. Idempotent so a
- |   retried startup path cannot strand LWRAM.
+ |   Saturn, or hands back the host's static array unchanged, and zeroes it
+ |   either way. Idempotent so a retried startup path cannot strand LWRAM.
+ |
+ |   The zeroing is the whole point of this function returning rather than the
+ |   storage just existing. The host's map is a file-scope static, so the C
+ |   runtime zeroes it before main; the Saturn's comes from SRL's SimpleMalloc,
+ |   which writes a block header and hands back whatever the payload bytes
+ |   happened to be. The engine reads map locations before it writes them, so
+ |   without this the two platforms disagree about what an untouched byte
+ |   holds -- 0 on the host, garbage on Saturn -- and the scripts that rely on
+ |   it read coordinates and state that were never stored. That surfaced as a
+ |   sprite drawn at 0,0 on the code-entry screen while the host drew it
+ |   correctly, and it would have surfaced differently in every room. Zeroing
+ |   on both arms makes it a property of this function instead of an accident
+ |   of the host's storage class.
  | Author: suinevere
- | Dependencies: vm.h
+ | Dependencies: vm.h, memory.h
  ----------------------*/
 int vm_alloc_memory(void)
 {
@@ -54,7 +67,14 @@ int vm_alloc_memory(void)
 	memory = memory_storage;
 #endif
 
-	return (memory != NULL);
+	if (memory == NULL)
+	{
+		return 0;
+	}
+
+	memset(memory, 0, MEMORY_SIZE);
+
+	return 1;
 }
 
 /*----------------------
