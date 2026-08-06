@@ -535,6 +535,27 @@ int disc_open(const char *cue_path)
  |   reason the path exists: its last sector carries 1,082 bytes of room data
  |   and 966 bytes belonging to nobody.
  |
+ |   The CPU-transfer branch is not tuning, and it is deliberately conditional.
+ |   ANIMATION_LOAD_BASE is 0x809a and the LWRAM block holding the emulated map
+ |   is 4-byte aligned (srl_memory.hpp:322-328), so every animation read with
+ |   fileoffset 0 lands at base + 2 (mod 4). File::Read hid that completely --
+ |   GFS only ever wrote into SRL's own aligned work buffer, and the copy out of
+ |   it did not care where it landed -- while ReadSectors hands GFS the caller's
+ |   pointer directly. Measured on the emulator 2026-08-06: at that offset the
+ |   default transfer mode never returned at all. INTRO1.BIN produced a black
+ |   screen and no probe line, and the probe's printf sits after this function
+ |   returns, so its absence was the proof. Blanket CPU transfer would be the
+ |   easy answer and the wrong one: the same run read GAME2.BIN, whose
+ |   destination is 4-byte aligned, in 1,450 ms against 6,300 before, and every
+ |   ROOMS*.BIN is aligned too since ROOMS_LOAD_BASE is 0xf900. Only the nine
+ |   animations pay the software transfer; everything else keeps DMA.
+ |
+ |   The mode belongs to the open handle, not to a call, so the tail read
+ |   inherits it. That is harmless -- g_tailSector is uint32_t-typed and would
+ |   not need it -- and there is nothing to restore, because the handle closes
+ |   with the read. Either way it is one request per file rather than
+ |   forty-three, which is where the time was.
+ |
  |   Both sector counts derive from Size.Bytes, never from Size.Sectors, and
  |   that is load-bearing rather than tidy. ReadSectors clamps its buffer size
  |   to the sectors actually remaining but forwards the unclamped sectorCount
@@ -593,6 +614,11 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 	{
 		printf("disc_read_file: can't open '%s'\n", resolved);
 		return -1;
+	}
+
+	if (((uintptr_t)out & 3u) != 0)
+	{
+		GFS_SetTmode(file.Handle, GFS_TMODE_CPU);
 	}
 
 	int32_t whole = discsec_whole_sectors(file.Size.Bytes, file.Size.SectorSize);
