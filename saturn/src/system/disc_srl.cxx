@@ -54,6 +54,7 @@
 #include "cdtoc.h"
 #include "cdda_classify.h"
 #include "client.h"
+#include "platform.h"
 
 /*----------------------
  | g_discOpened
@@ -185,6 +186,45 @@ static bool normalize_name(const char *name, char *out, int32_t outSize)
 }
 
 extern "C" {
+
+/*----------------------
+ | cdda_probe_wait
+ | Description: TEMPORARY MEASUREMENT PROBE -- remove before this lands.
+ |   Spins on CDC_GetCurStat until the drive reports CDC_ST_PLAY or the cap
+ |   expires, then prints how long that took. The vblank handler advances
+ |   platform_ticks' counter from an interrupt, so this loop does not need
+ |   SRL::Core::Synchronize to make the clock move. Answers the only question
+ |   the code cannot: how much of the audible gap is the drive acquiring the
+ |   track, and how much is anything else.
+ | Author: suinevere
+ | Globals: N/A
+ | Params: where -- call site tag; cue -- cue track commanded
+ | Returns: N/A
+ ----------------------*/
+#define CDDA_PROBE_CAP_MS 4000
+
+static void cdda_probe_wait(const char *where, int cue)
+{
+	unsigned int t0 = platform_ticks();
+	unsigned int waited;
+	CdcStat stat;
+	int state;
+
+	for (;;)
+	{
+		CDC_GetCurStat(&stat);
+		state = CDC_GET_STC(&stat);
+		waited = platform_ticks() - t0;
+
+		if (state == CDC_ST_PLAY || waited >= CDDA_PROBE_CAP_MS)
+		{
+			break;
+		}
+	}
+
+	printf("probe %s: cue %d play after %u ms (state %d, fad %d)\n",
+		where, cue, waited, state, (int)CDC_STAT_FAD(&stat));
+}
 
 /*----------------------
  | cdda_halt
@@ -327,6 +367,7 @@ static void cdda_restore(void)
 		CDC_PLY_EFAS(&ply) = end - g_pauseFad;
 		CDC_PLY_PMODE(&ply) = CDC_PM_DFL;
 		CDC_CdPlay(&ply);
+		cdda_probe_wait("restore/resume", cue);
 		return;
 	}
 
@@ -340,6 +381,7 @@ static void cdda_restore(void)
 		}
 
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
+		cdda_probe_wait("restore/restart", cue);
 		return;
 	}
 }
@@ -526,9 +568,14 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 int disc_read_file(const char *name, void *out, int max_size)
 {
 	int result;
+	unsigned int t0;
+	unsigned int t1;
 
 	cdda_suspend();
+	t0 = platform_ticks();
 	result = disc_read_file_body(name, out, max_size);
+	t1 = platform_ticks();
+	printf("probe read: '%s' took %u ms\n", name, t1 - t0);
 	cdda_restore();
 
 	return result;
@@ -617,6 +664,7 @@ void disc_play_track(int engine_index, int loop)
 	}
 
 	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
+	cdda_probe_wait("play_track", cue);
 	g_musicTrack = engine_index;
 	g_musicLoop = (loop != 0);
 	g_musicObserved = false;
