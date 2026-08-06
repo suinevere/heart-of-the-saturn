@@ -240,6 +240,19 @@ extern "C" {
  ----------------------*/
 #define CDDA_PROBE_CAP_MS 4000
 
+/*----------------------
+ | g_probeMaxChunk / g_probeRequests
+ | Description: TEMPORARY MEASUREMENT PROBE -- removed with the rest of the
+ |   probe. What the last body read actually did: the chunk ceiling the drive
+ |   reported through GFS_GetNumCdbuf after clamping, and how many requests it
+ |   took. Reported so the partition size is read off the hardware rather than
+ |   inferred from GAME2.BIN's 200 sectors having been the largest read that
+ |   ever returned.
+ | Author: suinevere
+ ----------------------*/
+static int32_t g_probeMaxChunk = 0;
+static int32_t g_probeRequests = 0;
+
 static void cdda_probe_wait(const char *where, int cue)
 {
 	unsigned int t0 = platform_ticks();
@@ -535,26 +548,31 @@ int disc_open(const char *cue_path)
  |   reason the path exists: its last sector carries 1,082 bytes of room data
  |   and 966 bytes belonging to nobody.
  |
- |   The CPU-transfer branch is not tuning, and it is deliberately conditional.
- |   ANIMATION_LOAD_BASE is 0x809a and the LWRAM block holding the emulated map
- |   is 4-byte aligned (srl_memory.hpp:322-328), so every animation read with
- |   fileoffset 0 lands at base + 2 (mod 4). File::Read hid that completely --
- |   GFS only ever wrote into SRL's own aligned work buffer, and the copy out of
- |   it did not care where it landed -- while ReadSectors hands GFS the caller's
- |   pointer directly. Measured on the emulator 2026-08-06: at that offset the
- |   default transfer mode never returned at all. INTRO1.BIN produced a black
- |   screen and no probe line, and the probe's printf sits after this function
- |   returns, so its absence was the proof. Blanket CPU transfer would be the
- |   easy answer and the wrong one: the same run read GAME2.BIN, whose
- |   destination is 4-byte aligned, in 1,450 ms against 6,300 before, and every
- |   ROOMS*.BIN is aligned too since ROOMS_LOAD_BASE is 0xf900. Only the nine
- |   animations pay the software transfer; everything else keeps DMA.
+ |   The body read is chunked, and the ceiling is not arbitrary: a GFS_Fread for
+ |   more sectors than the CD block's buffer partition holds does not fail, it
+ |   never returns. Measured on the emulator 2026-08-06, GAME2.BIN -- exactly
+ |   200 sectors -- read in 1,450 ms, while every animation at 211 sectors hung
+ |   with a black screen and no probe line at all, the probe's printf sitting
+ |   after this function returns. 200 is the partition size, which is why that
+ |   one file worked and nothing larger did. GFS_GetNumCdbuf reports the real
+ |   figure, so this asks the drive rather than trusting the 200 that boundary
+ |   implies, and clamps to DISC_MAX_REQUEST_SECTORS besides.
  |
- |   The mode belongs to the open handle, not to a call, so the tail read
- |   inherits it. That is harmless -- g_tailSector is uint32_t-typed and would
- |   not need it -- and there is nothing to restore, because the handle closes
- |   with the read. Either way it is one request per file rather than
- |   forty-three, which is where the time was.
+ |   SRL never hit this because SectorsToReadAtOnce is 5, far under any
+ |   partition. The deadlock is a property of asking for a whole file at once,
+ |   not of this file's destination -- which matters, because destination
+ |   alignment looks like the obvious suspect and is not the cause.
+ |   ANIMATION_LOAD_BASE is 0x809a, so animations land 2 bytes off a longword
+ |   boundary, and that theory was tested on hardware: forcing GFS_TMODE_CPU for
+ |   misaligned destinations changed nothing, and a software transfer cannot
+ |   care about a 2-byte offset. Do not re-derive it from the load base and try
+ |   again.
+ |
+ |   Successive ReadSectors calls continue where the last stopped -- it takes
+ |   its own position from GFS_Tell (srl_cd.hpp:513) -- so the chunk loop needs
+ |   no Seek, which would allocate the same 10,240-byte work buffer this change
+ |   exists to avoid. The tail read is always one sector and so is never over
+ |   any partition.
  |
  |   Both sector counts derive from Size.Bytes, never from Size.Sectors, and
  |   that is load-bearing rather than tidy. ReadSectors clamps its buffer size
@@ -616,11 +634,6 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 		return -1;
 	}
 
-	if (((uintptr_t)out & 3u) != 0)
-	{
-		GFS_SetTmode(file.Handle, GFS_TMODE_CPU);
-	}
-
 	int32_t whole = discsec_whole_sectors(file.Size.Bytes, file.Size.SectorSize);
 	int32_t tail = discsec_tail_bytes(file.Size.Bytes, file.Size.SectorSize);
 
@@ -639,13 +652,39 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 	}
 
 	int32_t got = 0;
+	int32_t maxChunk = GFS_GetNumCdbuf(file.Handle);
+	int32_t remaining = whole;
 
-	if (whole > 0)
+	if (maxChunk <= 0 || maxChunk > DISC_MAX_REQUEST_SECTORS)
 	{
-		got = file.ReadSectors(whole, out);
+		maxChunk = DISC_MAX_REQUEST_SECTORS;
 	}
 
-	if (tail > 0)
+	while (remaining > 0)
+	{
+		int32_t take = discsec_request_sectors(remaining, maxChunk);
+		int32_t chunkGot;
+
+		if (take <= 0)
+		{
+			break;
+		}
+
+		chunkGot = file.ReadSectors(take, (uint8_t *)out + (whole - remaining) * file.Size.SectorSize);
+
+		if (chunkGot != take * file.Size.SectorSize)
+		{
+			break;
+		}
+
+		got += chunkGot;
+		remaining -= take;
+		g_probeRequests++;
+	}
+
+	g_probeMaxChunk = maxChunk;
+
+	if (remaining == 0 && tail > 0)
 	{
 		int32_t tailGot = file.ReadSectors(1, g_tailSector);
 
@@ -691,10 +730,12 @@ int disc_read_file(const char *name, void *out, int max_size)
 	unsigned int t1;
 
 	cdda_suspend();
+	g_probeRequests = 0;
 	t0 = platform_ticks();
 	result = disc_read_file_body(name, out, max_size);
 	t1 = platform_ticks();
-	printf("probe read: '%s' took %u ms\n", name, t1 - t0);
+	printf("probe read: '%s' took %u ms (chunk %d, %d requests)\n",
+		name, t1 - t0, (int)g_probeMaxChunk, (int)g_probeRequests);
 	cdda_restore();
 
 	return result;

@@ -141,12 +141,78 @@ static void test_sector_ceiling(void)
     CHECK_EQ(discsec_tail_bytes(4673, 2336), 1);
 }
 
+static int drain(int32_t total, int32_t max_chunk, int32_t *out_requests)
+{
+    int32_t remaining = total;
+    int32_t summed = 0;
+    int32_t requests = 0;
+
+    while (remaining > 0 && requests < 1000) {
+        int32_t take = discsec_request_sectors(remaining, max_chunk);
+
+        if (take <= 0) {
+            break;
+        }
+
+        summed += take;
+        remaining -= take;
+        requests++;
+    }
+
+    *out_requests = requests;
+    return summed;
+}
+
+static void test_request_chunking(void)
+{
+    int32_t requests = 0;
+
+    /* Every manifest sector count drains exactly, with no chunk lost and none
+       invented. A loop that terminates but sums short is the failure that
+       would truncate a room and surface far from here. */
+    CHECK_EQ(drain(211, DISC_MAX_REQUEST_SECTORS, &requests), 211);
+    CHECK_EQ(requests, 2);
+    CHECK_EQ(drain(213, DISC_MAX_REQUEST_SECTORS, &requests), 213);
+    CHECK_EQ(requests, 2);
+    CHECK_EQ(drain(200, DISC_MAX_REQUEST_SECTORS, &requests), 200);
+    CHECK_EQ(requests, 2);
+    CHECK_EQ(drain(181, DISC_MAX_REQUEST_SECTORS, &requests), 181);
+    CHECK_EQ(requests, 2);
+    CHECK_EQ(drain(79, DISC_MAX_REQUEST_SECTORS, &requests), 79);
+    CHECK_EQ(requests, 1);
+    CHECK_EQ(drain(1, DISC_MAX_REQUEST_SECTORS, &requests), 1);
+    CHECK_EQ(requests, 1);
+
+    /* 211 against 128 is the animation case that hung, and it must be the two
+       requests the ceiling implies -- 128 then the 83 that are left. */
+    CHECK_EQ(discsec_request_sectors(211, 128), 128);
+    CHECK_EQ(discsec_request_sectors(83, 128), 83);
+
+    /* A request never exceeds the ceiling or the remainder, whichever binds. */
+    CHECK_EQ(discsec_request_sectors(1000, 128), 128);
+    CHECK_EQ(discsec_request_sectors(5, 128), 5);
+    CHECK_EQ(discsec_request_sectors(128, 128), 128);
+
+    /* Degenerate inputs return 0 so the caller's loop terminates instead of
+       spinning on a request it can never satisfy. */
+    CHECK_EQ(discsec_request_sectors(0, 128), 0);
+    CHECK_EQ(discsec_request_sectors(-1, 128), 0);
+    CHECK_EQ(discsec_request_sectors(211, 0), 0);
+    CHECK_EQ(discsec_request_sectors(211, -1), 0);
+    CHECK_EQ(discsec_request_sectors(0, 0), 0);
+
+    /* The ceiling is the figure the emulator run justified, not a round
+       number chosen for looks: below the 200 that worked, above half of it. */
+    CHECK_EQ(DISC_MAX_REQUEST_SECTORS, 128);
+}
+
 int main(void)
 {
     test_manifest_sizes();
     test_boundaries();
     test_degenerate_inputs();
     test_sector_ceiling();
+    test_request_chunking();
 
     if (g_fail != 0) {
         printf("%d discsec check(s) failed\n", g_fail);

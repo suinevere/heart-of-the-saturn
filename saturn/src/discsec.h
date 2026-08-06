@@ -84,6 +84,37 @@ int32_t discsec_whole_sectors(int32_t bytes, int32_t sector_size);
  ----------------------*/
 int32_t discsec_tail_bytes(int32_t bytes, int32_t sector_size);
 
+/*----------------------
+ | DISC_MAX_REQUEST_SECTORS
+ | Description: The most sectors this port will ask for in one drive request.
+ |   Not a tuning knob: a GFS_Fread for more sectors than the CD block's buffer
+ |   partition holds never returns, and the boundary was found the expensive
+ |   way -- GAME2.BIN at exactly 200 sectors read in 1,450 ms while every
+ |   animation at 211 hung. 128 sits below the 200 that is known to work and
+ |   still lets the largest blob here, MAKE2MB.BIN at 213 sectors, finish in
+ |   two requests rather than the forty-three SRL's File::Read would issue.
+ |   Callers clamp GFS_GetNumCdbuf's answer to this rather than replacing it,
+ |   so a drive reporting something larger cannot talk this port back up past
+ |   a figure it has actually seen work.
+ | Author: suinevere
+ ----------------------*/
+#define DISC_MAX_REQUEST_SECTORS 128
+
+/*----------------------
+ | discsec_request_sectors
+ | Description: How many sectors the next request in a chunked read should ask
+ |   for. Exists so the loop that walks a file cannot be written with an
+ |   off-by-one that either overshoots the file or spins forever: 0 is the
+ |   terminating answer for every degenerate input, so a caller that loops
+ |   while this returns non-zero terminates on any argument it can be handed.
+ | Author: suinevere
+ | Globals: N/A
+ | Params: remaining -- sectors of the file still unread; max_chunk -- the
+ |   ceiling, the drive's own partition size clamped to DISC_MAX_REQUEST_SECTORS
+ | Returns: the smaller of the two, or 0 if either is non-positive
+ ----------------------*/
+int32_t discsec_request_sectors(int32_t remaining, int32_t max_chunk);
+
 #ifdef __cplusplus
 }
 #endif
