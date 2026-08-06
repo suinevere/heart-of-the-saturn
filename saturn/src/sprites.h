@@ -61,4 +61,26 @@ void draw_sprites();
 int quickload_sprites(FILE *fp);
 int quicksave_sprites(FILE *fp);
 
+/*----------------------
+ | first_sprite / last_sprite / sprite_count
+ | Description: The sprite free list's head, tail and occupancy, defined in
+ |   sprites.c and driven by reset_sprite_list.
+ |
+ |   Declared here rather than in decode.c, which is the only other user,
+ |   because decode.c used to carry its own `extern char first_sprite,
+ |   last_sprite, sprite_count;`. The definitions are int. Nothing can catch
+ |   that across translation units -- the linker matches names, not types --
+ |   and on a little-endian host reading the first byte of a 4-byte int holding
+ |   0..63 happens to give the right answer, so it worked for twenty years.
+ |   On the big-endian SH-2 that first byte is the most significant one, so
+ |   every read returned 0 and every write landed in the wrong byte: sprites
+ |   loaded into slot 0 instead of the free-list head, and sprite_count read as
+ |   0 forever, which made add_sprite take its first-sprite branch every time.
+ |   Declaring them here puts the declaration and the definition in front of
+ |   the same compiler, which makes the mismatch a build error instead of a
+ |   platform-specific behaviour difference.
+ | Author: suinevere
+ ----------------------*/
+extern int first_sprite, last_sprite, sprite_count;
+
 #endif

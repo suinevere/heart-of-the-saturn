@@ -40,7 +40,9 @@ extern unsigned short variables[];
 extern unsigned short auxvars[];
 extern int current_room;
 extern int next_script;
-extern char first_sprite, last_sprite, sprite_count;
+/* first_sprite, last_sprite and sprite_count now come from sprites.h, where
+   the compiler can check them against their definitions -- see the banner
+   there for what the local `extern char` cost on a big-endian target. */
 
 extern short task_pc[64];
 extern short new_task_pc[64];
@@ -152,9 +154,6 @@ void load_sprite(int index, int list_entry)
 	d0 = get_byte(a2++);
 	d1 = d1 - d0;
 	sprites[list_entry].y = d1;
-	printf("ls e=%d i=%d tbl=%08lx a4=%08lx rx=%d ry=%d x=%d y=%d\n",
-		list_entry, index, get_long(0xf904), a4, (int)d2, (int)d3,
-		(int)sprites[list_entry].x, (int)sprites[list_entry].y);
 	LOG(("\n"));
 	LOG(("sprites[%d].x == %d\n", list_entry, sprites[list_entry].x));
 	LOG(("sprites[%d].y == %d\n", list_entry, sprites[list_entry].y));
