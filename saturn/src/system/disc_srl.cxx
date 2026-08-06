@@ -14,16 +14,17 @@
  |   the only reason music survives the whole-file load that follows every
  |   disc_play_track in play_anm.
  |
- |   Heap cost, which is not obvious from anything in this file:
+ |   Heap cost, which is not obvious from anything in this file: there is none.
  |   srl_cd.hpp:441 allocates SectorSize * SectorsToReadAtOnce = 2048 * 5 =
- |   10,240 bytes on the first Read of every SRL::Cd::File and frees it at
- |   close. That is 14.7% of the 69,440-byte HWRAM heap the linker map leaves,
- |   held for the duration of each disc_read_file -- and saturn_compat.cxx's
- |   malloc deliberately refuses to fall back to LWRAM, so a caller holding
- |   59 KB across a read turns it into a NULL rather than a slow read. Nothing
- |   here stacks two open files to make it worse, and it is transient, but any
- |   future allocator sharing this heap has to be sized against what is left
- |   after it, not against the whole.
+ |   10,240 bytes on the first File::Read of every SRL::Cd::File and frees it
+ |   at close; this file no longer calls File::Read, so that buffer is never
+ |   created. ReadSectors hands the caller's destination straight to GFS_Fread
+ |   and allocates nothing. The linker map leaves 64,800 bytes of HWRAM heap
+ |   (__heap_start 0x060b02e0 .. __heap_end 0x060c0000), and
+ |   saturn_compat.cxx's malloc deliberately refuses to fall back to LWRAM, so
+ |   that figure is the entire budget for any future allocator on this heap --
+ |   but it is no longer competing with a 10,240-byte transient that existed
+ |   for exactly as long as a read was in flight.
  |
  |   This file's own static state also comes out of that same HWRAM. Measured
  |   2026-08-04 by building this branch's tip (24f387f) and the commit just
@@ -42,6 +43,13 @@
  |   since they are not this file's own state. Static, not transient, so it
  |   is already subtracted from the 69,440-byte figure above rather than
  |   stacking on it.
+ |
+ |   g_tailSector adds 2,048 bytes on top of that, and frees none of it in
+ |   exchange -- the 10,240 bytes it displaces were heap, not .bss. The trade
+ |   is still strongly positive: those 10,240 bytes came out of the same HWRAM
+ |   the heap figure above is computed from, and came out of it at exactly the
+ |   moment a read was in flight, so peak HWRAM during a read drops by 8,192
+ |   bytes even though total .bss rises.
  | Author: suinevere
  | Dependencies: srl.hpp, disc.h, disc_manifest.h, saturn_compat.h
  ----------------------*/
@@ -50,6 +58,7 @@
 #include "saturn_compat.h"
 
 #include "disc.h"
+#include "discsec.h"
 #include "discfmt.h"
 #include "cdtoc.h"
 #include "cdda_classify.h"
@@ -119,6 +128,33 @@ static bool g_wasPlaying = false;
  | Author: suinevere
  ----------------------*/
 static bool g_musicObserved = false;
+
+/*----------------------
+ | g_tailSector
+ | Description: Where the final, partial sector of a file lands so that only
+ |   the bytes the file actually has reach the caller. A whole-sector read
+ |   straight into the engine's pointer would also write the rest of that
+ |   sector -- for ROOMS7.BIN, 966 bytes of whatever the mastering tool put
+ |   after 160,826 bytes of room data -- into the emulated 68000 map past the
+ |   end of the room. disc.h promises that will not happen, and none of the
+ |   three call sites bounds-checks the pointer it hands in.
+ |
+ |   File-scope static, not a stack array, for three reasons in order of
+ |   weight. The stack cannot absorb it: disc_read_file is reached through
+ |   main -> play_anm -> play_animation -> disc_read_file, and nothing in this
+ |   tree states the SH-2 master stack size -- SGL's convention puts it below
+ |   the 0x06004000 load address sgl.linker:4 gives PRELOADER, which is
+ |   single-digit kilobytes, so a 2 KB frame against an unstated budget is an
+ |   overflow that would present as corruption somewhere else entirely. A
+ |   static is visible: it appears in the map as .bss and comes out of the same
+ |   HWRAM the heap figure above is computed from, so the cost is subtracted
+ |   once and stays subtracted, where a stack frame is invisible to the map and
+ |   gets argued about instead of measured. And uint32_t guarantees the
+ |   alignment: GFS transfers into this buffer, and a char[2048] has no
+ |   alignment contract beyond whatever the compiler happens to give it.
+ | Author: suinevere
+ ----------------------*/
+static uint32_t g_tailSector[DISC_MAX_SECTOR_BYTES / 4];
 
 /*----------------------
  | normalize_name
@@ -486,10 +522,33 @@ int disc_open(const char *cue_path)
  |   overrun past max_size. That bound is not optional: all three callers
  |   (main.c, animation.c, game2bin.c) hand in raw addresses into the
  |   emulated 68000 map with no bounds check of their own, and the map is
- |   512 KB. File::Read copies byte-by-byte into the destination through an
- |   internal sector buffer rather than GFS_Load's sector-rounded
- |   destination write, so it cannot overshoot max_size the way a raw
- |   LoadBytes into a tight buffer could.
+ |   512 KB. That claim used to rest on File::Read, which copied byte-by-byte
+ |   into the destination through an internal sector buffer and so could not
+ |   overshoot. It no longer does, and the guarantee is now this function's own
+ |   to keep: the whole-sector body goes straight into out through one
+ |   ReadSectors -- one GFS_Fread instead of File::Read's forty-three
+ |   five-sector requests, each of which cost about 160 ms of the drive losing
+ |   its place and re-acquiring it -- and the partial final sector goes into
+ |   g_tailSector, out of which exactly discsec_tail_bytes bytes are copied.
+ |   ROOMS7.BIN is the only file that takes that second path, and it is the
+ |   reason the path exists: its last sector carries 1,082 bytes of room data
+ |   and 966 bytes belonging to nobody.
+ |
+ |   Both sector counts derive from Size.Bytes, never from Size.Sectors, and
+ |   that is load-bearing rather than tidy. ReadSectors clamps its buffer size
+ |   to the sectors actually remaining but forwards the unclamped sectorCount
+ |   to GFS_Fread (srl_cd.hpp:515-519), so asking for more sectors than the
+ |   file has hands GFS a count larger than the buffer it was told about.
+ |   Size.Bytes is the one number max_size was compared against, so a split
+ |   derived from it cannot exceed what was bounded; the guard below then
+ |   cross-checks that split against Size.Sectors and Size.LastSectorSize and
+ |   refuses on any disagreement, rather than trusting either pair alone.
+ |
+ |   Neither Seek nor LoadBytes is used. Seek (srl_cd.hpp:538) allocates the
+ |   same 10,240-byte work buffer this change exists to remove. LoadBytes
+ |   (srl_cd.hpp:399) would be one GFS_Load for the whole file, but it closes
+ |   and reopens the handle around the call and GFS_Load's destination write is
+ |   sector-rounded -- precisely the overrun refused above.
  |
  |   Private because it must not be called without the CD-DA bracket around
  |   it; disc_read_file below is the only caller.
@@ -535,7 +594,40 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 		return -1;
 	}
 
-	int32_t got = file.Read(file.Size.Bytes, out);
+	int32_t whole = discsec_whole_sectors(file.Size.Bytes, file.Size.SectorSize);
+	int32_t tail = discsec_tail_bytes(file.Size.Bytes, file.Size.SectorSize);
+
+	if (file.Size.Bytes <= 0 ||
+		file.Size.SectorSize <= 0 ||
+		file.Size.SectorSize > DISC_MAX_SECTOR_BYTES ||
+		whole + (tail != 0 ? 1 : 0) != file.Size.Sectors ||
+		(tail != 0 ? tail : file.Size.SectorSize) != file.Size.LastSectorSize)
+	{
+		printf("disc_read_file: '%s' reports %d bytes / %d sectors / %d per sector / %d last, split says %d + %d\n",
+			resolved, (int)file.Size.Bytes, (int)file.Size.Sectors,
+			(int)file.Size.SectorSize, (int)file.Size.LastSectorSize,
+			(int)whole, (int)tail);
+		file.Close();
+		return -1;
+	}
+
+	int32_t got = 0;
+
+	if (whole > 0)
+	{
+		got = file.ReadSectors(whole, out);
+	}
+
+	if (tail > 0)
+	{
+		int32_t tailGot = file.ReadSectors(1, g_tailSector);
+
+		if (tailGot >= tail)
+		{
+			memcpy((uint8_t *)out + (whole * file.Size.SectorSize), g_tailSector, (size_t)tail);
+			got += tail;
+		}
+	}
 
 	file.Close();
 

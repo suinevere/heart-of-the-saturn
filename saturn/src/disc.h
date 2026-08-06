@@ -87,6 +87,15 @@ int disc_open(const char *cue_path);
  |   failure, matching the `< 0` check every call site already has. Requires
  |   a prior disc_open that returned success and no disc_close since --
  |   called any other time, returns negative without touching *out.
+ |
+ |   max_size bounds the bytes written to out, not the sectors read off the
+ |   disc. A backend is free to transfer whole sectors for speed -- that is
+ |   the difference between one drive request and forty -- but the partial
+ |   final sector of a file carries bytes past the file's end that belong to
+ |   nobody, and those must land somewhere the backend owns rather than in the
+ |   caller's buffer. saturn/src/system/disc_srl.cxx does exactly that. This is
+ |   the non-obvious constraint a third implementer would otherwise discover
+ |   the way the second one nearly did.
  | Author: suinevere
  ----------------------*/
 int disc_read_file(const char *name, void *out, int max_size);
