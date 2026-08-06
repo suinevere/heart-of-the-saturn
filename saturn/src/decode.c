@@ -152,6 +152,9 @@ void load_sprite(int index, int list_entry)
 	d0 = get_byte(a2++);
 	d1 = d1 - d0;
 	sprites[list_entry].y = d1;
+	printf("ls e=%d i=%d tbl=%08lx a4=%08lx rx=%d ry=%d x=%d y=%d\n",
+		list_entry, index, get_long(0xf904), a4, (int)d2, (int)d3,
+		(int)sprites[list_entry].x, (int)sprites[list_entry].y);
 	LOG(("\n"));
 	LOG(("sprites[%d].x == %d\n", list_entry, sprites[list_entry].x));
 	LOG(("sprites[%d].y == %d\n", list_entry, sprites[list_entry].y));
