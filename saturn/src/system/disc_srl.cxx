@@ -19,8 +19,8 @@
  |   10,240 bytes on the first File::Read of every SRL::Cd::File and frees it
  |   at close; this file no longer calls File::Read, so that buffer is never
  |   created. ReadSectors hands the caller's destination straight to GFS_Fread
- |   and allocates nothing. The linker map leaves 64,800 bytes of HWRAM heap
- |   (__heap_start 0x060b02e0 .. __heap_end 0x060c0000), and
+ |   and allocates nothing. The linker map leaves 62,528 bytes of HWRAM heap
+ |   (__heap_start 0x060b0bc0 .. __heap_end 0x060c0000), and
  |   saturn_compat.cxx's malloc deliberately refuses to fall back to LWRAM, so
  |   that figure is the entire budget for any future allocator on this heap --
  |   but it is no longer competing with a 10,240-byte transient that existed
@@ -41,10 +41,11 @@
  |   padding from linking in cdtoc.o and cdda_classify.o, both of which
  |   contribute 0 bytes of their own .bss -- and were not chased further,
  |   since they are not this file's own state. Static, not transient, so it
- |   is already subtracted from the 69,440-byte figure above rather than
+ |   is already subtracted from the 62,528-byte figure above rather than
  |   stacking on it.
  |
- |   g_tailSector adds 2,048 bytes on top of that, and frees none of it in
+ |   g_tailSector adds 2,048 bytes on top of that, taking total .bss to
+ |   583,680 (0x8e800) and this file's own object to 2,469, and frees none of it in
  |   exchange -- the 10,240 bytes it displaces were heap, not .bss. The trade
  |   is still strongly positive: those 10,240 bytes came out of the same HWRAM
  |   the heap figure above is computed from, and came out of it at exactly the
