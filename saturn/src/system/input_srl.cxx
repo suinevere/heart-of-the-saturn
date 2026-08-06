@@ -44,42 +44,50 @@
 /*----------------------
  | pad_probe
  | Description: TEMPORARY instrumentation for the code-entry cursor that will
- |   not move. Prints port 0's raw peripheral record and the resulting key
- |   globals whenever either changes, so one emulator run splits the chain
- |   instead of another theory: a connected flag of 0 means this seam zeroes
- |   every key and nothing downstream can work; an id or data word that never
- |   changes while buttons are pressed means the refresh is not reaching us;
- |   a data word that changes while the key globals do not means the button
- |   mapping is wrong; and both changing while the cursor stays put means the
- |   fault is downstream of this file entirely, in code identical to the host's.
+ |   not move. The pad itself is already cleared: a run on 66ccc31 showed
+ |   conn=1, id=02 and data dropping to fbff on A, so presses reach this file
+ |   correctly. This probe moves one boundary downstream and prints the key
+ |   globals beside the six VM variables update_keys derives from them, which
+ |   are what the script actually reads.
  |
- |   Prints only on change, because the debug layer scrolls and a per-frame
- |   print would bury the answer. Remove once the cause is known.
+ |   That splits the remaining chain: variables that never change while keys do
+ |   mean update_keys or the variable store is at fault, and variables that
+ |   track the keys mean the script is receiving input and the fault is in what
+ |   it does with it or in how the result is drawn -- both of which are code
+ |   identical to the host's, so the cause would have to be data or machine,
+ |   not logic.
+ |
+ |   Values are read before update_keys runs this frame, so they lag the keys
+ |   by one frame; that is irrelevant to whether they change at all. Prints
+ |   only on change, because the debug layer scrolls and a per-frame print
+ |   would bury the answer. Remove once the cause is known.
  | Author: suinevere
  | Globals: key_up, key_down, key_left, key_right, key_a, key_b, key_c
  | Params: N/A
  | Returns: N/A
  ----------------------*/
+extern "C" short get_variable(int var);
+
 static void pad_probe(void)
 {
-	static int lastConn = -1;
-	static int lastId = -1;
-	static int lastData = -1;
 	static int lastKeys = -1;
+	static int lastVars = -1;
 
-	PerDigital *raw = SRL::Input::Management::GetRawData(0);
-	int conn = SRL::Input::Management::IsConnected(0) ? 1 : 0;
 	int keys = (key_up ? 1 : 0) | (key_down ? 2 : 0) | (key_left ? 4 : 0)
 		| (key_right ? 8 : 0) | (key_a ? 16 : 0) | (key_b ? 32 : 0) | (key_c ? 64 : 0);
+	int v252 = get_variable(252);
+	int v251 = get_variable(251);
+	int v229 = get_variable(229);
+	int v253 = get_variable(253);
+	int v254 = get_variable(254);
+	int vars = v252 + (v251 * 7) + (v229 * 53) + (v253 * 401) + (v254 * 3001);
 
-	if (conn != lastConn || (int)raw->id != lastId || (int)raw->data != lastData || keys != lastKeys)
+	if (keys != lastKeys || vars != lastVars)
 	{
-		printf("pad conn=%d id=%02x data=%04x keys=%02x\n",
-			conn, (int)raw->id, (int)raw->data, keys);
-		lastConn = conn;
-		lastId = (int)raw->id;
-		lastData = (int)raw->data;
+		printf("k=%02x 252=%d 251=%d 229=%d 253=%d 254=%d\n",
+			keys, v252, v251, v229, v253, v254);
 		lastKeys = keys;
+		lastVars = vars;
 	}
 }
 
