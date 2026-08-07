@@ -148,6 +148,20 @@ all 256 entries get pinned, so the mapping cannot drift silently.
 **`sfxconv_padded_size(int length)`** — `length < 0x900 ? 0x900 : length`. One line,
 tested, and named so the 0x900 constant appears once.
 
+**`sfxconv_decode_into(int offset, int length, signed char *dst, int dst_size)`** —
+decodes `length` bytes from the map at `offset` through the table into `dst`, then zeros
+`dst[length .. dst_size)`.
+
+This exists so that `vm.h` never appears in `sound_srl.cxx`. If the decode loop lived in
+the `.cxx`, that file would need `get_byte`, and `vm.h` carries no `extern "C"` guard of
+its own — every engine header the Saturn backends include (`disc.h`, `discsec.h`,
+`cdtoc.h`, …) has one, and `vm.h` does not, so including it from C++ would declare
+`get_byte` with C++ linkage and fail the link. Wrapping it at the call site would work
+and would also be the first place in the port where a `.cxx` reaches into the map. The
+boundary is better drawn here: `sfxconv.c` owns every map access, and the whole
+conversion — table, loop and padding together — becomes host-testable rather than just
+the table.
+
 ### `sound_srl.cxx` — the SRL half
 
 **The cache.** Two parallel 256-entry static arrays:
@@ -183,8 +197,8 @@ not.
 3. `index -= 1`; `index` outside `0..255` → return.
 4. Cache miss → `sfxconv_locate`; on failure return. Otherwise
    `saturn_lwram_alloc(sfxconv_padded_size(length))`; on failure return (the host's
-   `malloc` failure path also just returns). Decode `length` bytes through the table,
-   zero the padding, store both arrays.
+   `malloc` failure path also just returns). `sfxconv_decode_into` fills and pads it;
+   store both arrays.
 5. `Pcm::StopSound(channel)` unconditionally, then `MemPcm(...).PlayOnChannel(channel,
    volume >> 1)`.
 
@@ -321,6 +335,9 @@ Cases:
    and length; a `sample_ptr` past `MEMORY_SIZE`, a `ptr` past it, a `ptr + 8 + length`
    that straddles the end, and `length == 0` each return failure and leave the outputs
    untouched.
+4. `sfxconv_decode_into`: a short sample decodes correctly and its padding is zeroed all
+   the way to `dst_size`; a sample already at or above 0x900 is decoded with no padding
+   written past `length`.
 
 `test_vm_memory.c` already links `vm.c` on the host, so building the map for case 3
 needs no new scaffolding.
