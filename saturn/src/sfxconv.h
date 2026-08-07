@@ -61,6 +61,63 @@ extern "C" {
  ----------------------*/
 signed char sfxconv_decode_byte(unsigned char u);
 
+/*----------------------
+ | sfxconv_locate
+ | Description: Walks the three indirections from the sample table to a
+ |   sample's data, bounds-checking every one against MEMORY_SIZE, and reports
+ |   where the bytes start and how many there are. Refuses rather than
+ |   returning a wild offset.
+ |
+ |   src/sound.c does the same walk with no checks at all. It gets away with it
+ |   because the host's map is a 512 KB file-scope static with the rest of .bss
+ |   around it, so a garbage table entry reads nonsense and keeps running. On
+ |   Saturn the map is an saturn_lwram_alloc block with the allocator's own
+ |   bookkeeping beside it and get_byte is an unchecked memory[offset], so the
+ |   same garbage walks off the end of the pool. Everything past the intro is
+ |   unexercised, which is exactly where a table that has not been loaded yet,
+ |   or an index the data does not cover, would first be reached.
+ | Author: suinevere
+ | Globals: N/A
+ | Params: index -- zero-based sample index, the caller having already
+ |   subtracted the script's one-based operand; out_offset -- receives the map
+ |   offset of the first sample byte; out_length -- receives the byte count
+ | Returns: 1 on success with both outputs written; 0 on refusal with both
+ |   outputs left untouched
+ ----------------------*/
+int sfxconv_locate(int index, int *out_offset, int *out_length);
+
+/*----------------------
+ | sfxconv_padded_size
+ | Description: The buffer size a sample of this length needs in order to be
+ |   playable -- its own length, or SFXCONV_MIN_PLAYABLE if that is larger.
+ |   Exists so the 0x900 constant appears at one call site rather than at every
+ |   allocation and every memset.
+ | Author: suinevere
+ | Globals: N/A
+ | Params: length -- decoded sample length in bytes
+ | Returns: Bytes to allocate and to hand slPCMOn
+ ----------------------*/
+int sfxconv_padded_size(int length);
+
+/*----------------------
+ | sfxconv_decode_into
+ | Description: Decodes length bytes from the emulated 68000 map at offset into
+ |   dst, then zeroes dst[length .. dst_size). Zero is silence in signed 8-bit,
+ |   so the padding is inaudible; it exists only because slPCMOn refuses
+ |   anything shorter than SFXCONV_MIN_PLAYABLE.
+ |
+ |   Callers pass dst_size from sfxconv_padded_size and size dst to match. This
+ |   function does not check that dst is that large -- it cannot, and neither
+ |   can the host's equivalent loop.
+ | Author: suinevere
+ | Globals: N/A
+ | Params: offset -- map offset of the first sample byte, from sfxconv_locate;
+ |   length -- byte count, from sfxconv_locate; dst -- destination buffer;
+ |   dst_size -- total bytes in dst, at least length
+ | Returns: N/A
+ ----------------------*/
+void sfxconv_decode_into(int offset, int length, signed char *dst, int dst_size);
+
 #ifdef __cplusplus
 }
 #endif

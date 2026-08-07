@@ -41,3 +41,90 @@ signed char sfxconv_decode_byte(unsigned char u)
 {
 	return g_decode[u];
 }
+
+/*----------------------
+ | in_map
+ | Description: True when a half-open byte range [offset, offset + span) lies
+ |   wholly inside the emulated 68000 map. Written as one predicate rather than
+ |   inline comparisons because sfxconv_locate applies it four times and a
+ |   sign slip in any one of them is the whole bug it exists to prevent.
+ | Author: suinevere
+ | Globals: N/A
+ | Params: offset -- start of the range; span -- length of the range in bytes
+ | Returns: 1 when the range fits, 0 otherwise
+ ----------------------*/
+static int in_map(long offset, long span)
+{
+	if (offset < 0 || span < 0)
+	{
+		return 0;
+	}
+
+	if (offset > (long)MEMORY_SIZE - span)
+	{
+		return 0;
+	}
+
+	return 1;
+}
+
+int sfxconv_locate(int index, int *out_offset, int *out_length)
+{
+	long table;
+	long entry;
+	long length;
+	long data;
+
+	if (index < 0 || out_offset == 0 || out_length == 0)
+	{
+		return 0;
+	}
+
+	table = (long)get_long(0xf90c);
+	if (!in_map(table, (long)index * 4 + 4))
+	{
+		return 0;
+	}
+
+	entry = (long)get_long((int)(table + (long)index * 4));
+	if (!in_map(entry, 8))
+	{
+		return 0;
+	}
+
+	length = (long)get_long((int)entry);
+	data = entry + 8;
+	if (length <= 0 || !in_map(data, length))
+	{
+		return 0;
+	}
+
+	*out_offset = (int)data;
+	*out_length = (int)length;
+	return 1;
+}
+
+int sfxconv_padded_size(int length)
+{
+	if (length < SFXCONV_MIN_PLAYABLE)
+	{
+		return SFXCONV_MIN_PLAYABLE;
+	}
+
+	return length;
+}
+
+void sfxconv_decode_into(int offset, int length, signed char *dst, int dst_size)
+{
+	int i;
+
+	for (i = 0; i < length; i++)
+	{
+		dst[i] = g_decode[get_byte(offset + i)];
+	}
+
+	for (; i < dst_size; i++)
+	{
+		dst[i] = 0;
+	}
+}
