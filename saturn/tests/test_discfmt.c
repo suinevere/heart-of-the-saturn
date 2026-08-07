@@ -109,20 +109,26 @@ static void test_iso_name_eq(void)
 
 static void test_cue_track_for_music(void)
 {
-    /* The disc has 41 audio tracks, TRACK 02 through TRACK 42, and the engine
-       indexes music 0..40. 41 onto 41, in order. */
-    CHECK_EQ(discfmt_cue_track_for_music(0),  2);
-    CHECK_EQ(discfmt_cue_track_for_music(1),  3);
-    CHECK_EQ(discfmt_cue_track_for_music(31), 33);  /* INTRO1.BIN's track */
-    CHECK_EQ(discfmt_cue_track_for_music(35), 37);  /* MAKE2MB.BIN's track */
-    CHECK_EQ(discfmt_cue_track_for_music(40), 42);  /* END4.BIN's track */
+    /* The disc has 41 audio tracks, TRACK 02 through TRACK 42, reached from
+       engine indices 1..41. The index already counts the data track. */
+    CHECK_EQ(discfmt_cue_track_for_music(1),  2);
+    CHECK_EQ(discfmt_cue_track_for_music(2),  3);
+    CHECK_EQ(discfmt_cue_track_for_music(41), 42);
 
-    /* The whole point. The deleted music.c built its filename as track + 1,
-       because the mp3 rip numbered the 41 AUDIO tracks 01..41 -- audio track 1
-       is disc track 2. Reading that as a cue-track formula aims engine index 0
-       at TRACK 01, which is the DATA track: noise or a hang on hardware, and
-       often silence in an emulator. Nothing may ever return 1. */
-    for (int i = 0; i <= 40; i++) {
+    /* anm_files' three intro entries, pinned against the game itself: the
+       intro plays cue 32, then 33, then 34. Getting this wrong is not subtle
+       to a listener and was not caught by any amount of reasoning about how
+       the deleted music.c numbered its mp3 rip. */
+    CHECK_EQ(discfmt_cue_track_for_music(31), 32);  /* INTRO1.BIN */
+    CHECK_EQ(discfmt_cue_track_for_music(32), 33);  /* INTRO2.BIN */
+    CHECK_EQ(discfmt_cue_track_for_music(33), 34);  /* INTRO3.BIN */
+
+    /* TRACK 01 is the DATA track: noise or a hang on hardware, and often just
+       silence in an emulator, so it survives casual testing. Nothing may ever
+       return 1 -- index 0 is refused rather than mapped onto it. */
+    CHECK_EQ(discfmt_cue_track_for_music(0), 0);
+
+    for (int i = 1; i <= 41; i++) {
         CHECK(discfmt_cue_track_for_music(i) >= 2);
         CHECK(discfmt_cue_track_for_music(i) <= 42);
     }
@@ -130,7 +136,7 @@ static void test_cue_track_for_music(void)
     /* Out of range is refused rather than clamped: a bytecode operand that
        lands here is a bug worth seeing, not one worth papering over. */
     CHECK_EQ(discfmt_cue_track_for_music(-1), 0);
-    CHECK_EQ(discfmt_cue_track_for_music(41), 0);
+    CHECK_EQ(discfmt_cue_track_for_music(42), 0);
 }
 
 /*----------------------

@@ -67,17 +67,27 @@ int discfmt_iso_name_eq(const char *iso_name, uint8_t iso_len, const char *want)
  | discfmt_cue_track_for_music
  | Description: Maps the engine's music index onto a cue track number.
  |
- |   cue_track = engine_index + 2. The disc carries 41 audio tracks, TRACK 02
- |   through TRACK 42, and the engine indexes music 0..40.
+ |   cue_track = engine_index + 1. Corrected 2026-08-07 against the game:
+ |   Suinevere identified the intro playing one track too high, and the intro's
+ |   three animations are cue 32, 33 and 34 against anm_files' engine indices
+ |   31, 32 and 33.
  |
- |   The +2 is the whole reason this is a function. The deleted music.c built
- |   its filename as "%02d" of track + 1, but that numbered the mp3 RIP, which
- |   numbered the 41 audio tracks 01..41 -- audio track 1 being disc track 2.
- |   Carrying that +1 over as a cue-track formula aims engine index 0 at
- |   TRACK 01, the DATA track. On hardware that is noise or a hang; in an
- |   emulator it is often just silence, so it survives casual testing.
+ |   This was +2 until then, on the reasoning that the deleted music.c built
+ |   its filename as "%02d" of track + 1 and that this numbered the mp3 rip
+ |   01..41, audio track 1 being disc track 2. That inferred an extra step the
+ |   engine's index does not take: the index already counts from the data
+ |   track, so decode.c's script value V reaches cue track V directly, which is
+ |   the relationship the disc is actually mastered around. The disc itself was
+ |   verified innocent first -- every saturn/cd/music/trackNN.wav is byte-for-
+ |   byte the rip's (Track NN).bin plus a 44-byte header, and cd/music/tracklist
+ |   lays them down in that order -- so the fault was here and only here.
+ |
+ |   Index 0 is refused rather than returned as TRACK 01, the DATA track. On
+ |   hardware playing that is noise or a hang; in an emulator it is often just
+ |   silence, so it survives casual testing. Refusing keeps the data track
+ |   unreachable by construction rather than by a caller remembering to check.
  | Author: suinevere
- | Params: engine_index -- 0..40. Returns 0 (an invalid track) if out of range.
+ | Params: engine_index -- 1..41. Returns 0 (an invalid track) if out of range.
  ----------------------*/
 int discfmt_cue_track_for_music(int engine_index);
 

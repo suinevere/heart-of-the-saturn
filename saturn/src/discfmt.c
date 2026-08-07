@@ -14,8 +14,8 @@
 #define DISCFMT_USER_SECTOR  2048
 #define DISCFMT_SYNC_HEADER  16
 
-#define DISCFMT_MUSIC_FIRST_TRACK 2   /* TRACK 01 is data */
-#define DISCFMT_MUSIC_MAX_INDEX   40  /* 41 audio tracks, 02..42 */
+#define DISCFMT_MUSIC_FIRST_TRACK 1   /* engine index already counts the data track */
+#define DISCFMT_MUSIC_MAX_INDEX   41  /* cue 02..42 reached from engine 1..41 */
 
 uint32_t discfmt_mode1_user_offset(uint32_t lba)
 {
@@ -76,7 +76,7 @@ int discfmt_iso_name_eq(const char *iso_name, uint8_t iso_len, const char *want)
 
 int discfmt_cue_track_for_music(int engine_index)
 {
-    if (engine_index < 0 || engine_index > DISCFMT_MUSIC_MAX_INDEX)
+    if (engine_index < 1 || engine_index > DISCFMT_MUSIC_MAX_INDEX)
     {
         return 0;
     }
