@@ -84,7 +84,7 @@ int discfmt_iso_name_eq(const char *iso_name, uint8_t iso_len, const char *want)
  |
  |   Separately, and not to be confused with the relationship above: decode.c
  |   subtracts 1 from its raw script operand before it ever reaches
- |   engine_index (decode.c:1894, :1901), so a script operand V produces
+ |   engine_index (decode.c:1891, :1898), so a script operand V produces
  |   engine_index V-1, which this function then maps to cue (V-1)+1 = V. The
  |   operand happens to equal the cue number, but only as the composition of
  |   two separate, independently-motivated offsets in two different files --

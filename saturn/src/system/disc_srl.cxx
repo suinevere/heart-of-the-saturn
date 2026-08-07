@@ -757,7 +757,7 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 	{
 		maxChunk = DISC_MAX_REQUEST_SECTORS;
 	}
-	else if (!smallCdbufWarned)
+	else if (maxChunk < DISC_MAX_REQUEST_SECTORS && !smallCdbufWarned)
 	{
 		printf("cdbuf %d < %d\n", (int)maxChunk, DISC_MAX_REQUEST_SECTORS);
 		smallCdbufWarned = true;
