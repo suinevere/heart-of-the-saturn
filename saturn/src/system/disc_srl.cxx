@@ -276,7 +276,40 @@ static int32_t g_probeAlign = 0;
  ----------------------*/
 #define DISC_BOUNCE_SECTORS 16
 
-static uint32_t g_bounce[(DISC_BOUNCE_SECTORS * DISC_MAX_SECTOR_BYTES) / 4];
+static uint32_t *g_bounce = nullptr;
+
+/*----------------------
+ | bounce_acquire
+ | Description: Hands back the aligned bounce, allocating it from LWRAM on
+ |   first use. Not a .bss array: a 32 KB static took the HWRAM heap from
+ |   62,528 bytes to 29,344 and the build stopped producing any diagnostic
+ |   output at all -- not even the boot stamp -- because SRL's own bring-up
+ |   allocates from that heap before the debug layer exists. LWRAM is where
+ |   bulk blobs belong anyway, and the VM map and GAME2.BIN already live there.
+ |   The four extra bytes and the round-up make the alignment this buffer
+ |   exists to provide independent of whatever saturn_lwram_alloc returns.
+ |   A failed allocation is not fatal: g_tailSector is already aligned, so the
+ |   caller falls back to one sector per request -- slow, but correct, and it
+ |   keeps a memory shortage from turning into a hang.
+ | Author: suinevere
+ | Globals: g_bounce
+ | Params: N/A
+ | Returns: the buffer, or nullptr if LWRAM had nothing to give
+ ----------------------*/
+static uint32_t *bounce_acquire(void)
+{
+	if (g_bounce == nullptr)
+	{
+		void *raw = saturn_lwram_alloc(DISC_BOUNCE_SECTORS * DISC_MAX_SECTOR_BYTES + 4);
+
+		if (raw != nullptr)
+		{
+			g_bounce = (uint32_t *)(((uintptr_t)raw + 3u) & ~(uintptr_t)3u);
+		}
+	}
+
+	return g_bounce;
+}
 
 static void cdda_probe_wait(const char *where, int cue)
 {
@@ -690,9 +723,21 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 		maxChunk = DISC_MAX_REQUEST_SECTORS;
 	}
 
-	if (g_probeAlign != 0 && maxChunk > DISC_BOUNCE_SECTORS)
+	uint32_t *bounce = nullptr;
+
+	if (g_probeAlign != 0)
 	{
-		maxChunk = DISC_BOUNCE_SECTORS;
+		bounce = bounce_acquire();
+
+		if (bounce == nullptr)
+		{
+			bounce = g_tailSector;
+			maxChunk = 1;
+		}
+		else if (maxChunk > DISC_BOUNCE_SECTORS)
+		{
+			maxChunk = DISC_BOUNCE_SECTORS;
+		}
 	}
 
 	printf("go %s a%d b%d w%d\n", resolved, (int)g_probeAlign,
@@ -712,13 +757,13 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 
 		printf(" req %d of %d\n", (int)take, (int)remaining);
 
-		if (g_probeAlign != 0)
+		if (bounce != nullptr)
 		{
-			chunkGot = file.ReadSectors(take, g_bounce);
+			chunkGot = file.ReadSectors(take, bounce);
 
 			if (chunkGot == take * file.Size.SectorSize)
 			{
-				memcpy(dest, g_bounce, (size_t)chunkGot);
+				memcpy(dest, bounce, (size_t)chunkGot);
 			}
 		}
 		else
