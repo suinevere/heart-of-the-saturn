@@ -208,18 +208,23 @@ The `clean` is mandatory, not hygiene — Task 1 ran a Saturn build and left SH-
 
 - [ ] **Step 3: Collect sizes across rooms**
 
+Run from the repository root, not from `saturn/` — the disc data the host backend opens lives at `<repo>/cd/`, and `alien.exe` started from `saturn/` panics before it reaches a script.
+
 ```bash
-cd saturn
-for r in 1 2 3 4 5 6 8 9; do
+for r in 1 2 3 4 5 6 8; do
   echo "=== room $r ==="
   SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy timeout 30 \
-    ./src/alien.exe --debug --room $r 2>&1 >/dev/null | grep PROBE | sort -u
+    ./saturn/src/alien.exe --debug --room $r 2>&1 >/dev/null | grep PROBE | sort -u
 done
 ```
+
+Room 9 is not in the list: `load_room` (`saturn/src/main.c:113`) builds its filename by substituting a single digit into `ROOMS0.BIN`, and `ROOMS9.BIN` is not on the disc, so the index panics rather than measuring anything.
 
 `2>&1 >/dev/null` keeps stderr and discards the opcode trace on stdout. `sort -u` collapses repeats, because a room replays the same sample many times and the cache stores it once — the sum of the *unique* padded sizes is the number the budget cares about.
 
 Expected: some rooms print `PROBE` lines. A room that prints none either uses no samples or was not driven far enough by the 30-second timeout; note which, and do not report zero as a measurement.
+
+Distinguishing the two is worth the extra grep: `sound.c`'s `play_sample` opens with `LOG(("playing sample %d, volume %d, channel %d\n", ...))`, which fires on every call including cache hits. Zero `playing sample` lines means the opcode was never reached — an unmeasured room. `playing sample` lines with no `PROBE` lines would mean every sample was already cached, which is a measured room whose figure you already have.
 
 - [ ] **Step 4: Record the worst room's total**
 
@@ -1220,7 +1225,14 @@ Then update the file banner's memory paragraph to describe HWRAM and the cap rat
 
 Silent exhaustion is the spec's deliberate choice (design risk 3) and matches the host, whose own `malloc` failure path just returns. It stops being acceptable if the measurement shows a real room close to the ceiling, because then the first person to hit it gets a missing sound effect with nothing to go on.
 
-If Task 2's worst room exceeded 65,916 bytes — the 81,916-byte budget less 16 KB of margin — add a one-shot warning on the first allocation failure, following the pattern `disc_srl.cxx` already uses for the small-`cdbuf` case: a `static int g_warned;` guarding a single `printf`, so a room that drops twenty samples paints one line rather than twenty.
+Add the warning if **either** holds:
+
+- Task 2's worst room exceeded 65,916 bytes — the 81,916-byte budget less 16 KB of margin; **or**
+- Task 2's sweep could not drive every room to fire the SFX opcode, so its worst figure is a lower bound rather than a maximum.
+
+The second clause exists because the first, written alone, assumed a full sweep. A headless run with no input cannot reach most rooms, and a rule that reads a lower bound as if it were a maximum is exactly the kind of measurement error this sub-project set out to avoid. A number from a partial sweep does not license silence.
+
+The warning is a one-shot on the first allocation failure, following the pattern `disc_srl.cxx` already uses for the small-`cdbuf` case: a `static int g_warned;` guarding a single `printf`, so a room that drops twenty samples paints one line rather than twenty.
 
 ```c
 		if (buffer == 0)
@@ -1235,9 +1247,9 @@ If Task 2's worst room exceeded 65,916 bytes — the 81,916-byte budget less 16 
 		}
 ```
 
-`printf` on Saturn goes to SRL's debug text layer and will sit on top of the game — which is the point, and why this is conditional on the measurement rather than always on. Add a banner for `g_warned` naming that trade-off.
+`printf` on Saturn goes to SRL's debug text layer and will sit on top of the game. That cost is only ever paid in the failure case — by the time the warning paints, a sound effect has already gone missing, and a visible line beats a silent gap with nothing to diagnose from.
 
-If the worst room came in comfortably under, skip this step and say so in Task 7's Step 2.
+If neither clause holds, skip this step and say so in Task 7's Step 2.
 
 - [ ] **Step 8: Commit**
 
