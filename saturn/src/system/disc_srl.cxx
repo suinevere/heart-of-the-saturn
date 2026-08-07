@@ -225,35 +225,16 @@ static bool normalize_name(const char *name, char *out, int32_t outSize)
 extern "C" {
 
 /*----------------------
- | cdda_probe_wait
- | Description: TEMPORARY MEASUREMENT PROBE -- remove before this lands.
- |   Spins on CDC_GetCurStat until the drive reports CDC_ST_PLAY or the cap
- |   expires, then prints how long that took. The vblank handler advances
- |   platform_ticks' counter from an interrupt, so this loop does not need
- |   SRL::Core::Synchronize to make the clock move. Answers the only question
- |   the code cannot: how much of the audible gap is the drive acquiring the
- |   track, and how much is anything else.
- | Author: suinevere
- | Globals: N/A
- | Params: where -- call site tag; cue -- cue track commanded
- | Returns: N/A
- ----------------------*/
-#define CDDA_PROBE_CAP_MS 3000
-
-/*----------------------
- | g_probeMaxChunk / g_probeRequests
- | Description: TEMPORARY MEASUREMENT PROBE -- removed with the rest of the
- |   probe. What the last body read actually did: the chunk ceiling the drive
- |   reported through GFS_GetNumCdbuf after clamping, and how many requests it
- |   took. Reported so the partition size is read off the hardware rather than
- |   inferred from GAME2.BIN's 200 sectors having been the largest read that
- |   ever returned.
+ | CDDA_SOUND_CAP_MS
+ | Description: How long cdda_wait_for_sound will hold a caller before giving
+ |   up. Three seconds because the measured wait is one to three: an animation
+ |   that starts on time and silent is the bug this exists to prevent, and one
+ |   that starts three seconds late is worse. If the analysis path ever stops
+ |   reporting level the cost is a pause per read rather than a lockup, which
+ |   is the only reason a cap is acceptable at all.
  | Author: suinevere
  ----------------------*/
-static int32_t g_probeMaxChunk = 0;
-static int32_t g_probeRequests = 0;
-static int32_t g_probeCdbuf = 0;
-static int32_t g_probeAlign = 0;
+#define CDDA_SOUND_CAP_MS 3000
 
 /*----------------------
  | DISC_BOUNCE_SECTORS / g_bounce
@@ -311,37 +292,42 @@ static uint32_t *bounce_acquire(void)
 	return g_bounce;
 }
 
-static void cdda_probe_wait(const char *where, int cue, bool wait)
+/*----------------------
+ | cdda_wait_for_sound
+ | Description: Holds the caller until the drive is measurably producing CD-DA,
+ |   so an animation and its music start together. The obvious signal is the
+ |   wrong one: CDC_ST_PLAY is raised before any sound exists, and a build that
+ |   gated on it still started the intro visibly early. SND_GetAnlTlVl, through
+ |   Cdda::Analysis, reports actual output level and is updated every 16 ms.
+ |
+ |   Called only from cdda_restore, never from disc_play_track. Blocking in
+ |   disc_play_track was measured distorting the game loop: main.c's rest()
+ |   compares against a stale last_tick afterwards, so the game sprints to
+ |   catch up and then settles, which is visible as a speed wobble.
+ |
+ |   The vblank handler advances platform_ticks' counter from an interrupt, so
+ |   this loop does not need SRL::Core::Synchronize to make the clock move.
+ | Author: suinevere
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void cdda_wait_for_sound(void)
 {
 	unsigned int t0 = platform_ticks();
-	unsigned int tPlay = 0;
-	unsigned int tSound = 0;
-	CdcStat stat;
 
 	for (;;)
 	{
 		SRL::Sound::Cdda::Analysis::TotalVolume vol =
 			SRL::Sound::Cdda::Analysis::GetTotalVolume();
-		unsigned int now = platform_ticks() - t0;
 
-		if (tPlay == 0)
+		if (vol.LeftChannel != 0 || vol.RightChannel != 0)
 		{
-			CDC_GetCurStat(&stat);
-
-			if (CDC_GET_STC(&stat) == CDC_ST_PLAY)
-			{
-				tPlay = now;
-			}
+			return;
 		}
 
-		if (tSound == 0 && (vol.LeftChannel != 0 || vol.RightChannel != 0))
+		if (platform_ticks() - t0 >= CDDA_SOUND_CAP_MS)
 		{
-			tSound = now;
-		}
-
-		if (!wait || tSound != 0 || now >= CDDA_PROBE_CAP_MS)
-		{
-			printf("cdda %s c%d p%u a%u\n", where, cue, tPlay, tSound);
 			return;
 		}
 	}
@@ -488,7 +474,7 @@ static void cdda_restore(void)
 		CDC_PLY_EFAS(&ply) = end - g_pauseFad;
 		CDC_PLY_PMODE(&ply) = CDC_PM_DFL;
 		CDC_CdPlay(&ply);
-		cdda_probe_wait("restore/resume", cue, true);
+		cdda_wait_for_sound();
 		return;
 	}
 
@@ -502,7 +488,7 @@ static void cdda_restore(void)
 		}
 
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
-		cdda_probe_wait("restore/restart", cue, true);
+		cdda_wait_for_sound();
 		return;
 	}
 }
@@ -731,8 +717,7 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 	int32_t maxChunk = GFS_GetNumCdbuf(file.Handle);
 	int32_t remaining = whole;
 
-	g_probeCdbuf = maxChunk;
-	g_probeAlign = (int32_t)((uintptr_t)out & 3u);
+	bool misaligned = ((uintptr_t)out & 3u) != 0;
 
 	if (maxChunk <= 0 || maxChunk > DISC_MAX_REQUEST_SECTORS)
 	{
@@ -741,7 +726,7 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 
 	uint32_t *bounce = nullptr;
 
-	if (g_probeAlign != 0)
+	if (misaligned)
 	{
 		bounce = bounce_acquire();
 
@@ -756,9 +741,6 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 		}
 	}
 
-	printf("go %s a%d b%d w%d\n", resolved, (int)g_probeAlign,
-		(int)g_probeCdbuf, (int)whole);
-
 	while (remaining > 0)
 	{
 		int32_t take = discsec_request_sectors(remaining, maxChunk);
@@ -770,8 +752,6 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 		}
 
 		uint8_t *dest = (uint8_t *)out + (whole - remaining) * file.Size.SectorSize;
-
-		printf(" req %d of %d\n", (int)take, (int)remaining);
 
 		if (bounce != nullptr)
 		{
@@ -794,10 +774,7 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 
 		got += chunkGot;
 		remaining -= take;
-		g_probeRequests++;
 	}
-
-	g_probeMaxChunk = maxChunk;
 
 	if (remaining == 0 && tail > 0)
 	{
@@ -841,16 +818,9 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 int disc_read_file(const char *name, void *out, int max_size)
 {
 	int result;
-	unsigned int t0;
-	unsigned int t1;
 
 	cdda_suspend();
-	g_probeRequests = 0;
-	t0 = platform_ticks();
 	result = disc_read_file_body(name, out, max_size);
-	t1 = platform_ticks();
-	printf("rd %s %u ms c%d n%d\n",
-		name, t1 - t0, (int)g_probeMaxChunk, (int)g_probeRequests);
 	cdda_restore();
 
 	return result;
@@ -939,7 +909,6 @@ void disc_play_track(int engine_index, int loop)
 	}
 
 	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
-	cdda_probe_wait("play_track", cue, false);
 	g_musicTrack = engine_index;
 	g_musicLoop = (loop != 0);
 	g_musicObserved = false;
