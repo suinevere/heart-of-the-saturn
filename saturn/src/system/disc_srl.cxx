@@ -311,40 +311,26 @@ static uint32_t *bounce_acquire(void)
 	return g_bounce;
 }
 
-static void cdda_probe_wait(const char *where, int cue, bool wait)
+static void cdda_probe_wait(const char *where, int cue)
 {
 	unsigned int t0 = platform_ticks();
-	unsigned int tPlay = 0;
-	unsigned int tSound = 0;
+	unsigned int waited;
 	CdcStat stat;
+	int state;
 
 	for (;;)
 	{
-		SRL::Sound::Cdda::Analysis::TotalVolume vol =
-			SRL::Sound::Cdda::Analysis::GetTotalVolume();
-		unsigned int now = platform_ticks() - t0;
+		CDC_GetCurStat(&stat);
+		state = CDC_GET_STC(&stat);
+		waited = platform_ticks() - t0;
 
-		if (tPlay == 0)
+		if (state == CDC_ST_PLAY || waited >= CDDA_PROBE_CAP_MS)
 		{
-			CDC_GetCurStat(&stat);
-
-			if (CDC_GET_STC(&stat) == CDC_ST_PLAY)
-			{
-				tPlay = now;
-			}
-		}
-
-		if (tSound == 0 && (vol.LeftChannel != 0 || vol.RightChannel != 0))
-		{
-			tSound = now;
-		}
-
-		if (!wait || tSound != 0 || now >= CDDA_PROBE_CAP_MS)
-		{
-			printf("cdda %s c%d p%u a%u\n", where, cue, tPlay, tSound);
-			return;
+			break;
 		}
 	}
+
+	printf("cdda %s c%d %u ms s%d\n", where, cue, waited, state);
 }
 
 /*----------------------
@@ -488,7 +474,7 @@ static void cdda_restore(void)
 		CDC_PLY_EFAS(&ply) = end - g_pauseFad;
 		CDC_PLY_PMODE(&ply) = CDC_PM_DFL;
 		CDC_CdPlay(&ply);
-		cdda_probe_wait("restore/resume", cue, true);
+		cdda_probe_wait("restore/resume", cue);
 		return;
 	}
 
@@ -502,7 +488,7 @@ static void cdda_restore(void)
 		}
 
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
-		cdda_probe_wait("restore/restart", cue, true);
+		cdda_probe_wait("restore/restart", cue);
 		return;
 	}
 }
@@ -593,8 +579,6 @@ int disc_open(const char *cue_path)
 	}
 
 	printf("build %s\n", __TIME__);
-
-	SRL::Sound::Cdda::Analysis::Start();
 
 	CDC_TgetToc(g_toc);
 	g_maxAudioTrack = cdtoc_max_audio_track(g_toc);
@@ -939,7 +923,7 @@ void disc_play_track(int engine_index, int loop)
 	}
 
 	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
-	cdda_probe_wait("play_track", cue, false);
+	cdda_probe_wait("play_track", cue);
 	g_musicTrack = engine_index;
 	g_musicLoop = (loop != 0);
 	g_musicObserved = false;
