@@ -272,8 +272,7 @@ static void cdda_probe_wait(const char *where, int cue)
 		}
 	}
 
-	printf("probe %s: cue %d play after %u ms (state %d, fad %d)\n",
-		where, cue, waited, state, (int)CDC_STAT_FAD(&stat));
+	printf("cdda %s c%d %u ms s%d\n", where, cue, waited, state);
 }
 
 /*----------------------
@@ -521,6 +520,8 @@ int disc_open(const char *cue_path)
 		return 0;
 	}
 
+	printf("build %s\n", __TIME__);
+
 	CDC_TgetToc(g_toc);
 	g_maxAudioTrack = cdtoc_max_audio_track(g_toc);
 	printf("disc_open: highest audio track %d\n", g_maxAudioTrack);
@@ -643,8 +644,9 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 		whole + (tail != 0 ? 1 : 0) != file.Size.Sectors ||
 		(tail != 0 ? tail : file.Size.SectorSize) != file.Size.LastSectorSize)
 	{
-		printf("disc_read_file: '%s' reports %d bytes / %d sectors / %d per sector / %d last, split says %d + %d\n",
-			resolved, (int)file.Size.Bytes, (int)file.Size.Sectors,
+		printf("split bad %s\n", resolved);
+		printf(" b%d s%d ss%d ls%d w%d t%d\n",
+			(int)file.Size.Bytes, (int)file.Size.Sectors,
 			(int)file.Size.SectorSize, (int)file.Size.LastSectorSize,
 			(int)whole, (int)tail);
 		file.Close();
@@ -734,7 +736,7 @@ int disc_read_file(const char *name, void *out, int max_size)
 	t0 = platform_ticks();
 	result = disc_read_file_body(name, out, max_size);
 	t1 = platform_ticks();
-	printf("probe read: '%s' took %u ms (chunk %d, %d requests)\n",
+	printf("rd %s %u ms c%d n%d\n",
 		name, t1 - t0, (int)g_probeMaxChunk, (int)g_probeRequests);
 	cdda_restore();
 
