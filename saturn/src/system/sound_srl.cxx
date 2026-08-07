@@ -14,7 +14,7 @@
  |   offers exactly four PCM channels against the engine's four, so `channel`
  |   maps straight through with no allocation policy.
  |
- |   Two things this file does that the host does not:
+ |   Three things this file does that the host does not:
  |
  |   It stops a channel before playing on it. SRL's PlayOnChannel opens with
  |   `if (!slPCMStat(...))` and refuses a busy channel; the host's
@@ -30,6 +30,14 @@
  |   cache holds converted copies rather than pointers into the map. A design
  |   that played in place would have had a live defect at that call site.
  |
+ |   It honours volume on every play, where the host ignores it on cached
+ |   replays. sound.c bakes volume into the Mix_Chunk when a sample is first
+ |   converted and its cached path replays that chunk without consulting the
+ |   volume argument again; that is an artifact of how Mix_Chunk carries its
+ |   own volume, not a design decision, so this file applies volume fresh on
+ |   every call instead of inheriting it -- ignoring a volume the script
+ |   explicitly asked for would be an audible defect.
+ |
  |   Where the memory comes from: saturn_lwram_alloc, never malloc.
  |   disc_srl.cxx measured the HWRAM heap at 62,528 bytes and
  |   saturn_compat.cxx's malloc deliberately refuses to fall back to LWRAM.
@@ -38,13 +46,13 @@
  |   so deliberately: a bounded, per-room, wholly-freed cache is a better claim
  |   on that remainder than an unbounded heap fallback would have been.
  |
- |   Allocation failure is not licensed to fail silently forever: Task 2's
- |   sweep of the eight rooms could only drive an SFX opcode in three of them,
- |   and even those figures are lower bounds because their runs stalled on
- |   input gates rather than completing. With no measured ceiling anywhere,
- |   the first allocation failure paints a one-line warning (see g_warned
- |   below) so the first room to actually exhaust the pool leaves something to
- |   diagnose from rather than a silent missing sound effect.
+ |   Allocation failure is not licensed to fail silently forever: of Task 2's
+ |   seven valid room attempts, only two produced any probe data at all, and
+ |   even those two figures are lower bounds rather than maxima. With no
+ |   measured ceiling anywhere, the first allocation failure paints a one-line
+ |   warning (see g_warned below) so the first room to actually exhaust the
+ |   pool leaves something to diagnose from rather than a silent missing sound
+ |   effect.
  |
  |   sound_init and sound_done are still not defined here. Nothing on Saturn
  |   calls either. sound_init would zero a table the C runtime already zeroes,
@@ -68,16 +76,24 @@
  |   four; SRL fixes its side at four in srl_sound.hpp:395 and sound.h's
  |   play_sample documents the engine's channel argument as 0..3.
  | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
  ----------------------*/
 #define SFX_CHANNELS 4
 
 /*----------------------
  | SFX_CACHE_SLOTS
  | Description: Cache entries, one per sample index. The script's operand comes
- |   from next_pc(), a single byte, and play_sample subtracts one from it, so
- |   254 would do; 256 costs 2 KB of .bss either way once alignment is counted
- |   and removes the need to reason about the bound twice.
+ |   from next_pc(), a single byte, so the maximum operand is 255 and
+ |   play_sample's decrement makes the maximum index 254, needing 255 entries;
+ |   256 is used because it removes the need to reason about the bound twice.
  | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
  ----------------------*/
 #define SFX_CACHE_SLOTS 256
 
@@ -99,6 +115,10 @@ namespace
 	 |   also why IPcmFile's empty non-virtual destructor is correct here and
 	 |   would be a bug in an owning subclass.
 	 | Author: suinevere
+	 | Dependencies: N/A
+	 | Globals: N/A
+	 | Params: N/A
+	 | Returns: N/A
 	 ----------------------*/
 	class MemPcm : public SRL::Sound::Pcm::IPcmFile
 	{
@@ -135,9 +155,13 @@ namespace
  |   whenever that was below SFXCONV_MIN_PLAYABLE.
  |
  |   2,048 bytes of .bss, which is HWRAM. Recorded here because disc_srl.cxx
- |   tracks this project's .bss to the byte and the next person measuring it
- |   should find these accounted for rather than have to chase them.
+ |   tracks this project's .bss to the byte; g_warned below adds the other 4
+ |   bytes of this file's .bss contribution.
  | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
  ----------------------*/
 static signed char *g_sampleData[SFX_CACHE_SLOTS];
 static unsigned long g_sampleSize[SFX_CACHE_SLOTS];
@@ -146,8 +170,14 @@ static unsigned long g_sampleSize[SFX_CACHE_SLOTS];
  | g_warned
  | Description: One-shot latch on the LWRAM-exhaustion warning in play_sample.
  |   Reset in sound_flush_cache so a later room can warn again -- flushing
- |   frees the whole pool back, so a fresh exhaustion there is new information.
+ |   frees the whole cache back, not the LWRAM pool itself, so a fresh
+ |   exhaustion there is new information. Adds 4 bytes of .bss beyond
+ |   g_sampleData / g_sampleSize's 2,048.
  | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
  ----------------------*/
 static int g_warned;
 
@@ -160,10 +190,13 @@ extern "C" {
  |   stop_all_channels does and the only way a script silences anything.
  |   Otherwise the index is one-based and is decremented into the cache.
  |
- |   Failure is silent at every step except one: a refused location and an
- |   out-of-range channel say nothing, matching src/sound.c's one silent
- |   failure path, but the first LWRAM allocation failure since the last flush
- |   paints a one-line warning -- see g_warned's banner for why.
+ |   sound.c has exactly one failure path -- allocation failure -- and it is
+ |   not silent: it calls fprintf(stderr, ...). That is the one path with a
+ |   host counterpart, and it is the one path here that also prints (see
+ |   g_warned's banner for why). The other two failure paths -- a refused
+ |   location and an out-of-range channel -- have no host counterpart at all,
+ |   because the host has no bounds checks that can fail, and stay silent
+ |   here.
  | Author: suinevere
  | Globals: g_sampleData, g_sampleSize, g_warned
  | Params: index -- sample identifier, 0 to stop all; volume -- 0..0xff, halved
@@ -213,7 +246,7 @@ void play_sample(int index, int volume, int channel)
 			if (!g_warned)
 			{
 				g_warned = 1;
-				printf("SFX: lwram full at %d", index);
+				printf("SFX: lwram full at %d", index + 1);
 			}
 
 			return;
