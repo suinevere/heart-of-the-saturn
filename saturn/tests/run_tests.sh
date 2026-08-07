@@ -27,3 +27,7 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src \
     -o run_tests_discsec test_discsec.c ../src/discsec.c
 ./run_tests_discsec
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_sfxconv test_sfxconv.c ../src/sfxconv.c
+./run_tests_sfxconv

@@ -44,6 +44,8 @@ saturn/tests/run_tests_cdda_classify
 saturn/tests/run_tests_cdda_classify.exe
 saturn/tests/run_tests_discsec
 saturn/tests/run_tests_discsec.exe
+saturn/tests/run_tests_sfxconv
+saturn/tests/run_tests_sfxconv.exe
 
 # --- Extractor binary --------------------------------------------------------
 tools/extract_disc

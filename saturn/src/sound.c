@@ -96,9 +96,6 @@ void play_sample(int index, int volume, int channel)
 
 	LOG(("sample data starts at 0x%x\n", ptr));
 
-	fprintf(stderr, "PROBE sample=%d length=%d padded=%d\n",
-	        index, length, length < 0x900 ? 0x900 : length);
-
 	/* convert from 8000 mono 8bit, to 44100 stereo 16bit */
 	Mix_QuerySpec(&frequency, &format, &channels);
 	SDL_BuildAudioCVT(&cvt, AUDIO_S8, 1, 8000, format, channels, frequency);
