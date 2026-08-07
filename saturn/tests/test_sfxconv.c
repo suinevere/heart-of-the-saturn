@@ -102,12 +102,12 @@ static void build_map(unsigned long table, unsigned long entry, unsigned long le
 	memset(get_memory_ptr(0), 0, MEMORY_SIZE);
 	put_long(0xf90c, table);
 
-	if (table + 4 <= (unsigned long)MEMORY_SIZE)
+	if (table <= (unsigned long)MEMORY_SIZE - 4)
 	{
 		put_long((int)table, entry);
 	}
 
-	if (entry + 8 <= (unsigned long)MEMORY_SIZE)
+	if (entry <= (unsigned long)MEMORY_SIZE - 8)
 	{
 		put_long((int)entry, length);
 	}
@@ -196,6 +196,65 @@ static void test_locate_refuses_invalid_args(void)
 	CHECK_EQ(offset, -1);
 }
 
+/* Pins in_map's `offset < 0` guard directly: with it deleted, a table value
+   with the top bit set converts from unsigned long to a negative long and
+   `-1 > MEMORY_SIZE - span` is false, so in_map would wrongly ACCEPT it and
+   sfxconv_locate would hand back a negative offset. Both 0xFFFFFFFF (-1) and
+   0x80000000 (the most negative 32-bit value) must be refused. build_map's
+   write guard already keeps these table values from being written into the
+   map itself -- only the pointer at 0xf90c changes. */
+static void test_locate_refuses_negative_table(void)
+{
+	int offset = -1;
+	int length = -1;
+
+	build_map(0xFFFFFFFFUL, TEST_ENTRY, 1000);
+	CHECK_EQ(sfxconv_locate(0, &offset, &length), 0);
+	CHECK_EQ(offset, -1);
+	CHECK_EQ(length, -1);
+
+	build_map(0x80000000UL, TEST_ENTRY, 1000);
+	CHECK_EQ(sfxconv_locate(0, &offset, &length), 0);
+	CHECK_EQ(offset, -1);
+	CHECK_EQ(length, -1);
+}
+
+/* Same guard, at the second indirection: a top-bit-set entry read out of an
+   otherwise well-formed table must also be refused rather than accepted as a
+   negative offset. */
+static void test_locate_refuses_negative_entry(void)
+{
+	int offset = -1;
+	int length = -1;
+
+	build_map(TEST_TABLE, 0xFFFFFFFFUL, 1000);
+	CHECK_EQ(sfxconv_locate(0, &offset, &length), 0);
+	CHECK_EQ(offset, -1);
+	CHECK_EQ(length, -1);
+
+	build_map(TEST_TABLE, 0x80000000UL, 1000);
+	CHECK_EQ(sfxconv_locate(0, &offset, &length), 0);
+	CHECK_EQ(offset, -1);
+	CHECK_EQ(length, -1);
+}
+
+/* A top-bit-set length also converts to a negative long, but sfxconv_locate
+   never reaches in_map with it: `length <= 0` refuses first, before
+   in_map(data, length) is even called. Pinned here anyway, on the same
+   reasoning as the well-formed length == 0 case in
+   test_locate_refuses_bad_maps -- both are cheap and both guard a real
+   corruption path. */
+static void test_locate_refuses_negative_length(void)
+{
+	int offset = -1;
+	int length = -1;
+
+	build_map(TEST_TABLE, TEST_ENTRY, 0xFFFFFFFFUL);
+	CHECK_EQ(sfxconv_locate(0, &offset, &length), 0);
+	CHECK_EQ(offset, -1);
+	CHECK_EQ(length, -1);
+}
+
 static void test_padded_size(void)
 {
 	CHECK_EQ(sfxconv_padded_size(1), SFXCONV_MIN_PLAYABLE);
@@ -274,6 +333,9 @@ int main(void)
 	test_locate_accepts_sample_ending_exactly_at_memory_size();
 	test_locate_refuses_sample_ending_one_past_memory_size();
 	test_locate_refuses_invalid_args();
+	test_locate_refuses_negative_table();
+	test_locate_refuses_negative_entry();
+	test_locate_refuses_negative_length();
 	test_padded_size();
 	test_decode_into_pads_short_samples();
 	test_decode_into_writes_nothing_past_length();

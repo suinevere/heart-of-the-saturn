@@ -47,7 +47,12 @@ signed char sfxconv_decode_byte(unsigned char u)
  | Description: True when a half-open byte range [offset, offset + span) lies
  |   wholly inside the emulated 68000 map. Written as one predicate rather than
  |   inline comparisons because sfxconv_locate applies it four times and a
- |   sign slip in any one of them is the whole bug it exists to prevent.
+ |   sign slip in any one of them is the whole bug it exists to prevent. Every
+ |   call site passes a non-negative span -- index * 4 + 4 with index already
+ |   checked >= 0, the constant 8, or length after length <= 0 has already
+ |   refused -- so span < 0 is unreachable through the public API today; the
+ |   check stays anyway, because a helper whose whole job is refusing bad
+ |   input should not trust its callers to have gotten it right.
  | Author: suinevere
  | Globals: N/A
  | Params: offset -- start of the range; span -- length of the range in bytes
