@@ -25,6 +25,11 @@
 - **`slPCMOn` will not play a buffer shorter than `0x900` bytes** (2,304), per `srl_sound.hpp:522`.
 - **LWRAM budget for the cache is 81,916 bytes** worst case: the 114,688-byte pool remainder minus `disc_srl.cxx`'s 32,772-byte bounce buffer.
 - **The HWRAM heap is 62,528 bytes total** and `malloc` deliberately refuses to fall back to LWRAM. The cache uses `saturn_lwram_alloc`, never `malloc`.
+- **The two builds share object files — always clean before switching targets.** `saturn/makefile` compiles with `%.o : %.c` and no separate object directory, so SH-2 objects land in `saturn/src/` under exactly the names `saturn/src/Makefile`'s `.c.o` rule gives its x86 objects. Whichever built last wins, and `make` then treats the other target's stale object as up to date. Verified 2026-08-07: a host build straight after a Saturn build dies at the link with `common.o: relocations in generic ELF (EM: 42)` — `EM: 42` is SH-2.
+  - **Before a host build:** `make -C saturn/src clean && make -C saturn/src`
+  - **Before a Saturn build:** `cd saturn && ./compile.bat clean && ./compile.bat`
+  - `saturn/tests/run_tests.sh` is unaffected — it compiles its own binaries with explicit `-o run_tests_*` and never touches the shared objects.
+- **Never `git checkout`, `git switch`, `git stash`, or otherwise move HEAD or branch state.** Work happens on the branch you are given. A measurement that seems to need an older commit built is a measurement that needs rethinking — say so instead.
 
 ---
 
@@ -196,8 +201,10 @@ In `saturn/src/sound.c`, immediately after the existing `LOG(("sample data start
 
 - [ ] **Step 2: Build the host**
 
-Run: `make -C saturn/src`
+Run: `make -C saturn/src clean && make -C saturn/src`
 Expected: builds clean, produces `saturn/src/alien.exe`.
+
+The `clean` is mandatory, not hygiene — Task 1 ran a Saturn build and left SH-2 objects under the same names the host build uses. Without it the link dies on `relocations in generic ELF (EM: 42)`. See Global Constraints.
 
 - [ ] **Step 3: Collect sizes across rooms**
 
@@ -1143,8 +1150,10 @@ void sound_flush_cache()
 
 - [ ] **Step 2: Build for SH-2**
 
-Run: `cd saturn && ./compile.bat`
+Run: `cd saturn && ./compile.bat clean && ./compile.bat`
 Expected: compiles and links clean.
+
+The `clean` is mandatory — see Global Constraints. Tasks 3 and 4 ran host `gcc`, and although `run_tests.sh` does not touch the shared objects, this task must not depend on knowing that.
 
 Two failures are foreseeable and each has a specific cause:
 - *Undefined reference to a mangled `sfxconv_*`* — `sfxconv.h`'s `extern "C"` guard is missing or misplaced. Fix the header.
@@ -1152,8 +1161,10 @@ Two failures are foreseeable and each has a specific cause:
 
 - [ ] **Step 3: Confirm the host build is untouched**
 
-Run: `make -C saturn/src`
+Run: `make -C saturn/src clean && make -C saturn/src`
 Expected: builds clean. `saturn/src/Makefile` uses an explicit `OBJS` list, so `sfxconv.c` is not built by the host and does not need to be — nothing on the host calls it.
+
+The `clean` is mandatory here for the opposite reason to Step 2's: Step 2 just left SH-2 objects where the host build wants x86 ones.
 
 - [ ] **Step 4: Run the unit tests**
 
@@ -1162,11 +1173,15 @@ Expected: all suites pass. Nothing in this task should have changed their behavi
 
 - [ ] **Step 5: Record the `.bss` change**
 
-Run: `grep -n '^\.bss' "saturn/BuildDrop/Heart of the Alien (USA).map"`
+Read the map written by Step 2's build: `saturn/BuildDrop/Heart of the Alien (USA).map`. Its basename tracks the disk name set at `saturn/makefile:38`; `shared.mk:189` derives it from the ELF.
 
-The map's basename tracks the disk name set at `saturn/makefile:38`; `shared.mk:189` derives it from the ELF.
+Record three numbers from that one file — do **not** check out an earlier commit and rebuild to get a before-and-after; Global Constraints forbid moving HEAD, and the map answers this on its own:
 
-Compare total `.bss` against the previous commit's build. Expected increase: 2,048 bytes for the two cache arrays, plus whatever `sfxconv.o` contributes (`g_decode` is `const`, so it belongs in `.rodata`, not `.bss` — if `.bss` grew by materially more than 2,048, find out why before moving on).
+1. The total `.bss` size.
+2. `sound_srl.o`'s `.bss` contribution — expected 2,048 bytes, the two cache arrays (`g_sampleData` and `g_sampleSize`, 256 entries × 4 bytes each).
+3. `sfxconv.o`'s `.bss` contribution — expected 0. `g_decode` is `const`, so it belongs in `.rodata`. A non-zero figure means it was not emitted as `const` and is a finding worth chasing before moving on.
+
+If `sound_srl.o` reports materially more than 2,048, find out what else landed there before moving on.
 
 Put the measured number in the commit message. `disc_srl.cxx`'s banner sets the precedent for tracking this to the byte.
 
@@ -1266,8 +1281,10 @@ Leave the `SOURCES := $(filter-out ...)` line below it and the two comment lines
 
 - [ ] **Step 2: Build the disc**
 
-Run: `cd saturn && ./compile.bat`
+Run: `cd saturn && ./compile.bat clean && ./compile.bat`
 Expected: `saturn/BuildDrop/Heart of the Alien (USA).cue` is produced.
+
+The `clean` is mandatory — Task 5's Step 3 ran a host build and left x86 objects where the Saturn link wants SH-2 ones. See Global Constraints.
 
 - [ ] **Step 3: Hand the disc to Suinevere with these five checks**
 
