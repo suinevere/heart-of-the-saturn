@@ -47,12 +47,13 @@
  |   on that remainder than an unbounded heap fallback would have been.
  |
  |   Allocation failure is not licensed to fail silently forever: of Task 2's
- |   seven valid room attempts, only two produced any probe data at all, and
- |   even those two figures are lower bounds rather than maxima. With no
- |   measured ceiling anywhere, the first allocation failure paints a one-line
- |   warning (see g_warned below) so the first room to actually exhaust the
- |   pool leaves something to diagnose from rather than a silent missing sound
- |   effect.
+ |   seven valid room attempts -- the eighth, room 9, is not a room, since
+ |   there is no ROOMS9.BIN behind the index -- only two produced any probe
+ |   data at all, and even those two figures are lower bounds rather than
+ |   maxima. With no measured ceiling anywhere, the first allocation failure
+ |   paints a one-line warning (see g_warned below) so the first room to
+ |   actually exhaust the pool leaves something to diagnose from rather than a
+ |   silent missing sound effect.
  |
  |   sound_init and sound_done are still not defined here. Nothing on Saturn
  |   calls either. sound_init would zero a table the C runtime already zeroes,
