@@ -252,6 +252,8 @@ extern "C" {
  ----------------------*/
 static int32_t g_probeMaxChunk = 0;
 static int32_t g_probeRequests = 0;
+static int32_t g_probeCdbuf = 0;
+static int32_t g_probeAlign = 0;
 
 static void cdda_probe_wait(const char *where, int cue)
 {
@@ -657,10 +659,21 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 	int32_t maxChunk = GFS_GetNumCdbuf(file.Handle);
 	int32_t remaining = whole;
 
+	g_probeCdbuf = maxChunk;
+	g_probeAlign = (int32_t)((uintptr_t)out & 3u);
+
 	if (maxChunk <= 0 || maxChunk > DISC_MAX_REQUEST_SECTORS)
 	{
 		maxChunk = DISC_MAX_REQUEST_SECTORS;
 	}
+
+	if (g_probeAlign != 0)
+	{
+		GFS_SetTmode(file.Handle, GFS_TMODE_CPU);
+	}
+
+	printf("go %s a%d b%d w%d\n", resolved, (int)g_probeAlign,
+		(int)g_probeCdbuf, (int)whole);
 
 	while (remaining > 0)
 	{
@@ -671,6 +684,8 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 		{
 			break;
 		}
+
+		printf(" req %d of %d\n", (int)take, (int)remaining);
 
 		chunkGot = file.ReadSectors(take, (uint8_t *)out + (whole - remaining) * file.Size.SectorSize);
 
