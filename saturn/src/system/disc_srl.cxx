@@ -238,7 +238,7 @@ extern "C" {
  | Params: where -- call site tag; cue -- cue track commanded
  | Returns: N/A
  ----------------------*/
-#define CDDA_PROBE_CAP_MS 4000
+#define CDDA_PROBE_CAP_MS 3000
 
 /*----------------------
  | g_probeMaxChunk / g_probeRequests
