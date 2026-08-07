@@ -255,6 +255,29 @@ static int32_t g_probeRequests = 0;
 static int32_t g_probeCdbuf = 0;
 static int32_t g_probeAlign = 0;
 
+/*----------------------
+ | DISC_BOUNCE_SECTORS / g_bounce
+ | Description: Where a read lands when the caller's destination is not
+ |   4-byte aligned. GFS will not write one: measured on the emulator
+ |   2026-08-06, INTRO1.BIN at ANIMATION_LOAD_BASE 0x809a -- 2 mod 4 -- died
+ |   inside its first request, printing the request line and never the line
+ |   after it, while GAME2.BIN at an aligned destination read straight through.
+ |   Forcing GFS_TMODE_CPU on the same handle did not help, so the transfer
+ |   mode is not the lever and the destination has to be aligned before GFS
+ |   ever sees it.
+ |
+ |   uint32_t-typed so the alignment is a property of the type rather than a
+ |   thing to remember. Sixteen sectors is a compromise, not a measurement:
+ |   large enough that a 211-sector animation costs fourteen requests instead
+ |   of 211, small enough to leave the HWRAM heap usable. Aligned destinations
+ |   -- GAME2.BIN and every room, since ROOMS_LOAD_BASE is 0xf900 -- skip this
+ |   entirely and still read straight into the caller's buffer.
+ | Author: suinevere
+ ----------------------*/
+#define DISC_BOUNCE_SECTORS 16
+
+static uint32_t g_bounce[(DISC_BOUNCE_SECTORS * DISC_MAX_SECTOR_BYTES) / 4];
+
 static void cdda_probe_wait(const char *where, int cue)
 {
 	unsigned int t0 = platform_ticks();
@@ -667,9 +690,9 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 		maxChunk = DISC_MAX_REQUEST_SECTORS;
 	}
 
-	if (g_probeAlign != 0)
+	if (g_probeAlign != 0 && maxChunk > DISC_BOUNCE_SECTORS)
 	{
-		GFS_SetTmode(file.Handle, GFS_TMODE_CPU);
+		maxChunk = DISC_BOUNCE_SECTORS;
 	}
 
 	printf("go %s a%d b%d w%d\n", resolved, (int)g_probeAlign,
@@ -685,9 +708,23 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 			break;
 		}
 
+		uint8_t *dest = (uint8_t *)out + (whole - remaining) * file.Size.SectorSize;
+
 		printf(" req %d of %d\n", (int)take, (int)remaining);
 
-		chunkGot = file.ReadSectors(take, (uint8_t *)out + (whole - remaining) * file.Size.SectorSize);
+		if (g_probeAlign != 0)
+		{
+			chunkGot = file.ReadSectors(take, g_bounce);
+
+			if (chunkGot == take * file.Size.SectorSize)
+			{
+				memcpy(dest, g_bounce, (size_t)chunkGot);
+			}
+		}
+		else
+		{
+			chunkGot = file.ReadSectors(take, dest);
+		}
 
 		if (chunkGot != take * file.Size.SectorSize)
 		{
