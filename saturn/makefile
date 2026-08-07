@@ -62,8 +62,10 @@ SOURCES += $(patsubst ./%,%,$(shell find src/ -name '*.cxx'))
 # Host-only translation units. scale2x/scale3x type their buffers as SDL's
 # Uint8 and sound.c is built on Mix_Chunk, so none of the three compiles for
 # SH-2. They stay under src/ because the host build needs them, which means
-# the glob above finds them and they have to be removed by name. Sound is a
-# later sub-project; the pixel doublers have no Saturn equivalent at all.
+# the glob above finds them and they have to be removed by name. sound.c
+# stays out because it is built on Mix_Chunk; src/system/sound_srl.cxx is the
+# Saturn implementation of the same header. The pixel doublers have no Saturn
+# equivalent at all.
 SOURCES := $(filter-out src/scale2x.c src/scale3x.c src/sound.c,$(SOURCES))
 
 # BYPASS_PROTECTION starts the game at GAME_PART2 (the intro) instead of
