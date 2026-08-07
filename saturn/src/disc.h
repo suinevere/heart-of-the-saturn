@@ -88,6 +88,13 @@ int disc_open(const char *cue_path);
  |   a prior disc_open that returned success and no disc_close since --
  |   called any other time, returns negative without touching *out.
  |
+ |   Any other failure leaves *out undefined. A backend reading in chunks can
+ |   fail partway through and hand back a destination that is part real data,
+ |   part whatever was there before -- this header makes no promise about
+ |   which -- and neither backend's own error path relies on partial contents,
+ |   nor does any of the three call sites read *out after a negative return,
+ |   so this is a documentation gap, not a live bug.
+ |
  |   max_size bounds the bytes written to out, not the sectors read off the
  |   disc. A backend is free to transfer whole sectors for speed -- that is
  |   the difference between one drive request and forty -- but the partial

@@ -70,17 +70,28 @@ int discfmt_iso_name_eq(const char *iso_name, uint8_t iso_len, const char *want)
  |   cue_track = engine_index + 1. Corrected 2026-08-07 against the game:
  |   Suinevere identified the intro playing one track too high, and the intro's
  |   three animations are cue 32, 33 and 34 against anm_files' engine indices
- |   31, 32 and 33.
+ |   31, 32 and 33 -- engine indices, the input this function actually takes,
+ |   not the raw bytecode operand decode.c reads off disc.
  |
  |   This was +2 until then, on the reasoning that the deleted music.c built
  |   its filename as "%02d" of track + 1 and that this numbered the mp3 rip
  |   01..41, audio track 1 being disc track 2. That inferred an extra step the
  |   engine's index does not take: the index already counts from the data
- |   track, so decode.c's script value V reaches cue track V directly, which is
- |   the relationship the disc is actually mastered around. The disc itself was
+ |   track, so cue_track = engine_index + 1, not +2. The disc itself was
  |   verified innocent first -- every saturn/cd/music/trackNN.wav is byte-for-
  |   byte the rip's (Track NN).bin plus a 44-byte header, and cd/music/tracklist
  |   lays them down in that order -- so the fault was here and only here.
+ |
+ |   Separately, and not to be confused with the relationship above: decode.c
+ |   subtracts 1 from its raw script operand before it ever reaches
+ |   engine_index (decode.c:1894, :1901), so a script operand V produces
+ |   engine_index V-1, which this function then maps to cue (V-1)+1 = V. The
+ |   operand happens to equal the cue number, but only as the composition of
+ |   two separate, independently-motivated offsets in two different files --
+ |   it is not evidence that this function's own contract is "V reaches V".
+ |   This function's contract is engine_index in, engine_index + 1 out; state
+ |   the operand relationship only if you need it, and always as derived from
+ |   that, never as a restatement of it.
  |
  |   Index 0 is refused rather than returned as TRACK 01, the DATA track. On
  |   hardware playing that is noise or a hang; in an emulator it is often just
