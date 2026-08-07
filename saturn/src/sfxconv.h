@@ -76,6 +76,20 @@ signed char sfxconv_decode_byte(unsigned char u);
  |   same garbage walks off the end of the pool. Everything past the intro is
  |   unexercised, which is exactly where a table that has not been loaded yet,
  |   or an index the data does not cover, would first be reached.
+ |
+ |   The implementation widens to `long` before checking, but `long` is not
+ |   wider than `int` on either toolchain this port targets, so the width
+ |   itself buys nothing. What makes the guard real is three separate facts.
+ |   `get_long` returns `unsigned long`; converting a value with the top bit
+ |   set into the signed `long` of the same width yields a negative number,
+ |   and in_map's explicit `offset < 0 || span < 0` is what rejects the whole
+ |   0x80000000-0xFFFFFFFF range -- the negative check does the work, not the
+ |   width. in_map also compares `offset > MEMORY_SIZE - span` rather than
+ |   `offset + span > MEMORY_SIZE`, so the bound test cannot itself overflow
+ |   at any width. And `(long)index * 4` is not protected from overflow by
+ |   its cast -- unreachable today because index is a bounded operand read
+ |   from a single script byte, but worth revisiting if that domain ever
+ |   widens.
  | Author: suinevere
  | Globals: N/A
  | Params: index -- zero-based sample index, the caller having already

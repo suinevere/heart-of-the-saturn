@@ -10,7 +10,7 @@
  |   sound, and diagnosing that by ear on an emulator costs a round trip per
  |   attempt.
  | Author: suinevere
- | Dependencies: sfxconv.h, stdio.h
+ | Dependencies: sfxconv.h, vm.h, stdio.h, string.h
  ----------------------*/
 #include <stdio.h>
 #include <string.h>
@@ -148,6 +148,54 @@ static void test_locate_refuses_bad_maps(void)
 	CHECK_EQ(length, -1);
 }
 
+/* Pins the exact boundary the whole module exists to enforce: a sample whose
+   last byte lands on MEMORY_SIZE - 1 must be accepted, and one whose last
+   byte would land on MEMORY_SIZE must be refused. A '>' / '>=' swap in
+   in_map's range comparison would pass every other case in this file. */
+static void test_locate_accepts_sample_ending_exactly_at_memory_size(void)
+{
+	int offset = -1;
+	int length = -1;
+	unsigned long entry = (unsigned long)MEMORY_SIZE - 1000 - 8;
+
+	build_map(TEST_TABLE, entry, 1000);
+
+	CHECK_EQ(sfxconv_locate(0, &offset, &length), 1);
+	CHECK_EQ(offset, (int)(entry + 8));
+	CHECK_EQ(length, 1000);
+}
+
+static void test_locate_refuses_sample_ending_one_past_memory_size(void)
+{
+	int offset = -1;
+	int length = -1;
+	unsigned long entry = (unsigned long)MEMORY_SIZE - 1000 - 8 + 1;
+
+	build_map(TEST_TABLE, entry, 1000);
+
+	CHECK_EQ(sfxconv_locate(0, &offset, &length), 0);
+	CHECK_EQ(offset, -1);
+	CHECK_EQ(length, -1);
+}
+
+static void test_locate_refuses_invalid_args(void)
+{
+	int offset = -1;
+	int length = -1;
+
+	build_map(TEST_TABLE, TEST_ENTRY, 1000);
+
+	CHECK_EQ(sfxconv_locate(-1, &offset, &length), 0);
+	CHECK_EQ(offset, -1);
+	CHECK_EQ(length, -1);
+
+	CHECK_EQ(sfxconv_locate(0, 0, &length), 0);
+	CHECK_EQ(length, -1);
+
+	CHECK_EQ(sfxconv_locate(0, &offset, 0), 0);
+	CHECK_EQ(offset, -1);
+}
+
 static void test_padded_size(void)
 {
 	CHECK_EQ(sfxconv_padded_size(1), SFXCONV_MIN_PLAYABLE);
@@ -223,6 +271,9 @@ int main(void)
 
 	test_locate_well_formed();
 	test_locate_refuses_bad_maps();
+	test_locate_accepts_sample_ending_exactly_at_memory_size();
+	test_locate_refuses_sample_ending_one_past_memory_size();
+	test_locate_refuses_invalid_args();
 	test_padded_size();
 	test_decode_into_pads_short_samples();
 	test_decode_into_writes_nothing_past_length();
