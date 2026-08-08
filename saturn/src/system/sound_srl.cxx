@@ -158,7 +158,28 @@
  | Params: N/A
  | Returns: N/A
  ----------------------*/
-#define SFX_TONE_SUBSTITUTE 1
+#define SFX_TONE_SUBSTITUTE 0
+
+/*----------------------
+ | SFX_FORCE_FULL_VOLUME
+ | Description: THROWAWAY bisection switch, the other half of
+ |   SFX_TONE_SUBSTITUTE. The substitution run changed two things at once --
+ |   the sample bytes and the level -- so it proved the call path good without
+ |   saying which of the two was silencing the real effects. With this at 1
+ |   the real decoded sample plays at level 127 instead of volume >> 1.
+ |
+ |   Real effects audible means the fault is the level: the host's volume >> 1
+ |   is a linear amplitude on SDL_mixer's 0..128 scale, roughly -6 dB, but
+ |   SGL's PCM level is not obviously the same kind of number, and if it
+ |   reaches the SCSP's TL attenuation field then 63 is nearer -48 dB and 25
+ |   is inaudible. Continued silence means the decoded bytes are wrong.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define SFX_FORCE_FULL_VOLUME 1
 
 /*----------------------
  | g_sampleData / g_sampleSize
@@ -250,6 +271,9 @@ static int g_lastChannel = -1;
 static int g_lastLen = -1;
 static int g_nPaints;
 static int8_t g_lastRc = 0;
+static int g_lastVolume = -1;
+static int g_lastLevel = -1;
+static int g_lastNonZero = -1;
 
 /*----------------------
  | diag_paint
@@ -266,7 +290,8 @@ static int8_t g_lastRc = 0;
  | Author: suinevere
  | Dependencies: N/A
  | Globals: g_nCalls, g_nLocateFail, g_nAllocFail, g_nPlayRefused, g_nPlayed,
- |   g_lastIndex, g_lastChannel, g_lastLen, g_nPaints, g_lastRc, g_pcm
+ |   g_lastIndex, g_lastChannel, g_lastLen, g_nPaints, g_lastRc,
+ |   g_lastVolume, g_lastLevel, g_lastNonZero, g_pcm
  | Params: N/A
  | Returns: N/A
  ----------------------*/
@@ -274,13 +299,13 @@ static void diag_paint()
 {
 	g_nPaints++;
 
-	SRL::Debug::Print(1, 24, "SFX c%d L%d A%d R%d P%d rc%d sub%d   ",
+	SRL::Debug::Print(1, 24, "SFX c%d L%d A%d R%d P%d rc%d s%d f%d  ",
 	                  g_nCalls, g_nLocateFail, g_nAllocFail,
 	                  g_nPlayRefused, g_nPlayed, (int)g_lastRc,
-	                  SFX_TONE_SUBSTITUTE);
-	SRL::Debug::Print(1, 25, "SFX i%d ch%d ln%d lw%d        ",
+	                  SFX_TONE_SUBSTITUTE, SFX_FORCE_FULL_VOLUME);
+	SRL::Debug::Print(1, 25, "SFX i%d ch%d ln%d v%d l%d nz%d    ",
 	                  g_lastIndex, g_lastChannel, g_lastLen,
-	                  (int)SRL::Memory::LowWorkRam::GetFreeSpace());
+	                  g_lastVolume, g_lastLevel, g_lastNonZero);
 	SRL::Debug::Print(1, 26, "SFX free %d%d%d%d p%d        ",
 	                  slPCMStat(&g_pcm[0]) ? 0 : 1,
 	                  slPCMStat(&g_pcm[1]) ? 0 : 1,
@@ -467,6 +492,8 @@ void play_sample(int index, int volume, int channel)
 	int length;
 	int padded;
 	int i;
+	int level;
+	int nonzero;
 	signed char *buffer;
 
 	g_nCalls++;
@@ -538,6 +565,24 @@ void play_sample(int index, int volume, int channel)
 	volume = 254;
 #endif
 
+	nonzero = 0;
+	for (i = 0; i < (int)g_sampleSize[index]; i++)
+	{
+		if (g_sampleData[index][i] != 0)
+		{
+			nonzero++;
+		}
+	}
+
+	level = volume >> 1;
+#if SFX_FORCE_FULL_VOLUME
+	level = 127;
+#endif
+
+	g_lastVolume = volume;
+	g_lastLevel = level;
+	g_lastNonZero = nonzero;
+
 	if (slPCMStat(&g_pcm[channel]))
 	{
 		slPCMOff(&g_pcm[channel]);
@@ -545,7 +590,7 @@ void play_sample(int index, int volume, int channel)
 
 	g_pcm[channel].mode      = _Mono | _PCM8Bit;
 	g_pcm[channel].channel   = (uint8_t)(channel * 2);
-	g_pcm[channel].level     = (uint8_t)(volume >> 1);
+	g_pcm[channel].level     = (uint8_t)level;
 	g_pcm[channel].pan       = 0;
 	g_pcm[channel].pitch     = SFX_PITCH_8KHZ;
 	g_pcm[channel].eflevelR  = 0;
