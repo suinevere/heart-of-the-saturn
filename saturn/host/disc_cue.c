@@ -524,6 +524,9 @@ void disc_play_track(int engine_index, int loop)
     Uint16 spec_format = 0;
     int spec_channels = 0;
 
+    fprintf(stderr, "PROBE disc_play_track index %d loop %d\n", engine_index, loop);
+    fflush(stderr);
+
     if (cls.nosound != 0)
     {
         return;
