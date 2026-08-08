@@ -524,15 +524,6 @@ void disc_play_track(int engine_index, int loop)
     Uint16 spec_format = 0;
     int spec_channels = 0;
 
-    {
-        FILE *probe = fopen("sfxprobe.log", "a");
-        if (probe != NULL)
-        {
-            fprintf(probe, "disc_play_track index %d loop %d\n", engine_index, loop);
-            fclose(probe);
-        }
-    }
-
     if (cls.nosound != 0)
     {
         return;

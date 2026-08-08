@@ -885,17 +885,6 @@ int play_death_animation(int index)
 	int old = toggle_aux(0);
 	toggle_aux(old);
 
-#ifndef HOTA_SATURN
-	{
-		FILE *probe = fopen("sfxprobe.log", "a");
-		if (probe != NULL)
-		{
-			fprintf(probe, "--- death_animation %d ---\n", index);
-			fclose(probe);
-		}
-	}
-#endif
-
 	/* set palette 2 ? */
 	offset = 0xf910 + (index << 2);
 	int ret = play_sequence(get_long(offset), 15);
