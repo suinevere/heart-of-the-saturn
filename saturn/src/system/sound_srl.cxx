@@ -14,16 +14,15 @@
  |   offers exactly four PCM channels against the engine's four, so `channel`
  |   maps straight through with no allocation policy.
  |
- |   Three things this file does that the host does not:
+ |   Four things this file does that the host does not:
  |
  |   It owns its four PCM structs (g_pcm below) rather than going through
  |   SRL::Sound::Pcm::IPcmFile::PlayOnChannel. PlayOnChannel rewrites only
  |   mode, pitch, level and pan in Pcm::Channels[channel] and never
- |   PCM.channel, the SCSP slot number SRL's static initialiser sets once;
- |   nothing re-initialises that field after slPCMOff has touched it, and
- |   PlayOnChannel also discards slPCMOn's int8_t status, making failure
- |   unobservable. Filling a PCM struct in full on every play and calling
- |   slPCMOn directly, keeping its return in g_lastRc, fixes both.
+ |   PCM.channel, the SCSP slot number SRL's static initialiser sets once,
+ |   and nothing re-initialises that field after slPCMOff has touched it.
+ |   Filling a PCM struct in full on every play and calling slPCMOn directly
+ |   removes the dependency on SRL's array entirely.
  |
  |   It stops a channel before playing on it, guarded by slPCMStat so
  |   slPCMOff is never called on a channel that is not playing. A script
@@ -128,78 +127,6 @@
  | Returns: N/A
  ----------------------*/
 #define SFX_PITCH_8KHZ 0x69CE
-
-/*----------------------
- | SFX_SMOKE_BYTES
- | Description: THROWAWAY. Length of each smoke-test tone, one second at
- |   8 kHz, long enough that a listener cannot miss it and short enough that
- |   both tones fit the HWRAM heap's 62,528 bytes with room to spare.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define SFX_SMOKE_BYTES 8000
-
-/*----------------------
- | SFX_TONE_SUBSTITUTE
- | Description: THROWAWAY bisection switch. With this at 1, play_sample runs
- |   every one of its normal steps -- locate, allocate, decode, cache, stop
- |   guard, struct fill, slPCMOn -- and then, immediately before the call,
- |   overwrites the cached bytes with the square wave the boot smoke test
- |   proved audible and forces full volume. Only the sample content and the
- |   level change; the call site, the timing, the channel and the buffer are
- |   the engine's own.
- |
- |   Beeps during gameplay mean the call path is sound and the defect is in
- |   the bytes -- sfxconv's location or decode, or what the emulated 68000 map
- |   actually holds at that moment. Continued silence means the bytes are
- |   irrelevant and the defect is in calling slPCMOn from inside the game
- |   loop. Set to 0 to restore real samples.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define SFX_TONE_SUBSTITUTE 0
-
-/*----------------------
- | SFX_FORCE_FULL_VOLUME
- | Description: THROWAWAY bisection switch, the other half of
- |   SFX_TONE_SUBSTITUTE. The substitution run changed two things at once --
- |   the sample bytes and the level -- so it proved the call path good without
- |   saying which of the two was silencing the real effects. With this at 1
- |   the real decoded sample plays at level 127 instead of volume >> 1.
- |
- |   Real effects audible means the fault is the level: the host's volume >> 1
- |   is a linear amplitude on SDL_mixer's 0..128 scale, roughly -6 dB, but
- |   SGL's PCM level is not obviously the same kind of number, and if it
- |   reaches the SCSP's TL attenuation field then 63 is nearer -48 dB and 25
- |   is inaudible. Continued silence means the decoded bytes are wrong.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define SFX_FORCE_FULL_VOLUME 0
-
-/*----------------------
- | SFX_SMOKE_ENABLE
- | Description: THROWAWAY. Runs the boot tone pair when 1. Off by default now
- |   that it has done its job -- it proved the driver, the pitch word and
- |   LWRAM as a stream source all good, which is what narrowed the bug to the
- |   level. Left in place because it costs nothing at 0 and is the fastest way
- |   to re-establish that a disc's audio path is alive at all.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define SFX_SMOKE_ENABLE 0
 
 /*----------------------
  | g_sampleData / g_sampleSize
@@ -328,224 +255,7 @@ static int sfx_level_for_volume(int volume)
 	return level;
 }
 
-/*----------------------
- | SFX diagnostic counters
- | Description: THROWAWAY instrumentation for the gameplay-silence bug. Not a
- |   fix -- counts calls, failure paths, and slPCMOn's refused-vs-played
- |   outcome so a hardware run can tell H1/H2/H3 and "never called" apart. A
- |   later commit reverts this whole block.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-static int g_nCalls;
-static int g_nLocateFail;
-static int g_nAllocFail;
-static int g_nPlayRefused;
-static int g_nPlayed;
-static int g_lastIndex = -1;
-static int g_lastChannel = -1;
-static int g_lastLen = -1;
-static int g_nPaints;
-static int8_t g_lastRc = 0;
-static int g_lastVolume = -1;
-static int g_lastLevel = -1;
-static int g_lastNonZero = -1;
-
-/*----------------------
- | diag_paint
- | Description: THROWAWAY instrumentation. Paints the counters, the last
- |   call's index/channel/length plus current LWRAM headroom, and each
- |   channel's free/busy state onto the debug text layer -- the third line
- |   makes H3's "refused forever" hypothesis directly observable instead of
- |   inferred from g_nPlayRefused alone, and g_nPaints tells a frozen display
- |   apart from one that was never repainted since the cinematic.
- |
- |   snprintfEx (srl_string.hpp) supports only %c %s %0Nd %d %x %u %f -- no
- |   width or flag syntax -- so every specifier below is bare %d, padded with
- |   trailing spaces instead, so a shrinking number can't leave stale digits.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: g_nCalls, g_nLocateFail, g_nAllocFail, g_nPlayRefused, g_nPlayed,
- |   g_lastIndex, g_lastChannel, g_lastLen, g_nPaints, g_lastRc,
- |   g_lastVolume, g_lastLevel, g_lastNonZero, g_pcm
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-static void diag_paint()
-{
-	g_nPaints++;
-
-	SRL::Debug::Print(1, 24, "SFX c%d L%d A%d R%d P%d rc%d s%d f%d  ",
-	                  g_nCalls, g_nLocateFail, g_nAllocFail,
-	                  g_nPlayRefused, g_nPlayed, (int)g_lastRc,
-	                  SFX_TONE_SUBSTITUTE, SFX_FORCE_FULL_VOLUME);
-	SRL::Debug::Print(1, 25, "SFX i%d ch%d ln%d v%d l%d nz%d    ",
-	                  g_lastIndex, g_lastChannel, g_lastLen,
-	                  g_lastVolume, g_lastLevel, g_lastNonZero);
-	SRL::Debug::Print(1, 26, "SFX free %d%d%d%d p%d        ",
-	                  slPCMStat(&g_pcm[0]) ? 0 : 1,
-	                  slPCMStat(&g_pcm[1]) ? 0 : 1,
-	                  slPCMStat(&g_pcm[2]) ? 0 : 1,
-	                  slPCMStat(&g_pcm[3]) ? 0 : 1,
-	                  g_nPaints);
-}
-
-/*----------------------
- | smoke_fill
- | Description: THROWAWAY. Writes a full-scale 8-bit signed square wave, so
- |   the tone does not depend on sfxconv, the disc, or the script VM.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: buf -- destination; bytes -- length; period -- samples per half cycle
- | Returns: N/A
- ----------------------*/
-static void smoke_fill(signed char *buf, int bytes, int period)
-{
-	int i;
-
-	for (i = 0; i < bytes; i++)
-	{
-		buf[i] = ((i / period) & 1) ? (signed char)-100 : (signed char)100;
-	}
-}
-
-/*----------------------
- | smoke_hold
- | Description: THROWAWAY. Presents frames while a tone plays. slPCMOn
- |   streams, so the caller must keep yielding or nothing is fed.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: frames -- vblanks to wait
- | Returns: N/A
- ----------------------*/
-static void smoke_hold(int frames)
-{
-	int i;
-
-	for (i = 0; i < frames; i++)
-	{
-		SRL::Core::Synchronize();
-	}
-}
-
-/*----------------------
- | smoke_play
- | Description: THROWAWAY. Fills a PCM struct in full and starts one tone,
- |   returning slPCMOn's status rather than discarding it.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: g_pcm
- | Params: channel -- 0..3; data -- sample bytes; bytes -- length
- | Returns: slPCMOn's int8_t status
- ----------------------*/
-static int8_t smoke_play(int channel, signed char *data, int bytes)
-{
-	if (slPCMStat(&g_pcm[channel]))
-	{
-		slPCMOff(&g_pcm[channel]);
-	}
-
-	g_pcm[channel].mode      = _Mono | _PCM8Bit;
-	g_pcm[channel].channel   = (uint8_t)(channel * 2);
-	g_pcm[channel].level     = 127;
-	g_pcm[channel].pan       = 0;
-	g_pcm[channel].pitch     = SFX_PITCH_8KHZ;
-	g_pcm[channel].eflevelR  = 0;
-	g_pcm[channel].efselectR = 0;
-	g_pcm[channel].eflevelL  = 0;
-	g_pcm[channel].efselectL = 0;
-
-	return slPCMOn(&g_pcm[channel], data, (unsigned long)bytes);
-}
-
 extern "C" {
-
-/*----------------------
- | sfx_smoke_test
- | Description: THROWAWAY instrumentation, called once from main() before the
- |   intro. Answers the question the plan's Task 1 was supposed to settle and
- |   never did: can slPCMOn stream from Low Work RAM? The original spike hung
- |   its tone on the first play_sample call, which only the script VM reaches,
- |   so it could never have fired during the intro it was listened for.
- |
- |   Two tones, deliberately different pitches so they are distinguishable by
- |   ear: A is 250 Hz from LWRAM, B is 500 Hz from the HWRAM heap. Three
- |   outcomes, three different causes -- both audible means PCM works and the
- |   defect is in the engine path; only B means LWRAM is an illegal DMA source
- |   for the B-bus destination and the cache must move to HWRAM; neither means
- |   PCM playback is broken below this file, at the driver or the pitch.
- |
- |   Runs before disc_open and initialize(), so it competes with nothing for
- |   either pool and depends on nothing but the sound driver Core::Initialize
- |   has already loaded.
- | Author: suinevere
- | Dependencies: srl.hpp, saturn_compat.h
- | Globals: g_pcm
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-void sfx_smoke_test(void)
-{
-#if SFX_SMOKE_ENABLE
-	signed char *lw;
-	signed char *hw;
-	int8_t rcLow = 99;
-	int8_t rcHigh = 99;
-
-	SRL::Debug::Print(1, 20, "SFX SMOKE TEST            ");
-
-	lw = (signed char *)saturn_lwram_alloc((unsigned long)SFX_SMOKE_BYTES);
-	if (lw != 0)
-	{
-		smoke_fill(lw, SFX_SMOKE_BYTES, 32);
-		rcLow = smoke_play(0, lw, SFX_SMOKE_BYTES);
-	}
-
-	SRL::Debug::Print(1, 21, "A LWRAM 250Hz ok%d rc%d    ",
-	                  lw != 0 ? 1 : 0, (int)rcLow);
-	smoke_hold(120);
-
-	if (slPCMStat(&g_pcm[0]))
-	{
-		slPCMOff(&g_pcm[0]);
-	}
-
-	hw = (signed char *)malloc((size_t)SFX_SMOKE_BYTES);
-	if (hw != 0)
-	{
-		smoke_fill(hw, SFX_SMOKE_BYTES, 16);
-		rcHigh = smoke_play(1, hw, SFX_SMOKE_BYTES);
-	}
-
-	SRL::Debug::Print(1, 22, "B HWRAM 500Hz ok%d rc%d    ",
-	                  hw != 0 ? 1 : 0, (int)rcHigh);
-	smoke_hold(120);
-
-	if (slPCMStat(&g_pcm[1]))
-	{
-		slPCMOff(&g_pcm[1]);
-	}
-
-	if (lw != 0)
-	{
-		saturn_lwram_free(lw);
-	}
-
-	if (hw != 0)
-	{
-		free(hw);
-	}
-
-	SRL::Debug::Print(1, 23, "SMOKE DONE A%d B%d          ",
-	                  (int)rcLow, (int)rcHigh);
-	smoke_hold(180);
-#endif
-}
 
 /*----------------------
  | play_sample
@@ -562,9 +272,9 @@ void sfx_smoke_test(void)
  |   because the host has no bounds checks that can fail, and stay silent
  |   here.
  | Author: suinevere
- | Globals: g_sampleData, g_sampleSize, g_warned, g_pcm, g_lastRc
- | Params: index -- sample identifier, 0 to stop all; volume -- 0..0xff, halved
- |   onto SRL's 0..127; channel -- 0..3
+ | Globals: g_sampleData, g_sampleSize, g_warned, g_pcm
+ | Params: index -- sample identifier, 0 to stop all; volume -- 0..0xff, mapped
+ |   onto SRL's 0..127 by sfx_level_for_volume; channel -- 0..3
  | Returns: N/A
  ----------------------*/
 void play_sample(int index, int volume, int channel)
@@ -573,12 +283,7 @@ void play_sample(int index, int volume, int channel)
 	int length;
 	int padded;
 	int i;
-	int level;
-	int nonzero;
 	signed char *buffer;
-
-	g_nCalls++;
-	g_lastChannel = channel;
 
 	if (index == 0)
 	{
@@ -590,21 +295,17 @@ void play_sample(int index, int volume, int channel)
 			}
 		}
 
-		diag_paint();
 		return;
 	}
 
 	if (channel < 0 || channel >= SFX_CHANNELS)
 	{
-		diag_paint();
 		return;
 	}
 
 	index = index - 1;
-	g_lastIndex = index;
 	if (index < 0 || index >= SFX_CACHE_SLOTS)
 	{
-		diag_paint();
 		return;
 	}
 
@@ -612,25 +313,19 @@ void play_sample(int index, int volume, int channel)
 	{
 		if (!sfxconv_locate(index, &offset, &length))
 		{
-			g_nLocateFail++;
-			diag_paint();
 			return;
 		}
 
 		padded = sfxconv_padded_size(length);
-		g_lastLen = padded;
 		buffer = (signed char *)saturn_lwram_alloc((unsigned long)padded);
 		if (buffer == 0)
 		{
-			g_nAllocFail++;
-
 			if (!g_warned)
 			{
 				g_warned = 1;
 				printf("SFX: lwram full at %d", index + 1);
 			}
 
-			diag_paint();
 			return;
 		}
 
@@ -639,31 +334,6 @@ void play_sample(int index, int volume, int channel)
 		g_sampleSize[index] = (unsigned long)padded;
 	}
 
-	g_lastLen = (int)g_sampleSize[index];
-
-#if SFX_TONE_SUBSTITUTE
-	smoke_fill(g_sampleData[index], (int)g_sampleSize[index], 32);
-	volume = 254;
-#endif
-
-	nonzero = 0;
-	for (i = 0; i < (int)g_sampleSize[index]; i++)
-	{
-		if (g_sampleData[index][i] != 0)
-		{
-			nonzero++;
-		}
-	}
-
-	level = sfx_level_for_volume(volume);
-#if SFX_FORCE_FULL_VOLUME
-	level = 127;
-#endif
-
-	g_lastVolume = volume;
-	g_lastLevel = level;
-	g_lastNonZero = nonzero;
-
 	if (slPCMStat(&g_pcm[channel]))
 	{
 		slPCMOff(&g_pcm[channel]);
@@ -671,7 +341,7 @@ void play_sample(int index, int volume, int channel)
 
 	g_pcm[channel].mode      = _Mono | _PCM8Bit;
 	g_pcm[channel].channel   = (uint8_t)(channel * 2);
-	g_pcm[channel].level     = (uint8_t)level;
+	g_pcm[channel].level     = (uint8_t)sfx_level_for_volume(volume);
 	g_pcm[channel].pan       = 0;
 	g_pcm[channel].pitch     = SFX_PITCH_8KHZ;
 	g_pcm[channel].eflevelR  = 0;
@@ -679,18 +349,7 @@ void play_sample(int index, int volume, int channel)
 	g_pcm[channel].eflevelL  = 0;
 	g_pcm[channel].efselectL = 0;
 
-	g_lastRc = slPCMOn(&g_pcm[channel], g_sampleData[index], g_sampleSize[index]);
-
-	if (g_lastRc >= 0)
-	{
-		g_nPlayed++;
-	}
-	else
-	{
-		g_nPlayRefused++;
-	}
-
-	diag_paint();
+	slPCMOn(&g_pcm[channel], g_sampleData[index], g_sampleSize[index]);
 }
 
 /*----------------------
