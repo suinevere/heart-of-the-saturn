@@ -41,6 +41,22 @@
 #include "animation.h"
 #include "getopt.h"
 
+/*----------------------
+ | sfx_smoke_test
+ | Description: THROWAWAY instrumentation living in
+ |   saturn/src/system/sound_srl.cxx, declared here rather than in sound.h so
+ |   the host build never sees it. Reverted with the rest of the SFX
+ |   diagnostics.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#ifdef HOTA_SATURN
+extern void sfx_smoke_test(void);
+#endif
+
 static char *VERSION = "1.2.4";
 
 static char *QUICKSAVE_FILENAME = "quicksave";
@@ -993,6 +1009,10 @@ int main(int argc, char **argv)
 		panic("platform_init failed\n");
 	}
 	atexit(atexit_callback);
+
+#ifdef HOTA_SATURN
+	sfx_smoke_test();
+#endif
 
 	if (!disc_open(cue_path))
 	{

@@ -252,7 +252,170 @@ static void diag_paint()
 	                  g_nPaints);
 }
 
+/*----------------------
+ | SFX_SMOKE_BYTES
+ | Description: THROWAWAY. Length of each smoke-test tone, one second at
+ |   8 kHz, long enough that a listener cannot miss it and short enough that
+ |   both tones fit the HWRAM heap's 62,528 bytes with room to spare.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define SFX_SMOKE_BYTES 8000
+
+/*----------------------
+ | smoke_fill
+ | Description: THROWAWAY. Writes a full-scale 8-bit signed square wave, so
+ |   the tone does not depend on sfxconv, the disc, or the script VM.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: buf -- destination; bytes -- length; period -- samples per half cycle
+ | Returns: N/A
+ ----------------------*/
+static void smoke_fill(signed char *buf, int bytes, int period)
+{
+	int i;
+
+	for (i = 0; i < bytes; i++)
+	{
+		buf[i] = ((i / period) & 1) ? (signed char)-100 : (signed char)100;
+	}
+}
+
+/*----------------------
+ | smoke_hold
+ | Description: THROWAWAY. Presents frames while a tone plays. slPCMOn
+ |   streams, so the caller must keep yielding or nothing is fed.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: frames -- vblanks to wait
+ | Returns: N/A
+ ----------------------*/
+static void smoke_hold(int frames)
+{
+	int i;
+
+	for (i = 0; i < frames; i++)
+	{
+		SRL::Core::Synchronize();
+	}
+}
+
+/*----------------------
+ | smoke_play
+ | Description: THROWAWAY. Fills a PCM struct in full and starts one tone,
+ |   returning slPCMOn's status rather than discarding it.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: g_pcm
+ | Params: channel -- 0..3; data -- sample bytes; bytes -- length
+ | Returns: slPCMOn's int8_t status
+ ----------------------*/
+static int8_t smoke_play(int channel, signed char *data, int bytes)
+{
+	if (slPCMStat(&g_pcm[channel]))
+	{
+		slPCMOff(&g_pcm[channel]);
+	}
+
+	g_pcm[channel].mode      = _Mono | _PCM8Bit;
+	g_pcm[channel].channel   = (uint8_t)(channel * 2);
+	g_pcm[channel].level     = 127;
+	g_pcm[channel].pan       = 0;
+	g_pcm[channel].pitch     = SFX_PITCH_8KHZ;
+	g_pcm[channel].eflevelR  = 0;
+	g_pcm[channel].efselectR = 0;
+	g_pcm[channel].eflevelL  = 0;
+	g_pcm[channel].efselectL = 0;
+
+	return slPCMOn(&g_pcm[channel], data, (unsigned long)bytes);
+}
+
 extern "C" {
+
+/*----------------------
+ | sfx_smoke_test
+ | Description: THROWAWAY instrumentation, called once from main() before the
+ |   intro. Answers the question the plan's Task 1 was supposed to settle and
+ |   never did: can slPCMOn stream from Low Work RAM? The original spike hung
+ |   its tone on the first play_sample call, which only the script VM reaches,
+ |   so it could never have fired during the intro it was listened for.
+ |
+ |   Two tones, deliberately different pitches so they are distinguishable by
+ |   ear: A is 250 Hz from LWRAM, B is 500 Hz from the HWRAM heap. Three
+ |   outcomes, three different causes -- both audible means PCM works and the
+ |   defect is in the engine path; only B means LWRAM is an illegal DMA source
+ |   for the B-bus destination and the cache must move to HWRAM; neither means
+ |   PCM playback is broken below this file, at the driver or the pitch.
+ |
+ |   Runs before disc_open and initialize(), so it competes with nothing for
+ |   either pool and depends on nothing but the sound driver Core::Initialize
+ |   has already loaded.
+ | Author: suinevere
+ | Dependencies: srl.hpp, saturn_compat.h
+ | Globals: g_pcm
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void sfx_smoke_test(void)
+{
+	signed char *lw;
+	signed char *hw;
+	int8_t rcLow = 99;
+	int8_t rcHigh = 99;
+
+	SRL::Debug::Print(1, 20, "SFX SMOKE TEST            ");
+
+	lw = (signed char *)saturn_lwram_alloc((unsigned long)SFX_SMOKE_BYTES);
+	if (lw != 0)
+	{
+		smoke_fill(lw, SFX_SMOKE_BYTES, 32);
+		rcLow = smoke_play(0, lw, SFX_SMOKE_BYTES);
+	}
+
+	SRL::Debug::Print(1, 21, "A LWRAM 250Hz ok%d rc%d    ",
+	                  lw != 0 ? 1 : 0, (int)rcLow);
+	smoke_hold(120);
+
+	if (slPCMStat(&g_pcm[0]))
+	{
+		slPCMOff(&g_pcm[0]);
+	}
+
+	hw = (signed char *)malloc((size_t)SFX_SMOKE_BYTES);
+	if (hw != 0)
+	{
+		smoke_fill(hw, SFX_SMOKE_BYTES, 16);
+		rcHigh = smoke_play(1, hw, SFX_SMOKE_BYTES);
+	}
+
+	SRL::Debug::Print(1, 22, "B HWRAM 500Hz ok%d rc%d    ",
+	                  hw != 0 ? 1 : 0, (int)rcHigh);
+	smoke_hold(120);
+
+	if (slPCMStat(&g_pcm[1]))
+	{
+		slPCMOff(&g_pcm[1]);
+	}
+
+	if (lw != 0)
+	{
+		saturn_lwram_free(lw);
+	}
+
+	if (hw != 0)
+	{
+		free(hw);
+	}
+
+	SRL::Debug::Print(1, 23, "SMOKE DONE A%d B%d          ",
+	                  (int)rcLow, (int)rcHigh);
+	smoke_hold(180);
+}
 
 /*----------------------
  | play_sample
