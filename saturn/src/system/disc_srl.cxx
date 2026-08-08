@@ -301,6 +301,112 @@ static uint32_t *bounce_acquire(void)
 }
 
 /*----------------------
+ | CDDA_LEVEL_FULL
+ | Description: The CD-DA level the drive plays at normally. SND_SetCdDaLev
+ |   takes 0..7 per channel and Hardware::Initialize sets 7, so 7 is both the
+ |   maximum and the value every fade returns to.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define CDDA_LEVEL_FULL 7
+
+/*----------------------
+ | g_cddaLevel
+ | Description: The level cdda_level_set last wrote, tracked because
+ |   SND_SetCdDaLev is write-only and a fade needs to know where it is
+ |   starting from. Holding it here also makes cdda_fade idempotent: a second
+ |   fade to a level already reached costs nothing and presents no frames,
+ |   which is what lets cdda_halt be called from inside an already-faded
+ |   suspend without fading twice.
+ |
+ |   The invariant every path maintains: the level is CDDA_LEVEL_FULL except
+ |   inside a suspend window. Any exit from cdda_restore that does not fade in
+ |   sets it back directly, so a track that is dropped can never leave the
+ |   next one silent.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static int g_cddaLevel = CDDA_LEVEL_FULL;
+
+/*----------------------
+ | cdda_level_set
+ | Description: Writes the CD-DA level immediately, presenting no frames.
+ |   Used where nothing is audible and a fade would only cost time -- putting
+ |   the level back after a track was dropped, or after the seek that stops
+ |   playback has already run.
+ | Author: suinevere
+ | Dependencies: srl.hpp
+ | Globals: g_cddaLevel
+ | Params: level -- 0..7
+ | Returns: N/A
+ ----------------------*/
+static void cdda_level_set(int level)
+{
+	g_cddaLevel = level;
+	SRL::Sound::Cdda::SetVolume((uint8_t)level);
+}
+
+/*----------------------
+ | cdda_fade
+ | Description: Ramps the CD-DA level one step per presented frame, which is
+ |   what hides the seam at a cutscene boundary. The drive cannot start or
+ |   stop a track instantly -- a seek costs one to three seconds across this
+ |   disc -- so the original Sega CD faded rather than cut, and this fades the
+ |   music down before the seek that silences it.
+ |
+ |   Only the stop side ramps. The start side restores the level in one write
+ |   before issuing the play, and it has to: cdda_wait_for_sound gates on
+ |   SND_GetAnlTlVl, which measures the SCSP's actual output, so a track
+ |   playing at level 0 registers as silence and the wait would run to its
+ |   full three-second cap on every restore. Ramping in would trade a seam
+ |   for a stall. The wait is what covers the start side instead -- it already
+ |   holds the game until the drive is audible, so nothing runs ahead of the
+ |   music. A true fade-in needs a detection path that does not depend on the
+ |   level being up; starting the ramp at 1 rather than 0 is the obvious
+ |   candidate and is untested.
+ |
+ |   Seven steps at one frame each is about 117 ms, small beside the
+ |   multi-second wait it brackets. platform_frame is what presents
+ |   the VDP2 layer and refreshes peripherals, so the picture stays live and
+ |   the pad stays responsive across the ramp, the same reason
+ |   cdda_wait_for_sound calls it.
+ |
+ |   Deliberately not called from disc_play_track. Blocking there was measured
+ |   distorting the game loop -- main.c's rest() compares against a stale
+ |   last_tick afterwards and the game sprints to catch up -- and every
+ |   cutscene boundary reaches this code through the file read that follows,
+ |   so the seam is covered without taking that risk.
+ | Author: suinevere
+ | Dependencies: srl.hpp, platform.h
+ | Globals: g_cddaLevel
+ | Params: target -- level to ramp to, 0..7
+ | Returns: N/A
+ ----------------------*/
+static void cdda_fade(int target)
+{
+	int step;
+
+	if (target == g_cddaLevel)
+	{
+		return;
+	}
+
+	step = (target > g_cddaLevel) ? 1 : -1;
+
+	while (g_cddaLevel != target)
+	{
+		cdda_level_set(g_cddaLevel + step);
+		platform_frame();
+	}
+}
+
+/*----------------------
  | cdda_wait_for_sound
  | Description: Holds the caller until the drive is measurably producing CD-DA,
  |   so an animation and its music start together. The obvious signal is the
@@ -394,6 +500,8 @@ static void cdda_suspend(void)
 		return;
 	}
 
+	cdda_fade(0);
+
 	CDC_GetCurStat(&stat);
 	g_wasPlaying = (CDC_GET_STC(&stat) == CDC_ST_PLAY);
 	g_pauseFad = (uint32_t)CDC_STAT_FAD(&stat);
@@ -483,6 +591,7 @@ static void cdda_restore(void)
 	case CDDA_FORGET:
 		printf("cdda_restore: restore classified as finished or never-started\n");
 		g_musicTrack = -1;
+		cdda_level_set(CDDA_LEVEL_FULL);
 		return;
 
 	case CDDA_RESUME:
@@ -494,6 +603,7 @@ static void cdda_restore(void)
 		CDC_PLY_ETYPE(&ply) = CDC_PTYPE_FAD;
 		CDC_PLY_EFAS(&ply) = end - g_pauseFad;
 		CDC_PLY_PMODE(&ply) = CDC_PM_DFL;
+		cdda_level_set(CDDA_LEVEL_FULL);
 		CDC_CdPlay(&ply);
 		cdda_wait_for_sound();
 		return;
@@ -505,9 +615,11 @@ static void cdda_restore(void)
 		{
 			printf("cdda_restore: restart declined, track %d not playable\n", cue);
 			g_musicTrack = -1;
+			cdda_level_set(CDDA_LEVEL_FULL);
 			return;
 		}
 
+		cdda_level_set(CDDA_LEVEL_FULL);
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
 		cdda_wait_for_sound();
 		return;
@@ -977,8 +1089,13 @@ void disc_play_track(int engine_index, int loop)
  |   observed history. Safe before disc_open, after disc_close, and with
  |   nothing playing, exactly as disc.h requires, which is what lets
  |   atexit_callback call it unconditionally.
+ |
+ |   Fades before the seek rather than cutting, because play_anm ends every
+ |   cutscene with this call and an abrupt stop is the seam. The level goes
+ |   back to full afterwards, silently, since the seek has already stopped
+ |   playback -- see g_cddaLevel for the invariant that keeps.
  | Author: suinevere
- | Globals: g_musicTrack, g_musicObserved
+ | Globals: g_musicTrack, g_musicObserved, g_cddaLevel
  | Params: N/A
  | Returns: N/A
  ----------------------*/
@@ -989,9 +1106,11 @@ void disc_stop_track(void)
 		return;
 	}
 
+	cdda_fade(0);
 	g_musicTrack = -1;
 	g_musicObserved = false;
 	cdda_halt();
+	cdda_level_set(CDDA_LEVEL_FULL);
 }
 
 /*----------------------
