@@ -64,9 +64,15 @@ void play_sample(int index, int volume, int channel)
 	SDL_AudioCVT cvt;
 	Mix_Chunk *chunk;
 
-	fprintf(stderr, "PROBE play_sample index %d volume %d channel %d\n",
-	        index, volume, channel);
-	fflush(stderr);
+	{
+		FILE *probe = fopen("sfxprobe.log", "a");
+		if (probe != NULL)
+		{
+			fprintf(probe, "play_sample index %d volume %d channel %d\n",
+			        index, volume, channel);
+			fclose(probe);
+		}
+	}
 
 	if (cls.nosound)
 	{
