@@ -182,6 +182,56 @@ static unsigned long g_sampleSize[SFX_CACHE_SLOTS];
  ----------------------*/
 static int g_warned;
 
+/*----------------------
+ | SFX diagnostic counters
+ | Description: THROWAWAY instrumentation for the gameplay-silence bug. Not a
+ |   fix -- counts calls, failure paths, and PlayOnChannel's refused-vs-played
+ |   outcome so a hardware run can tell H1/H2/H3 and "never called" apart. A
+ |   later commit reverts this whole block.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static int g_nCalls;
+static int g_nLocateFail;
+static int g_nAllocFail;
+static int g_nPlayRefused;
+static int g_nPlayed;
+static int g_lastIndex = -1;
+static int g_lastChannel = -1;
+static int g_lastLen = -1;
+
+/*----------------------
+ | diag_paint
+ | Description: THROWAWAY instrumentation. Paints the counters, the last
+ |   call's index/channel/length plus current LWRAM headroom, and each
+ |   channel's free/busy state onto the debug text layer -- the third line
+ |   makes H3's "refused forever" hypothesis directly observable instead of
+ |   inferred from g_nPlayRefused alone.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: g_nCalls, g_nLocateFail, g_nAllocFail, g_nPlayRefused, g_nPlayed,
+ |   g_lastIndex, g_lastChannel, g_lastLen
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void diag_paint()
+{
+	SRL::Debug::Print(1, 24, "SFX c%-4d L%-3d A%-3d R%-3d P%-4d",
+	                  g_nCalls, g_nLocateFail, g_nAllocFail,
+	                  g_nPlayRefused, g_nPlayed);
+	SRL::Debug::Print(1, 25, "SFX i%-4d ch%-2d ln%-6d lw%-7d",
+	                  g_lastIndex, g_lastChannel, g_lastLen,
+	                  (int)SRL::Memory::LowWorkRam::GetFreeSpace());
+	SRL::Debug::Print(1, 26, "SFX free %d%d%d%d",
+	                  SRL::Sound::Pcm::IsChannelFree(0) ? 1 : 0,
+	                  SRL::Sound::Pcm::IsChannelFree(1) ? 1 : 0,
+	                  SRL::Sound::Pcm::IsChannelFree(2) ? 1 : 0,
+	                  SRL::Sound::Pcm::IsChannelFree(3) ? 1 : 0);
+}
+
 extern "C" {
 
 /*----------------------
@@ -211,6 +261,10 @@ void play_sample(int index, int volume, int channel)
 	int padded;
 	int i;
 	signed char *buffer;
+	bool played;
+
+	g_nCalls++;
+	g_lastChannel = channel;
 
 	if (index == 0)
 	{
@@ -219,17 +273,21 @@ void play_sample(int index, int volume, int channel)
 			SRL::Sound::Pcm::StopSound(i);
 		}
 
+		diag_paint();
 		return;
 	}
 
 	if (channel < 0 || channel >= SFX_CHANNELS)
 	{
+		diag_paint();
 		return;
 	}
 
 	index = index - 1;
+	g_lastIndex = index;
 	if (index < 0 || index >= SFX_CACHE_SLOTS)
 	{
+		diag_paint();
 		return;
 	}
 
@@ -237,19 +295,25 @@ void play_sample(int index, int volume, int channel)
 	{
 		if (!sfxconv_locate(index, &offset, &length))
 		{
+			g_nLocateFail++;
+			diag_paint();
 			return;
 		}
 
 		padded = sfxconv_padded_size(length);
+		g_lastLen = padded;
 		buffer = (signed char *)saturn_lwram_alloc((unsigned long)padded);
 		if (buffer == 0)
 		{
+			g_nAllocFail++;
+
 			if (!g_warned)
 			{
 				g_warned = 1;
 				printf("SFX: lwram full at %d", index + 1);
 			}
 
+			diag_paint();
 			return;
 		}
 
@@ -258,9 +322,22 @@ void play_sample(int index, int volume, int channel)
 		g_sampleSize[index] = (unsigned long)padded;
 	}
 
+	g_lastLen = (int)g_sampleSize[index];
+
 	SRL::Sound::Pcm::StopSound(channel);
-	MemPcm(g_sampleData[index], g_sampleSize[index]).PlayOnChannel(
+	played = MemPcm(g_sampleData[index], g_sampleSize[index]).PlayOnChannel(
 		(uint8_t)channel, (uint8_t)(volume >> 1));
+
+	if (played)
+	{
+		g_nPlayed++;
+	}
+	else
+	{
+		g_nPlayRefused++;
+	}
+
+	diag_paint();
 }
 
 /*----------------------
