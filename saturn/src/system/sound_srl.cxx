@@ -238,9 +238,10 @@ static void diag_paint()
 {
 	g_nPaints++;
 
-	SRL::Debug::Print(1, 24, "SFX c%d L%d A%d R%d P%d rc%d      ",
+	SRL::Debug::Print(1, 24, "SFX c%d L%d A%d R%d P%d rc%d sub%d   ",
 	                  g_nCalls, g_nLocateFail, g_nAllocFail,
-	                  g_nPlayRefused, g_nPlayed, (int)g_lastRc);
+	                  g_nPlayRefused, g_nPlayed, (int)g_lastRc,
+	                  SFX_TONE_SUBSTITUTE);
 	SRL::Debug::Print(1, 25, "SFX i%d ch%d ln%d lw%d        ",
 	                  g_lastIndex, g_lastChannel, g_lastLen,
 	                  (int)SRL::Memory::LowWorkRam::GetFreeSpace());
@@ -264,6 +265,29 @@ static void diag_paint()
  | Returns: N/A
  ----------------------*/
 #define SFX_SMOKE_BYTES 8000
+
+/*----------------------
+ | SFX_TONE_SUBSTITUTE
+ | Description: THROWAWAY bisection switch. With this at 1, play_sample runs
+ |   every one of its normal steps -- locate, allocate, decode, cache, stop
+ |   guard, struct fill, slPCMOn -- and then, immediately before the call,
+ |   overwrites the cached bytes with the square wave the boot smoke test
+ |   proved audible and forces full volume. Only the sample content and the
+ |   level change; the call site, the timing, the channel and the buffer are
+ |   the engine's own.
+ |
+ |   Beeps during gameplay mean the call path is sound and the defect is in
+ |   the bytes -- sfxconv's location or decode, or what the emulated 68000 map
+ |   actually holds at that moment. Continued silence means the bytes are
+ |   irrelevant and the defect is in calling slPCMOn from inside the game
+ |   loop. Set to 0 to restore real samples.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define SFX_TONE_SUBSTITUTE 1
 
 /*----------------------
  | smoke_fill
@@ -508,6 +532,11 @@ void play_sample(int index, int volume, int channel)
 	}
 
 	g_lastLen = (int)g_sampleSize[index];
+
+#if SFX_TONE_SUBSTITUTE
+	smoke_fill(g_sampleData[index], (int)g_sampleSize[index], 32);
+	volume = 254;
+#endif
 
 	if (slPCMStat(&g_pcm[channel]))
 	{
