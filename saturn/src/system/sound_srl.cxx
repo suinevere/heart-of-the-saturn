@@ -166,15 +166,31 @@ static int g_warned;
  |   Pcm::Channels[] to half-update. PlayOnChannel only ever rewrote mode,
  |   pitch, level and pan there, never PCM.channel (the SCSP slot number,
  |   set once by SRL's static initialiser), so once slPCMOff had touched a
- |   channel nothing put that field back. Filling all nine members here on
- |   every play removes that dependency on SRL's own array entirely.
+ |   channel nothing put that field back. Filling all nine members on every
+ |   play removes that dependency on SRL's own array entirely.
+ |
+ |   File-scope initialised, not left zero, because .channel is what
+ |   slPCMStat and slPCMOff key off of -- the PCM struct carries no separate
+ |   "is playing" flag -- and a zero-initialised array reports channel 1, 2
+ |   and 3 as slot 0 until their first play writes .channel. The guard in
+ |   play_sample and the stop loops below all run before that write, so on
+ |   first use they would query and potentially cut off slot 0. Values are
+ |   0, 2, 4, 6: SCSP slot numbers, spaced two apart so a stereo pair would
+ |   fit each engine channel, matching srl_sound.hpp:395-401's own layout.
+ |   play_sample's per-play write of every field afterward is kept, not
+ |   removed -- this initialiser only has to be correct once, at startup.
  | Author: suinevere
  | Dependencies: N/A
  | Globals: N/A
  | Params: N/A
  | Returns: N/A
  ----------------------*/
-static PCM g_pcm[SFX_CHANNELS];
+static PCM g_pcm[SFX_CHANNELS] = {
+	{ _Mono | _PCM8Bit, 0, 127, 0, SFX_PITCH_8KHZ, 0, 0, 0, 0 },
+	{ _Mono | _PCM8Bit, 2, 127, 0, SFX_PITCH_8KHZ, 0, 0, 0, 0 },
+	{ _Mono | _PCM8Bit, 4, 127, 0, SFX_PITCH_8KHZ, 0, 0, 0, 0 },
+	{ _Mono | _PCM8Bit, 6, 127, 0, SFX_PITCH_8KHZ, 0, 0, 0, 0 }
+};
 
 /*----------------------
  | SFX diagnostic counters
