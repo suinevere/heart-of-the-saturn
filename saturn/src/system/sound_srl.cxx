@@ -48,6 +48,11 @@
  |   every call instead of inheriting it -- ignoring a volume the script
  |   explicitly asked for would be an audible defect.
  |
+ |   It converts that volume rather than halving it. The host's `volume >> 1`
+ |   is linear amplitude on SDL_mixer's scale; slPCMOn's level is attenuation
+ |   in dB steps, so copying the host's arithmetic made every effect
+ |   inaudible. See sfx_level_for_volume.
+ |
  |   Where the memory comes from: saturn_lwram_alloc, never malloc.
  |   disc_srl.cxx measured the HWRAM heap at 62,528 bytes and
  |   saturn_compat.cxx's malloc deliberately refuses to fall back to LWRAM.
@@ -179,7 +184,22 @@
  | Params: N/A
  | Returns: N/A
  ----------------------*/
-#define SFX_FORCE_FULL_VOLUME 1
+#define SFX_FORCE_FULL_VOLUME 0
+
+/*----------------------
+ | SFX_SMOKE_ENABLE
+ | Description: THROWAWAY. Runs the boot tone pair when 1. Off by default now
+ |   that it has done its job -- it proved the driver, the pitch word and
+ |   LWRAM as a stream source all good, which is what narrowed the bug to the
+ |   level. Left in place because it costs nothing at 0 and is the fastest way
+ |   to re-establish that a disc's audio path is alive at all.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define SFX_SMOKE_ENABLE 0
 
 /*----------------------
  | g_sampleData / g_sampleSize
@@ -248,6 +268,65 @@ static PCM g_pcm[SFX_CHANNELS] = {
 	{ _Mono | _PCM8Bit, 4, 127, 0, SFX_PITCH_8KHZ, 0, 0, 0, 0 },
 	{ _Mono | _PCM8Bit, 6, 127, 0, SFX_PITCH_8KHZ, 0, 0, 0, 0 }
 };
+
+/*----------------------
+ | sfx_level_for_volume
+ | Description: Maps the engine's 0..255 volume onto slPCMOn's 0..127 level.
+ |   Not a halving, which is what src/sound.c does and what this file did
+ |   until hardware said otherwise: SDL_mixer's volume is a linear amplitude
+ |   multiplier over 0..128, so the host's `volume >> 1` is about -6 dB, but
+ |   SGL's level reaches the SCSP's total-level field, which is attenuation in
+ |   fixed dB steps. Halving the number there is roughly -48 dB, and the
+ |   engine's quieter volume of 50 landed near -72 dB. Both were inaudible on
+ |   hardware, in every room, in every build -- the defect that made sound
+ |   effects look like they had never worked.
+ |
+ |   Taking the SCSP's 96 dB over 256 steps and SGL's 0..127 as every second
+ |   step gives 0.75 dB per level, so reproducing the host's linear gain
+ |   v/255 means level = 127 + 20*log10(v/255)/0.75, which reduces to
+ |   63 + 8*log2(v). That is computed here without floating point: e is the
+ |   integer part of log2, and the remainder term interpolates the mantissa
+ |   linearly, worth at most about half a dB of error.
+ |
+ |   The 0.75 dB step is inferred from the hardware rather than read off a
+ |   datasheet, so the shape is certain -- 63 was inaudible where 127 was not,
+ |   which no linear scale explains -- and the exact slope is not.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: volume -- engine volume, 0..255
+ | Returns: level for PCM.level, 0..127
+ ----------------------*/
+static int sfx_level_for_volume(int volume)
+{
+	int e;
+	int level;
+
+	if (volume <= 0)
+	{
+		return 0;
+	}
+
+	if (volume > 255)
+	{
+		volume = 255;
+	}
+
+	e = 0;
+	while ((volume >> (e + 1)) != 0)
+	{
+		e++;
+	}
+
+	level = 63 + 8 * e + ((volume - (1 << e)) * 8) / (1 << e);
+
+	if (level > 127)
+	{
+		level = 127;
+	}
+
+	return level;
+}
 
 /*----------------------
  | SFX diagnostic counters
@@ -412,6 +491,7 @@ extern "C" {
  ----------------------*/
 void sfx_smoke_test(void)
 {
+#if SFX_SMOKE_ENABLE
 	signed char *lw;
 	signed char *hw;
 	int8_t rcLow = 99;
@@ -464,6 +544,7 @@ void sfx_smoke_test(void)
 	SRL::Debug::Print(1, 23, "SMOKE DONE A%d B%d          ",
 	                  (int)rcLow, (int)rcHigh);
 	smoke_hold(180);
+#endif
 }
 
 /*----------------------
@@ -574,7 +655,7 @@ void play_sample(int index, int volume, int channel)
 		}
 	}
 
-	level = volume >> 1;
+	level = sfx_level_for_volume(volume);
 #if SFX_FORCE_FULL_VOLUME
 	level = 127;
 #endif
