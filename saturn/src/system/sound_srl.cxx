@@ -202,6 +202,7 @@ static int g_nPlayed;
 static int g_lastIndex = -1;
 static int g_lastChannel = -1;
 static int g_lastLen = -1;
+static int g_nPaints;
 
 /*----------------------
  | diag_paint
@@ -209,27 +210,35 @@ static int g_lastLen = -1;
  |   call's index/channel/length plus current LWRAM headroom, and each
  |   channel's free/busy state onto the debug text layer -- the third line
  |   makes H3's "refused forever" hypothesis directly observable instead of
- |   inferred from g_nPlayRefused alone.
+ |   inferred from g_nPlayRefused alone, and g_nPaints tells a frozen display
+ |   apart from one that was never repainted since the cinematic.
+ |
+ |   snprintfEx (srl_string.hpp) supports only %c %s %0Nd %d %x %u %f -- no
+ |   width or flag syntax -- so every specifier below is bare %d, padded with
+ |   trailing spaces instead, so a shrinking number can't leave stale digits.
  | Author: suinevere
  | Dependencies: N/A
  | Globals: g_nCalls, g_nLocateFail, g_nAllocFail, g_nPlayRefused, g_nPlayed,
- |   g_lastIndex, g_lastChannel, g_lastLen
+ |   g_lastIndex, g_lastChannel, g_lastLen, g_nPaints
  | Params: N/A
  | Returns: N/A
  ----------------------*/
 static void diag_paint()
 {
-	SRL::Debug::Print(1, 24, "SFX c%-4d L%-3d A%-3d R%-3d P%-4d",
+	g_nPaints++;
+
+	SRL::Debug::Print(1, 24, "SFX c%d L%d A%d R%d P%d        ",
 	                  g_nCalls, g_nLocateFail, g_nAllocFail,
 	                  g_nPlayRefused, g_nPlayed);
-	SRL::Debug::Print(1, 25, "SFX i%-4d ch%-2d ln%-6d lw%-7d",
+	SRL::Debug::Print(1, 25, "SFX i%d ch%d ln%d lw%d        ",
 	                  g_lastIndex, g_lastChannel, g_lastLen,
 	                  (int)SRL::Memory::LowWorkRam::GetFreeSpace());
-	SRL::Debug::Print(1, 26, "SFX free %d%d%d%d",
+	SRL::Debug::Print(1, 26, "SFX free %d%d%d%d p%d        ",
 	                  SRL::Sound::Pcm::IsChannelFree(0) ? 1 : 0,
 	                  SRL::Sound::Pcm::IsChannelFree(1) ? 1 : 0,
 	                  SRL::Sound::Pcm::IsChannelFree(2) ? 1 : 0,
-	                  SRL::Sound::Pcm::IsChannelFree(3) ? 1 : 0);
+	                  SRL::Sound::Pcm::IsChannelFree(3) ? 1 : 0,
+	                  g_nPaints);
 }
 
 extern "C" {
