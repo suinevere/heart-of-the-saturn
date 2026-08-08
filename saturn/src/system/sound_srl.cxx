@@ -125,6 +125,42 @@
 #define SFX_PITCH_8KHZ 0x69CE
 
 /*----------------------
+ | SFX_SMOKE_BYTES
+ | Description: THROWAWAY. Length of each smoke-test tone, one second at
+ |   8 kHz, long enough that a listener cannot miss it and short enough that
+ |   both tones fit the HWRAM heap's 62,528 bytes with room to spare.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define SFX_SMOKE_BYTES 8000
+
+/*----------------------
+ | SFX_TONE_SUBSTITUTE
+ | Description: THROWAWAY bisection switch. With this at 1, play_sample runs
+ |   every one of its normal steps -- locate, allocate, decode, cache, stop
+ |   guard, struct fill, slPCMOn -- and then, immediately before the call,
+ |   overwrites the cached bytes with the square wave the boot smoke test
+ |   proved audible and forces full volume. Only the sample content and the
+ |   level change; the call site, the timing, the channel and the buffer are
+ |   the engine's own.
+ |
+ |   Beeps during gameplay mean the call path is sound and the defect is in
+ |   the bytes -- sfxconv's location or decode, or what the emulated 68000 map
+ |   actually holds at that moment. Continued silence means the bytes are
+ |   irrelevant and the defect is in calling slPCMOn from inside the game
+ |   loop. Set to 0 to restore real samples.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define SFX_TONE_SUBSTITUTE 1
+
+/*----------------------
  | g_sampleData / g_sampleSize
  | Description: The converted-sample cache, parallel arrays indexed by
  |   zero-based sample index. g_sampleData holds LWRAM blocks and is NULL where
@@ -252,42 +288,6 @@ static void diag_paint()
 	                  slPCMStat(&g_pcm[3]) ? 0 : 1,
 	                  g_nPaints);
 }
-
-/*----------------------
- | SFX_SMOKE_BYTES
- | Description: THROWAWAY. Length of each smoke-test tone, one second at
- |   8 kHz, long enough that a listener cannot miss it and short enough that
- |   both tones fit the HWRAM heap's 62,528 bytes with room to spare.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define SFX_SMOKE_BYTES 8000
-
-/*----------------------
- | SFX_TONE_SUBSTITUTE
- | Description: THROWAWAY bisection switch. With this at 1, play_sample runs
- |   every one of its normal steps -- locate, allocate, decode, cache, stop
- |   guard, struct fill, slPCMOn -- and then, immediately before the call,
- |   overwrites the cached bytes with the square wave the boot smoke test
- |   proved audible and forces full volume. Only the sample content and the
- |   level change; the call site, the timing, the channel and the buffer are
- |   the engine's own.
- |
- |   Beeps during gameplay mean the call path is sound and the defect is in
- |   the bytes -- sfxconv's location or decode, or what the emulated 68000 map
- |   actually holds at that moment. Continued silence means the bytes are
- |   irrelevant and the defect is in calling slPCMOn from inside the game
- |   loop. Set to 0 to restore real samples.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define SFX_TONE_SUBSTITUTE 1
 
 /*----------------------
  | smoke_fill
