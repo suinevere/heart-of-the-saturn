@@ -314,6 +314,30 @@ static uint32_t *bounce_acquire(void)
 #define CDDA_LEVEL_FULL 7
 
 /*----------------------
+ | CDDA_FADE_IN_LEVEL
+ | Description: The level a track is started at so it can be ramped up
+ |   instead of appearing at full volume. Not 0, and that is the whole point:
+ |   cdda_wait_for_sound gates on SND_GetAnlTlVl, which measures the SCSP's
+ |   real output, so a track playing at level 0 reads as silence and the wait
+ |   would run to its full cap every time. 1 is the quietest level that still
+ |   produces output for the analysis to see.
+ |
+ |   This is the one number here that hardware has not confirmed. If the
+ |   analysis cannot see level 1, every restore costs CDDA_SOUND_CAP_MS
+ |   instead of returning as soon as the drive is audible -- the symptom is a
+ |   three-second stall on every file read, not silence, because
+ |   cdda_wait_for_sound reports the timeout and the caller jumps straight to
+ |   full. Setting this to CDDA_LEVEL_FULL restores the previous behaviour
+ |   exactly: no fade in, detection as reliable as before.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define CDDA_FADE_IN_LEVEL 1
+
+/*----------------------
  | g_cddaLevel
  | Description: The level cdda_level_set last wrote, tracked because
  |   SND_SetCdDaLev is write-only and a fade needs to know where it is
@@ -360,16 +384,13 @@ static void cdda_level_set(int level)
  |   disc -- so the original Sega CD faded rather than cut, and this fades the
  |   music down before the seek that silences it.
  |
- |   Only the stop side ramps. The start side restores the level in one write
- |   before issuing the play, and it has to: cdda_wait_for_sound gates on
- |   SND_GetAnlTlVl, which measures the SCSP's actual output, so a track
- |   playing at level 0 registers as silence and the wait would run to its
- |   full three-second cap on every restore. Ramping in would trade a seam
- |   for a stall. The wait is what covers the start side instead -- it already
- |   holds the game until the drive is audible, so nothing runs ahead of the
- |   music. A true fade-in needs a detection path that does not depend on the
- |   level being up; starting the ramp at 1 rather than 0 is the obvious
- |   candidate and is untested.
+ |   Both sides ramp, but not symmetrically. The stop side can fade to 0
+ |   because nothing needs to hear the result. The start side cannot start at
+ |   0: cdda_wait_for_sound gates on SND_GetAnlTlVl, which measures the SCSP's
+ |   real output, so a track at level 0 reads as silence and the wait would
+ |   run to its cap every time. Playback therefore starts at
+ |   CDDA_FADE_IN_LEVEL, quiet but visible to the analysis, and cdda_bring_in
+ |   ramps it the rest of the way once the drive is confirmed audible.
  |
  |   Seven steps at one frame each is about 117 ms, small beside the
  |   multi-second wait it brackets. platform_frame is what presents
@@ -435,9 +456,9 @@ static void cdda_fade(int target)
  | Author: suinevere
  | Globals: N/A
  | Params: N/A
- | Returns: N/A
+ | Returns: 1 if output was detected, 0 if the cap was reached first
  ----------------------*/
-static void cdda_wait_for_sound(void)
+static int cdda_wait_for_sound(void)
 {
 	unsigned int t0 = platform_ticks();
 
@@ -450,13 +471,38 @@ static void cdda_wait_for_sound(void)
 
 		if (vol.LeftChannel != 0 || vol.RightChannel != 0)
 		{
-			return;
+			return 1;
 		}
 
 		if (platform_ticks() - t0 >= CDDA_SOUND_CAP_MS)
 		{
-			return;
+			return 0;
 		}
+	}
+}
+
+/*----------------------
+ | cdda_bring_in
+ | Description: Ramps a freshly started track up to full, or jumps there if
+ |   the wait never saw output. Both callers in cdda_restore start playback at
+ |   CDDA_FADE_IN_LEVEL and hand the wait's verdict here, so a disc or a
+ |   drive that defeats the analysis degrades to the old abrupt entry rather
+ |   than to a ramp timed against nothing.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: g_cddaLevel
+ | Params: detected -- cdda_wait_for_sound's return
+ | Returns: N/A
+ ----------------------*/
+static void cdda_bring_in(int detected)
+{
+	if (detected)
+	{
+		cdda_fade(CDDA_LEVEL_FULL);
+	}
+	else
+	{
+		cdda_level_set(CDDA_LEVEL_FULL);
 	}
 }
 
@@ -603,9 +649,9 @@ static void cdda_restore(void)
 		CDC_PLY_ETYPE(&ply) = CDC_PTYPE_FAD;
 		CDC_PLY_EFAS(&ply) = end - g_pauseFad;
 		CDC_PLY_PMODE(&ply) = CDC_PM_DFL;
-		cdda_level_set(CDDA_LEVEL_FULL);
+		cdda_level_set(CDDA_FADE_IN_LEVEL);
 		CDC_CdPlay(&ply);
-		cdda_wait_for_sound();
+		cdda_bring_in(cdda_wait_for_sound());
 		return;
 	}
 
@@ -619,9 +665,9 @@ static void cdda_restore(void)
 			return;
 		}
 
-		cdda_level_set(CDDA_LEVEL_FULL);
+		cdda_level_set(CDDA_FADE_IN_LEVEL);
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
-		cdda_wait_for_sound();
+		cdda_bring_in(cdda_wait_for_sound());
 		return;
 	}
 }
