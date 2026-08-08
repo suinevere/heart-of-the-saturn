@@ -16,19 +16,29 @@
  |
  |   Three things this file does that the host does not:
  |
- |   It stops a channel before playing on it. SRL's PlayOnChannel opens with
- |   `if (!slPCMStat(...))` and refuses a busy channel; the host's
- |   Mix_PlayChannelTimed interrupts it. A script firing two sounds on one
- |   channel expects the second, so the refusal is wrong for us and StopSound
- |   restores the host's behaviour. It is a no-op on a free channel.
+ |   It owns its four PCM structs (g_pcm below) rather than going through
+ |   SRL::Sound::Pcm::IPcmFile::PlayOnChannel. PlayOnChannel rewrites only
+ |   mode, pitch, level and pan in Pcm::Channels[channel] and never
+ |   PCM.channel, the SCSP slot number SRL's static initialiser sets once;
+ |   nothing re-initialises that field after slPCMOff has touched it, and
+ |   PlayOnChannel also discards slPCMOn's int8_t status, making failure
+ |   unobservable. Filling a PCM struct in full on every play and calling
+ |   slPCMOn directly, keeping its return in g_lastRc, fixes both.
  |
- |   It stops all four channels before freeing the cache. slPCMOn streams from
- |   the buffer for the duration of playback, and the LWRAM allocator writes
- |   its own bookkeeping into freed blocks, so freeing underneath a live stream
- |   would be audible. main.c calls sound_flush_cache at the end of load_room,
- |   after the read that overwrites the map -- which is safe only because the
- |   cache holds converted copies rather than pointers into the map. A design
- |   that played in place would have had a live defect at that call site.
+ |   It stops a channel before playing on it, guarded by slPCMStat so
+ |   slPCMOff is never called on a channel that is not playing. A script
+ |   firing two sounds on one channel expects the second, which is why this
+ |   file interrupts rather than refuses -- the host's Mix_PlayChannelTimed
+ |   does the same.
+ |
+ |   It stops all four channels, same guard, before freeing the cache.
+ |   slPCMOn streams from the buffer for the duration of playback, and the
+ |   LWRAM allocator writes its own bookkeeping into freed blocks, so freeing
+ |   underneath a live stream would be audible. main.c calls sound_flush_cache
+ |   at the end of load_room, after the read that overwrites the map -- which
+ |   is safe only because the cache holds converted copies rather than
+ |   pointers into the map. A design that played in place would have had a
+ |   live defect at that call site.
  |
  |   It honours volume on every play, where the host ignores it on cached
  |   replays. sound.c bakes volume into the Mix_Chunk when a sample is first
@@ -98,54 +108,21 @@
  ----------------------*/
 #define SFX_CACHE_SLOTS 256
 
-namespace
-{
-	/*----------------------
-	 | MemPcm
-	 | Description: An IPcmFile over a buffer this file already owns. SRL's two
-	 |   concrete subclasses, RawPcm and WaveSound, both read from a Cd::File;
-	 |   these samples are already in RAM. IPcmFile's members are protected and
-	 |   PlayOnChannel is public and inherited, so this is the intended
-	 |   extension point rather than a way around one.
-	 |
-	 |   Non-owning, and constructed on the stack per play. That is safe even
-	 |   though playback is asynchronous: PlayOnChannel copies mode, pitch,
-	 |   level and pan into Pcm's own channel array and passes the pointer and
-	 |   size to slPCMOn by value, so nothing the driver goes on to use lives
-	 |   here. The buffer must outlive playback; this handle need not. It is
-	 |   also why IPcmFile's empty non-virtual destructor is correct here and
-	 |   would be a bug in an owning subclass.
-	 | Author: suinevere
-	 | Dependencies: N/A
-	 | Globals: N/A
-	 | Params: N/A
-	 | Returns: N/A
-	 ----------------------*/
-	class MemPcm : public SRL::Sound::Pcm::IPcmFile
-	{
-	public:
-		/*----------------------
-		 | MemPcm::MemPcm
-		 | Description: Describes a cached sample to SRL: mono, 8-bit signed,
-		 |   8 kHz. The rate is the Sega CD source rate and is reached by
-		 |   hardware pitch, not by resampling -- PlayOnChannel derives octave
-		 |   and FNS from this field.
-		 | Author: suinevere
-		 | Globals: N/A
-		 | Params: buffer -- decoded and padded sample bytes, owned by the
-		 |   cache; bytes -- their count, from sfxconv_padded_size
-		 | Returns: N/A
-		 ----------------------*/
-		MemPcm(signed char *buffer, unsigned long bytes)
-		{
-			this->data = (int8_t *)buffer;
-			this->dataSize = bytes;
-			this->mode = _Mono;
-			this->depth = _PCM8Bit;
-			this->sampleRate = 8000;
-		}
-	};
-}
+/*----------------------
+ | SFX_PITCH_8KHZ
+ | Description: slPCMOn's pitch word for an 8 kHz sample, precomputed because
+ |   SRL's PCM_CALC_* macros dereference Pcm::LogTable, a private static that
+ |   is unreachable outside SRL::Sound::Pcm. Derivation, following SGL's own
+ |   formula: octave = LogTable[44100 / (8000 + 1)] = LogTable[5] = 3;
+ |   shift = 44100 >> 3 = 5512; fns = ((8000 - 5512) << 10) / 5512 = 462;
+ |   pitch = ((-3 & 0xF) << 11) | 462 = (0xD << 11) | 0x1CE = 0x69CE.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define SFX_PITCH_8KHZ 0x69CE
 
 /*----------------------
  | g_sampleData / g_sampleSize
@@ -183,9 +160,26 @@ static unsigned long g_sampleSize[SFX_CACHE_SLOTS];
 static int g_warned;
 
 /*----------------------
+ | g_pcm
+ | Description: One PCM struct per engine channel, owned and fully
+ |   re-initialised on every play_sample call rather than left for SRL's
+ |   Pcm::Channels[] to half-update. PlayOnChannel only ever rewrote mode,
+ |   pitch, level and pan there, never PCM.channel (the SCSP slot number,
+ |   set once by SRL's static initialiser), so once slPCMOff had touched a
+ |   channel nothing put that field back. Filling all nine members here on
+ |   every play removes that dependency on SRL's own array entirely.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static PCM g_pcm[SFX_CHANNELS];
+
+/*----------------------
  | SFX diagnostic counters
  | Description: THROWAWAY instrumentation for the gameplay-silence bug. Not a
- |   fix -- counts calls, failure paths, and PlayOnChannel's refused-vs-played
+ |   fix -- counts calls, failure paths, and slPCMOn's refused-vs-played
  |   outcome so a hardware run can tell H1/H2/H3 and "never called" apart. A
  |   later commit reverts this whole block.
  | Author: suinevere
@@ -203,6 +197,7 @@ static int g_lastIndex = -1;
 static int g_lastChannel = -1;
 static int g_lastLen = -1;
 static int g_nPaints;
+static int8_t g_lastRc = 0;
 
 /*----------------------
  | diag_paint
@@ -219,7 +214,7 @@ static int g_nPaints;
  | Author: suinevere
  | Dependencies: N/A
  | Globals: g_nCalls, g_nLocateFail, g_nAllocFail, g_nPlayRefused, g_nPlayed,
- |   g_lastIndex, g_lastChannel, g_lastLen, g_nPaints
+ |   g_lastIndex, g_lastChannel, g_lastLen, g_nPaints, g_lastRc, g_pcm
  | Params: N/A
  | Returns: N/A
  ----------------------*/
@@ -227,17 +222,17 @@ static void diag_paint()
 {
 	g_nPaints++;
 
-	SRL::Debug::Print(1, 24, "SFX c%d L%d A%d R%d P%d        ",
+	SRL::Debug::Print(1, 24, "SFX c%d L%d A%d R%d P%d rc%d      ",
 	                  g_nCalls, g_nLocateFail, g_nAllocFail,
-	                  g_nPlayRefused, g_nPlayed);
+	                  g_nPlayRefused, g_nPlayed, (int)g_lastRc);
 	SRL::Debug::Print(1, 25, "SFX i%d ch%d ln%d lw%d        ",
 	                  g_lastIndex, g_lastChannel, g_lastLen,
 	                  (int)SRL::Memory::LowWorkRam::GetFreeSpace());
 	SRL::Debug::Print(1, 26, "SFX free %d%d%d%d p%d        ",
-	                  SRL::Sound::Pcm::IsChannelFree(0) ? 1 : 0,
-	                  SRL::Sound::Pcm::IsChannelFree(1) ? 1 : 0,
-	                  SRL::Sound::Pcm::IsChannelFree(2) ? 1 : 0,
-	                  SRL::Sound::Pcm::IsChannelFree(3) ? 1 : 0,
+	                  slPCMStat(&g_pcm[0]) ? 0 : 1,
+	                  slPCMStat(&g_pcm[1]) ? 0 : 1,
+	                  slPCMStat(&g_pcm[2]) ? 0 : 1,
+	                  slPCMStat(&g_pcm[3]) ? 0 : 1,
 	                  g_nPaints);
 }
 
@@ -258,7 +253,7 @@ extern "C" {
  |   because the host has no bounds checks that can fail, and stay silent
  |   here.
  | Author: suinevere
- | Globals: g_sampleData, g_sampleSize, g_warned
+ | Globals: g_sampleData, g_sampleSize, g_warned, g_pcm, g_lastRc
  | Params: index -- sample identifier, 0 to stop all; volume -- 0..0xff, halved
  |   onto SRL's 0..127; channel -- 0..3
  | Returns: N/A
@@ -270,7 +265,6 @@ void play_sample(int index, int volume, int channel)
 	int padded;
 	int i;
 	signed char *buffer;
-	bool played;
 
 	g_nCalls++;
 	g_lastChannel = channel;
@@ -279,7 +273,10 @@ void play_sample(int index, int volume, int channel)
 	{
 		for (i = 0; i < SFX_CHANNELS; i++)
 		{
-			SRL::Sound::Pcm::StopSound(i);
+			if (slPCMStat(&g_pcm[i]))
+			{
+				slPCMOff(&g_pcm[i]);
+			}
 		}
 
 		diag_paint();
@@ -333,11 +330,24 @@ void play_sample(int index, int volume, int channel)
 
 	g_lastLen = (int)g_sampleSize[index];
 
-	SRL::Sound::Pcm::StopSound(channel);
-	played = MemPcm(g_sampleData[index], g_sampleSize[index]).PlayOnChannel(
-		(uint8_t)channel, (uint8_t)(volume >> 1));
+	if (slPCMStat(&g_pcm[channel]))
+	{
+		slPCMOff(&g_pcm[channel]);
+	}
 
-	if (played)
+	g_pcm[channel].mode      = _Mono | _PCM8Bit;
+	g_pcm[channel].channel   = (uint8_t)(channel * 2);
+	g_pcm[channel].level     = (uint8_t)(volume >> 1);
+	g_pcm[channel].pan       = 0;
+	g_pcm[channel].pitch     = SFX_PITCH_8KHZ;
+	g_pcm[channel].eflevelR  = 0;
+	g_pcm[channel].efselectR = 0;
+	g_pcm[channel].eflevelL  = 0;
+	g_pcm[channel].efselectL = 0;
+
+	g_lastRc = slPCMOn(&g_pcm[channel], g_sampleData[index], g_sampleSize[index]);
+
+	if (g_lastRc >= 0)
 	{
 		g_nPlayed++;
 	}
@@ -360,7 +370,7 @@ void play_sample(int index, int volume, int channel)
  |   Also resets g_warned, so a room that exhausts the pool after this flush
  |   gets its own warning rather than inheriting a prior room's silence.
  | Author: suinevere
- | Globals: g_sampleData, g_sampleSize, g_warned
+ | Globals: g_sampleData, g_sampleSize, g_warned, g_pcm
  | Params: N/A
  | Returns: N/A
  ----------------------*/
@@ -370,7 +380,10 @@ void sound_flush_cache()
 
 	for (i = 0; i < SFX_CHANNELS; i++)
 	{
-		SRL::Sound::Pcm::StopSound(i);
+		if (slPCMStat(&g_pcm[i]))
+		{
+			slPCMOff(&g_pcm[i]);
+		}
 	}
 
 	for (i = 0; i < SFX_CACHE_SLOTS; i++)
