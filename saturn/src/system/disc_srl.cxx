@@ -315,30 +315,6 @@ static uint32_t *bounce_acquire(void)
 #define CDDA_LEVEL_FULL 7
 
 /*----------------------
- | CDDA_FADE_IN_LEVEL
- | Description: The level a track is started at so it can be ramped up
- |   instead of appearing at full volume. Not 0, and that is the whole point:
- |   cdda_wait_for_sound gates on SND_GetAnlTlVl, which measures the SCSP's
- |   real output, so a track playing at level 0 reads as silence and the wait
- |   would run to its full cap every time. 1 is the quietest level that still
- |   produces output for the analysis to see.
- |
- |   This is the one number here that hardware has not confirmed. If the
- |   analysis cannot see level 1, every restore costs CDDA_SOUND_CAP_MS
- |   instead of returning as soon as the drive is audible -- the symptom is a
- |   three-second stall on every file read, not silence, because
- |   cdda_wait_for_sound reports the timeout and the caller jumps straight to
- |   full. Setting this to CDDA_LEVEL_FULL restores the previous behaviour
- |   exactly: no fade in, detection as reliable as before.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define CDDA_FADE_IN_LEVEL 1
-
-/*----------------------
  | g_cddaLevel
  | Description: The level cdda_level_set last wrote, tracked because
  |   SND_SetCdDaLev is write-only and a fade needs to know where it is
@@ -392,13 +368,16 @@ static void cdda_level_set(int level)
  |   disc -- so the original Sega CD faded rather than cut, and this fades the
  |   music down before the seek that silences it.
  |
- |   Both sides ramp, but not symmetrically. The stop side can fade to 0
- |   because nothing needs to hear the result. The start side cannot start at
- |   0: cdda_wait_for_sound gates on SND_GetAnlTlVl, which measures the SCSP's
- |   real output, so a track at level 0 reads as silence and the wait would
- |   run to its cap every time. Playback therefore starts at
- |   CDDA_FADE_IN_LEVEL, quiet but visible to the analysis, and cdda_bring_in
- |   ramps it the rest of the way once the drive is confirmed audible.
+ |   Only disc_play_track and disc_stop_track fade. A file read does not, and
+ |   that is the whole reason this is not in cdda_suspend where it started:
+ |   load_room reads several files in a row, so fading per read pulsed the
+ |   picture dark and light once per file instead of once per reload. The
+ |   seam a listener perceives is the track changing, not each read inside it.
+ |
+ |   The fade also never brackets the wait. cdda_wait_for_sound gates on
+ |   SND_GetAnlTlVl, which measures the SCSP's real output, so holding the
+ |   level down across the wait would read as silence and burn the full cap
+ |   every time.
  |
  |   Seven steps at one frame each is about 117 ms, small beside the
  |   multi-second wait it brackets. platform_frame is what presents
@@ -490,31 +469,6 @@ static int cdda_wait_for_sound(void)
 }
 
 /*----------------------
- | cdda_bring_in
- | Description: Ramps a freshly started track up to full, or jumps there if
- |   the wait never saw output. Both callers in cdda_restore start playback at
- |   CDDA_FADE_IN_LEVEL and hand the wait's verdict here, so a disc or a
- |   drive that defeats the analysis degrades to the old abrupt entry rather
- |   than to a ramp timed against nothing.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: g_cddaLevel
- | Params: detected -- cdda_wait_for_sound's return
- | Returns: N/A
- ----------------------*/
-static void cdda_bring_in(int detected)
-{
-	if (detected)
-	{
-		cdda_fade(CDDA_LEVEL_FULL);
-	}
-	else
-	{
-		cdda_level_set(CDDA_LEVEL_FULL);
-	}
-}
-
-/*----------------------
  | cdda_halt
  | Description: Stops CD-DA output. The seek is what silences it -- there is
  |   no stop command as such; SRL::Sound::Cdda::StopPause does the same two
@@ -553,8 +507,6 @@ static void cdda_suspend(void)
 	{
 		return;
 	}
-
-	cdda_fade(0);
 
 	CDC_GetCurStat(&stat);
 	g_wasPlaying = (CDC_GET_STC(&stat) == CDC_ST_PLAY);
@@ -657,9 +609,8 @@ static void cdda_restore(void)
 		CDC_PLY_ETYPE(&ply) = CDC_PTYPE_FAD;
 		CDC_PLY_EFAS(&ply) = end - g_pauseFad;
 		CDC_PLY_PMODE(&ply) = CDC_PM_DFL;
-		cdda_level_set(CDDA_FADE_IN_LEVEL);
 		CDC_CdPlay(&ply);
-		cdda_bring_in(cdda_wait_for_sound());
+		cdda_wait_for_sound();
 		return;
 	}
 
@@ -673,9 +624,8 @@ static void cdda_restore(void)
 			return;
 		}
 
-		cdda_level_set(CDDA_FADE_IN_LEVEL);
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
-		cdda_bring_in(cdda_wait_for_sound());
+		cdda_wait_for_sound();
 		return;
 	}
 }
@@ -1094,22 +1044,19 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   purpose -- the same track keeps playing, so whatever it had already
  |   observed is still true.
  |
- |   This call now blocks across the switch: it fades picture and sound out,
- |   commands the track, waits for the drive to actually produce output, and
- |   fades back in. That is a deliberate reversal of the earlier decision to
- |   never block here. The reason it was avoided is real and unchanged --
- |   main.c's rest() compares against a stale last_tick afterwards, so the
- |   game sprints to catch up and the speed visibly wobbles -- but every
- |   caller is a scene change, and the alternative was worse: a track a third
- |   of the way across the disc needs one to three seconds of seek, and every
- |   caller either starts an animation or reloads a room immediately
- |   afterwards, so the drive was being sent away again before it had ever
- |   reached the track. The one-shot death sound was requested on every death
- |   and never once heard. Blacking the screen is what makes the seek
- |   affordable rather than merely hidden.
+ |   This is the seam that fades: picture and sound ramp down before the track
+ |   is commanded and back up after, so a track change is a transition rather
+ |   than a cut. It does not wait for the drive, and a build that made it wait
+ |   is what proved why. Waiting meant the track was genuinely playing by the
+ |   time play_animation's file read suspended it, so cdda_classify saw
+ |   was_playing true and chose CDDA_RESUME -- the audio picked up one to
+ |   three seconds in while the video started at its first frame. Not waiting
+ |   leaves the track still seeking at suspend, which classifies as
+ |   CDDA_RESTART, and picture and sound begin together. The sync belongs to
+ |   cdda_restore's wait, after the read, and cannot be moved before it.
  |
  |   The repeat-guard above still returns early, so a room re-asserting the
- |   music it is already playing costs nothing and cannot stutter the game.
+ |   music it is already playing neither fades nor stutters.
  | Author: suinevere
  | Globals: g_discOpened, g_toc, g_musicTrack, g_musicLoop, g_musicObserved,
  |   g_cddaLevel
@@ -1148,13 +1095,12 @@ void disc_play_track(int engine_index, int loop)
 
 	cdda_fade(0);
 
-	cdda_level_set(CDDA_FADE_IN_LEVEL);
 	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
 	g_musicTrack = engine_index;
 	g_musicLoop = (loop != 0);
 	g_musicObserved = false;
 
-	cdda_bring_in(cdda_wait_for_sound());
+	cdda_fade(CDDA_LEVEL_FULL);
 }
 
 /*----------------------
