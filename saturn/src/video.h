@@ -132,6 +132,26 @@ int  video_get_scroll_register(void);
  ----------------------*/
 void video_toggle_fullscreen(void);
 
+/*----------------------
+ | video_set_brightness
+ | Description: Dims the picture toward black, so a seam that silences the
+ |   music can black the screen with it. 255 is the normal picture and 0 is
+ |   fully black; values between scale linearly.
+ |
+ |   The Saturn backend spends a VDP2 colour offset on this, which is a
+ |   hardware subtraction applied after every other colour calculation, so
+ |   nothing the engine draws has to know about it and no pixels are
+ |   rewritten. The host backend is a documented no-op: the seam this exists
+ |   to hide is a CD seek of one to three seconds, and the host reads its
+ |   tracks out of files with no seek to hide.
+ |
+ |   Callers are responsible for restoring 255. disc_srl.cxx holds the
+ |   invariant that the picture is full brightness except inside a suspend
+ |   window.
+ | Author: suinevere
+ ----------------------*/
+void video_set_brightness(int level);
+
 #ifdef __cplusplus
 }
 #endif

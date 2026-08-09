@@ -73,6 +73,7 @@
 #include "cdda_classify.h"
 #include "client.h"
 #include "platform.h"
+#include "video.h"
 
 /*----------------------
  | g_discOpened
@@ -360,20 +361,27 @@ static int g_cddaLevel = CDDA_LEVEL_FULL;
 
 /*----------------------
  | cdda_level_set
- | Description: Writes the CD-DA level immediately, presenting no frames.
- |   Used where nothing is audible and a fade would only cost time -- putting
- |   the level back after a track was dropped, or after the seek that stops
- |   playback has already run.
+ | Description: Writes the CD-DA level immediately, presenting no frames,
+ |   and dims the picture to match. Used where nothing is audible and a fade
+ |   would only cost time -- putting the level back after a track was
+ |   dropped, or after the seek that stops playback has already run.
+ |
+ |   Video is driven from the audio level rather than tracked separately
+ |   because the two must never disagree: a path that restored sound without
+ |   restoring the picture would leave the screen black for the rest of the
+ |   game. One function, one scale, and every existing caller gets the video
+ |   half for free. The 0..7 CD-DA level is scaled onto video.h's 0..255,
+ |   which is why video_set_brightness clamps rather than trusts.
  | Author: suinevere
- | Dependencies: srl.hpp
+ | Dependencies: srl.hpp, video.h
  | Globals: g_cddaLevel
  | Params: level -- 0..7
- | Returns: N/A
  ----------------------*/
 static void cdda_level_set(int level)
 {
 	g_cddaLevel = level;
 	SRL::Sound::Cdda::SetVolume((uint8_t)level);
+	video_set_brightness((level * 255) / CDDA_LEVEL_FULL);
 }
 
 /*----------------------
@@ -1085,8 +1093,26 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   it (see cdda_classify.h). The repeat-guard's early return skips this on
  |   purpose -- the same track keeps playing, so whatever it had already
  |   observed is still true.
+ |
+ |   This call now blocks across the switch: it fades picture and sound out,
+ |   commands the track, waits for the drive to actually produce output, and
+ |   fades back in. That is a deliberate reversal of the earlier decision to
+ |   never block here. The reason it was avoided is real and unchanged --
+ |   main.c's rest() compares against a stale last_tick afterwards, so the
+ |   game sprints to catch up and the speed visibly wobbles -- but every
+ |   caller is a scene change, and the alternative was worse: a track a third
+ |   of the way across the disc needs one to three seconds of seek, and every
+ |   caller either starts an animation or reloads a room immediately
+ |   afterwards, so the drive was being sent away again before it had ever
+ |   reached the track. The one-shot death sound was requested on every death
+ |   and never once heard. Blacking the screen is what makes the seek
+ |   affordable rather than merely hidden.
+ |
+ |   The repeat-guard above still returns early, so a room re-asserting the
+ |   music it is already playing costs nothing and cannot stutter the game.
  | Author: suinevere
- | Globals: g_discOpened, g_toc, g_musicTrack, g_musicLoop, g_musicObserved
+ | Globals: g_discOpened, g_toc, g_musicTrack, g_musicLoop, g_musicObserved,
+ |   g_cddaLevel
  | Params: engine_index -- music index 1..41; loop -- nonzero to repeat
  |   forever
  | Returns: N/A
@@ -1120,10 +1146,15 @@ void disc_play_track(int engine_index, int loop)
 		}
 	}
 
+	cdda_fade(0);
+
+	cdda_level_set(CDDA_FADE_IN_LEVEL);
 	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
 	g_musicTrack = engine_index;
 	g_musicLoop = (loop != 0);
 	g_musicObserved = false;
+
+	cdda_bring_in(cdda_wait_for_sound());
 }
 
 /*----------------------

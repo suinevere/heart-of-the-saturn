@@ -119,6 +119,16 @@ static int g_currentPalette = 0;
 static int g_scrollShadow = 0;
 
 /*----------------------
+ | g_offsetRegistered
+ | Description: Whether NBG0 has been pointed at VDP2 colour offset A yet.
+ |   Registration is deferred to the first video_set_brightness call so a
+ |   build that never fades never claims the register, and latched here so
+ |   every later call is a single write to the offset itself.
+ | Author: suinevere
+ ----------------------*/
+static int g_offsetRegistered = 0;
+
+/*----------------------
  | g_stage
  | Description: One aligned source line, used only when the engine hands over
  |   a buffer that is not longword-aligned. slDMACopy moves the frame into
@@ -432,6 +442,53 @@ int video_get_scroll_register(void)
  ----------------------*/
 void video_toggle_fullscreen(void)
 {
+}
+
+/*----------------------
+ | video_set_brightness
+ | Description: Dims NBG0 toward black through VDP2 colour offset A. The
+ |   offset is a signed per-channel value added after every other colour
+ |   calculation, so a negative offset subtracts brightness from the whole
+ |   layer without touching a single pixel the engine drew -- which is the
+ |   only reason this is affordable during a disc read, when nothing is
+ |   redrawing anyway.
+ |
+ |   NBG0 is registered onto offset A on the first call rather than in
+ |   video_init, so a build that never fades never spends the register. The
+ |   registration is idempotent and the flag makes it a single write
+ |   afterwards.
+ |
+ |   Level is clamped, not trusted: video.h documents 0..255 and a caller
+ |   computing one from a 0..7 CD-DA level can land outside it by rounding.
+ | Author: suinevere
+ | Globals: g_offsetRegistered
+ | Params: level -- 0 (black) to 255 (normal)
+ | Returns: N/A
+ ----------------------*/
+void video_set_brightness(int level)
+{
+	int drop;
+
+	if (level < 0)
+	{
+		level = 0;
+	}
+
+	if (level > 255)
+	{
+		level = 255;
+	}
+
+	if (!g_offsetRegistered)
+	{
+		SRL::VDP2::NBG0::UseColorOffset(SRL::VDP2::OffsetChannel::OffsetA);
+		g_offsetRegistered = 1;
+	}
+
+	drop = level - 255;
+
+	SRL::VDP2::ColorOffset offset((int16_t)drop, (int16_t)drop, (int16_t)drop);
+	SRL::VDP2::SetColorOffsetA(offset);
 }
 
 }
