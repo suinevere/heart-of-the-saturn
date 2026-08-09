@@ -336,6 +336,31 @@ static uint32_t *bounce_acquire(void)
 static int g_cddaLevel = CDDA_LEVEL_FULL;
 
 /*----------------------
+ | g_seamPending
+ | Description: Set when a track is commanded, spent by the next file read.
+ |   The fade cannot happen where the track is commanded: at that moment the
+ |   drive is still seeking and, for an animation, the file has not been read
+ |   yet, so fading there ramps the picture back up seconds before there is
+ |   anything to see. It cannot happen on every read either -- load_room reads
+ |   several files and that pulsed the screen once per file.
+ |
+ |   Arming it here and spending it in cdda_suspend/cdda_restore puts the fade
+ |   exactly where content changes: out as the read begins, back in once
+ |   cdda_wait_for_sound says the drive is audible, which is the same instant
+ |   play_animation starts drawing. Picture and music come up together.
+ |
+ |   A track with no read behind it -- the one-shot death sound -- never
+ |   spends the flag, so it never blacks a screen nothing is going to redraw.
+ |   That is the reason this is a flag and not a fade at the call site.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static bool g_seamPending = false;
+
+/*----------------------
  | cdda_level_set
  | Description: Writes the CD-DA level immediately, presenting no frames,
  |   and dims the picture to match. Used where nothing is audible and a fade
@@ -368,11 +393,11 @@ static void cdda_level_set(int level)
  |   disc -- so the original Sega CD faded rather than cut, and this fades the
  |   music down before the seek that silences it.
  |
- |   Only disc_play_track and disc_stop_track fade. A file read does not, and
- |   that is the whole reason this is not in cdda_suspend where it started:
- |   load_room reads several files in a row, so fading per read pulsed the
- |   picture dark and light once per file instead of once per reload. The
- |   seam a listener perceives is the track changing, not each read inside it.
+ |   Only a read that spends a pending seam fades, plus disc_stop_track. An
+ |   ordinary read does not, and that is the whole reason g_seamPending
+ |   exists: load_room reads several files in a row, so fading on every read
+ |   pulsed the picture dark and light once per file instead of once per
+ |   reload.
  |
  |   The fade also never brackets the wait. cdda_wait_for_sound gates on
  |   SND_GetAnlTlVl, which measures the SCSP's real output, so holding the
@@ -412,6 +437,33 @@ static void cdda_fade(int target)
 		cdda_level_set(g_cddaLevel + step);
 		platform_frame();
 	}
+}
+
+/*----------------------
+ | cdda_seam_end
+ | Description: Spends a pending seam, ramping picture and music back up
+ |   together. Called only after cdda_wait_for_sound has returned, because
+ |   that is the moment the drive is confirmed audible and, on the animation
+ |   path, the instant before play_animation starts drawing -- so the two come
+ |   up as one.
+ |
+ |   A no-op when no seam is pending, which is what keeps the reads inside a
+ |   room load from touching brightness at all.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: g_seamPending, g_cddaLevel
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void cdda_seam_end(void)
+{
+	if (!g_seamPending)
+	{
+		return;
+	}
+
+	g_seamPending = false;
+	cdda_fade(CDDA_LEVEL_FULL);
 }
 
 /*----------------------
@@ -508,6 +560,11 @@ static void cdda_suspend(void)
 		return;
 	}
 
+	if (g_seamPending)
+	{
+		cdda_fade(0);
+	}
+
 	CDC_GetCurStat(&stat);
 	g_wasPlaying = (CDC_GET_STC(&stat) == CDC_ST_PLAY);
 	g_pauseFad = (uint32_t)CDC_STAT_FAD(&stat);
@@ -597,6 +654,7 @@ static void cdda_restore(void)
 	case CDDA_FORGET:
 		printf("cdda_restore: restore classified as finished or never-started\n");
 		g_musicTrack = -1;
+		g_seamPending = false;
 		cdda_level_set(CDDA_LEVEL_FULL);
 		return;
 
@@ -611,6 +669,7 @@ static void cdda_restore(void)
 		CDC_PLY_PMODE(&ply) = CDC_PM_DFL;
 		CDC_CdPlay(&ply);
 		cdda_wait_for_sound();
+		cdda_seam_end();
 		return;
 	}
 
@@ -620,12 +679,14 @@ static void cdda_restore(void)
 		{
 			printf("cdda_restore: restart declined, track %d not playable\n", cue);
 			g_musicTrack = -1;
+			g_seamPending = false;
 			cdda_level_set(CDDA_LEVEL_FULL);
 			return;
 		}
 
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
 		cdda_wait_for_sound();
+		cdda_seam_end();
 		return;
 	}
 }
@@ -1044,10 +1105,14 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   purpose -- the same track keeps playing, so whatever it had already
  |   observed is still true.
  |
- |   This is the seam that fades: picture and sound ramp down before the track
- |   is commanded and back up after, so a track change is a transition rather
- |   than a cut. It does not wait for the drive, and a build that made it wait
- |   is what proved why. Waiting meant the track was genuinely playing by the
+ |   This arms the fade rather than performing it. Fading here would ramp the
+ |   picture back up while the drive was still seeking and, on the animation
+ |   path, before the file had even been read -- seconds before there is
+ |   anything to see or hear, which is exactly how the opening movie ended up
+ |   with no fade at all. g_seamPending carries it to the read instead.
+ |
+ |   It also does not wait for the drive, and a build that made it wait is
+ |   what proved why. Waiting meant the track was genuinely playing by the
  |   time play_animation's file read suspended it, so cdda_classify saw
  |   was_playing true and chose CDDA_RESUME -- the audio picked up one to
  |   three seconds in while the video started at its first frame. Not waiting
@@ -1056,7 +1121,7 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   cdda_restore's wait, after the read, and cannot be moved before it.
  |
  |   The repeat-guard above still returns early, so a room re-asserting the
- |   music it is already playing neither fades nor stutters.
+ |   music it is already playing neither arms a seam nor stutters.
  | Author: suinevere
  | Globals: g_discOpened, g_toc, g_musicTrack, g_musicLoop, g_musicObserved,
  |   g_cddaLevel
@@ -1093,14 +1158,11 @@ void disc_play_track(int engine_index, int loop)
 		}
 	}
 
-	cdda_fade(0);
-
 	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
 	g_musicTrack = engine_index;
 	g_musicLoop = (loop != 0);
 	g_musicObserved = false;
-
-	cdda_fade(CDDA_LEVEL_FULL);
+	g_seamPending = true;
 }
 
 /*----------------------
@@ -1132,6 +1194,7 @@ void disc_stop_track(void)
 	cdda_fade(0);
 	g_musicTrack = -1;
 	g_musicObserved = false;
+	g_seamPending = false;
 	cdda_halt();
 	cdda_level_set(CDDA_LEVEL_FULL);
 }
