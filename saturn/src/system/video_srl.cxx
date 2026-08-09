@@ -129,6 +129,18 @@ static int g_scrollShadow = 0;
 static int g_offsetRegistered = 0;
 
 /*----------------------
+ | g_fadeTotal / g_fadeLeft
+ | Description: A fade-in measured in rendered frames. g_fadeTotal is the
+ |   length video_fade_in was asked for and g_fadeLeft counts down once per
+ |   video_render, so the ramp advances only when the viewer is actually being
+ |   shown something. Both zero means no fade is running, which is the state
+ |   every path outside a seam is in.
+ | Author: suinevere
+ ----------------------*/
+static int g_fadeTotal = 0;
+static int g_fadeLeft = 0;
+
+/*----------------------
  | g_stage
  | Description: One aligned source line, used only when the engine hands over
  |   a buffer that is not longword-aligned. slDMACopy moves the frame into
@@ -317,6 +329,12 @@ void video_render(char *src)
 
 	apply_position();
 	g_scrollShadow = 0;
+
+	if (g_fadeLeft > 0)
+	{
+		g_fadeLeft--;
+		video_set_brightness((255 * (g_fadeTotal - g_fadeLeft)) / g_fadeTotal);
+	}
 }
 
 /*----------------------
@@ -489,6 +507,32 @@ void video_set_brightness(int level)
 
 	SRL::VDP2::ColorOffset offset((int16_t)drop, (int16_t)drop, (int16_t)drop);
 	SRL::VDP2::SetColorOffsetA(offset);
+}
+
+/*----------------------
+ | video_fade_in
+ | Description: Arms a ramp back to full brightness, advanced one step per
+ |   video_render. The picture is blacked here rather than left where it was,
+ |   so a caller that armed the fade after the screen had already been
+ |   restored still gets a fade rather than a jump.
+ | Author: suinevere
+ | Globals: g_fadeTotal, g_fadeLeft
+ | Params: frames -- rendered frames to ramp over; 0 or less restores at once
+ | Returns: N/A
+ ----------------------*/
+void video_fade_in(int frames)
+{
+	if (frames <= 0)
+	{
+		g_fadeTotal = 0;
+		g_fadeLeft = 0;
+		video_set_brightness(255);
+		return;
+	}
+
+	g_fadeTotal = frames;
+	g_fadeLeft = frames;
+	video_set_brightness(0);
 }
 
 }

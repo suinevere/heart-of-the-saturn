@@ -384,6 +384,21 @@ void video_set_brightness(int level)
 	(void)level;
 }
 
+/*----------------------
+ | video_fade_in
+ | Description: Empty on purpose, for the same reason video_set_brightness
+ |   is: this backend has no seek to hide, so there is nothing to fade back
+ |   in from.
+ | Author: suinevere
+ | Globals: N/A
+ | Params: frames -- ignored
+ | Returns: N/A
+ ----------------------*/
+void video_fade_in(int frames)
+{
+	(void)frames;
+}
+
 void video_toggle_fullscreen()
 {
 	fullscreen = 1 ^ fullscreen;

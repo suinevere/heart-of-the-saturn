@@ -152,6 +152,24 @@ void video_toggle_fullscreen(void);
  ----------------------*/
 void video_set_brightness(int level);
 
+/*----------------------
+ | video_fade_in
+ | Description: Ramps the picture from black back to full over the next
+ |   `frames` calls to video_render, rather than immediately.
+ |
+ |   It counts rendered frames, not elapsed time, and that is the whole
+ |   reason it exists. A fade driven from the disc backend finishes while the
+ |   drive is still seeking and before an animation has drawn anything, so it
+ |   ramps a black screen to a black screen and the viewer sees no fade at
+ |   all. Counting renders puts the ramp over the frames the viewer is
+ |   actually watching.
+ |
+ |   frames <= 0 restores full brightness at once. A second call replaces any
+ |   ramp still running.
+ | Author: suinevere
+ ----------------------*/
+void video_fade_in(int frames);
+
 #ifdef __cplusplus
 }
 #endif

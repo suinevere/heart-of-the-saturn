@@ -315,6 +315,23 @@ static uint32_t *bounce_acquire(void)
 #define CDDA_LEVEL_FULL 7
 
 /*----------------------
+ | CDDA_FADE_FRAMES
+ | Description: Frames a seam fade runs over, about three quarters of a
+ |   second at 60 Hz. The first build of this stepped one CD-DA level per
+ |   frame, which is seven frames -- roughly a tenth of a second, fast enough
+ |   that it read as a glitch rather than a transition. Length is a frame
+ |   count rather than a level count because the picture has 256 steps where
+ |   the CD-DA level has 8, so the ramp is timed and the coarse level is
+ |   sampled along it.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define CDDA_FADE_FRAMES 45
+
+/*----------------------
  | g_cddaLevel
  | Description: The level cdda_level_set last wrote, tracked because
  |   SND_SetCdDaLev is write-only and a fade needs to know where it is
@@ -362,19 +379,15 @@ static bool g_seamPending = false;
 
 /*----------------------
  | cdda_level_set
- | Description: Writes the CD-DA level immediately, presenting no frames,
- |   and dims the picture to match. Used where nothing is audible and a fade
- |   would only cost time -- putting the level back after a track was
- |   dropped, or after the seek that stops playback has already run.
- |
- |   Video is driven from the audio level rather than tracked separately
- |   because the two must never disagree: a path that restored sound without
- |   restoring the picture would leave the screen black for the rest of the
- |   game. One function, one scale, and every existing caller gets the video
- |   half for free. The 0..7 CD-DA level is scaled onto video.h's 0..255,
- |   which is why video_set_brightness clamps rather than trusts.
+ | Description: Writes the CD-DA level immediately, presenting no frames.
+ |   Sound only -- the picture is not tied to it, because the two sides of a
+ |   seam ramp on different clocks: the fade out runs on presented frames
+ |   while nothing is drawing, and the fade in runs on rendered frames once
+ |   something is. Every caller that leaves a seam is responsible for the
+ |   picture as well, either through video_fade_in for a ramp or
+ |   video_fade_in(0) to restore it outright.
  | Author: suinevere
- | Dependencies: srl.hpp, video.h
+ | Dependencies: srl.hpp
  | Globals: g_cddaLevel
  | Params: level -- 0..7
  ----------------------*/
@@ -382,7 +395,6 @@ static void cdda_level_set(int level)
 {
 	g_cddaLevel = level;
 	SRL::Sound::Cdda::SetVolume((uint8_t)level);
-	video_set_brightness((level * 255) / CDDA_LEVEL_FULL);
 }
 
 /*----------------------
@@ -423,29 +435,37 @@ static void cdda_level_set(int level)
  ----------------------*/
 static void cdda_fade(int target)
 {
-	int step;
+	int from = g_cddaLevel;
+	int i;
 
-	if (target == g_cddaLevel)
+	if (target == from)
 	{
 		return;
 	}
 
-	step = (target > g_cddaLevel) ? 1 : -1;
-
-	while (g_cddaLevel != target)
+	for (i = 1; i <= CDDA_FADE_FRAMES; i++)
 	{
-		cdda_level_set(g_cddaLevel + step);
+		cdda_level_set(from + ((target - from) * i) / CDDA_FADE_FRAMES);
+		video_set_brightness(((from * CDDA_FADE_FRAMES + (target - from) * i) * 255)
+		                     / (CDDA_LEVEL_FULL * CDDA_FADE_FRAMES));
 		platform_frame();
 	}
 }
 
 /*----------------------
  | cdda_seam_end
- | Description: Spends a pending seam, ramping picture and music back up
- |   together. Called only after cdda_wait_for_sound has returned, because
- |   that is the moment the drive is confirmed audible and, on the animation
- |   path, the instant before play_animation starts drawing -- so the two come
- |   up as one.
+ | Description: Spends a pending seam. Sound returns at once, because
+ |   cdda_wait_for_sound has just confirmed the drive is audible and holding
+ |   it down any longer would only widen the gap; the picture is handed to
+ |   video_fade_in, which ramps it over rendered frames instead.
+ |
+ |   That split is the point. A brightness ramp run from here would finish
+ |   while the screen was still black -- play_animation has not drawn its
+ |   first frame yet at this instant -- so it would fade black to black and
+ |   the viewer would see the picture snap on afterwards. Counting rendered
+ |   frames puts the ramp over what is actually on screen, and incidentally
+ |   covers the half second or so the animation spends decompressing its
+ |   first pattern before anything appears.
  |
  |   A no-op when no seam is pending, which is what keeps the reads inside a
  |   room load from touching brightness at all.
@@ -463,7 +483,8 @@ static void cdda_seam_end(void)
 	}
 
 	g_seamPending = false;
-	cdda_fade(CDDA_LEVEL_FULL);
+	cdda_level_set(CDDA_LEVEL_FULL);
+	video_fade_in(CDDA_FADE_FRAMES);
 }
 
 /*----------------------
@@ -656,6 +677,7 @@ static void cdda_restore(void)
 		g_musicTrack = -1;
 		g_seamPending = false;
 		cdda_level_set(CDDA_LEVEL_FULL);
+		video_fade_in(0);
 		return;
 
 	case CDDA_RESUME:
@@ -681,6 +703,7 @@ static void cdda_restore(void)
 			g_musicTrack = -1;
 			g_seamPending = false;
 			cdda_level_set(CDDA_LEVEL_FULL);
+			video_fade_in(0);
 			return;
 		}
 
@@ -1197,6 +1220,7 @@ void disc_stop_track(void)
 	g_seamPending = false;
 	cdda_halt();
 	cdda_level_set(CDDA_LEVEL_FULL);
+	video_fade_in(0);
 }
 
 /*----------------------
