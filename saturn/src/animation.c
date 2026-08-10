@@ -887,6 +887,10 @@ int play_death_animation(int index)
 
 	/* set palette 2 ? */
 	offset = 0xf910 + (index << 2);
+
+	/* nothing is read from disc here, so this is what waits for the sound */
+	disc_music_sync();
+
 	int ret = play_sequence(get_long(offset), 15);
 	toggle_aux(old);
 	rest(0);
