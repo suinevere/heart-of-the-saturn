@@ -73,7 +73,6 @@
 #include "cdda_classify.h"
 #include "client.h"
 #include "platform.h"
-#include "video.h"
 
 /*----------------------
  | sfx_play_disc_track
@@ -316,246 +315,6 @@ static uint32_t *bounce_acquire(void)
 }
 
 /*----------------------
- | CDDA_LEVEL_FULL
- | Description: The CD-DA level the drive plays at normally. SND_SetCdDaLev
- |   takes 0..7 per channel and Hardware::Initialize sets 7, so 7 is both the
- |   maximum and the value every fade returns to.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define CDDA_LEVEL_FULL 7
-
-/*----------------------
- | CDDA_FADE_FRAMES
- | Description: Frames a seam fade runs over, about two fifths of a second at
- |   60 Hz. Bracketed on hardware rather than guessed: seven frames, one per
- |   CD-DA level, read as a glitch rather than a transition, and forty-five
- |   read as slow. Length is a frame count rather than a level count because
- |   the picture has 256 steps where the CD-DA level has 8, so the ramp is
- |   timed and the coarse level is sampled along it.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define CDDA_FADE_FRAMES 24
-
-/*----------------------
- | VIDEO_FADE_IN_FRAMES
- | Description: Rendered frames the picture ramps back up over. Separate from
- |   CDDA_FADE_FRAMES, and larger, because the two ramps are counted on
- |   different clocks: the fade out advances once per platform_frame, which is
- |   a vblank, while the fade in advances once per video_render, and the
- |   engine does not render every frame it presents. Equal counts therefore
- |   produce unequal durations -- measured on hardware as a fade in visibly
- |   quicker than the fade out.
- |
- |   This is the number to change if the two still do not match. Raising it
- |   lengthens only the fade in.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define VIDEO_FADE_IN_FRAMES 6
-
-/*----------------------
- | VIDEO_EVENT_FADE_IN_FRAMES
- | Description: Rendered frames the picture ramps up over for a short event
- |   sequence, as against VIDEO_FADE_IN_FRAMES for a full-length animation.
- |
- |   A death sequence runs at 15 fps and is over in a second or two, so it
- |   draws far fewer frames than a movie does. Ramping it over the movie's
- |   count spends the entire sequence part-way up and never reaches full
- |   brightness -- the animation is watched through a ramp that outlives it.
- |   Eight frames is about half a second at that rate, so the picture is up
- |   well before the sequence ends.
- |
- |   The two counts cannot be one number: the ramp is measured in rendered
- |   frames, and the whole point of that is to track what is on screen, which
- |   is exactly what differs between these two callers.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define VIDEO_EVENT_FADE_IN_FRAMES 3
-
-/*----------------------
- | g_cddaLevel
- | Description: The level cdda_level_set last wrote, tracked because
- |   SND_SetCdDaLev is write-only and a fade needs to know where it is
- |   starting from. Holding it here also makes cdda_fade idempotent: a second
- |   fade to a level already reached costs nothing and presents no frames,
- |   which is what lets cdda_halt be called from inside an already-faded
- |   suspend without fading twice.
- |
- |   The invariant every path maintains: the level is CDDA_LEVEL_FULL except
- |   inside a suspend window. Any exit from cdda_restore that does not fade in
- |   sets it back directly, so a track that is dropped can never leave the
- |   next one silent.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-static int g_cddaLevel = CDDA_LEVEL_FULL;
-
-/*----------------------
- | g_seamPending
- | Description: Set when a track is commanded, spent by the next file read.
- |   The fade cannot happen where the track is commanded: at that moment the
- |   drive is still seeking and, for an animation, the file has not been read
- |   yet, so fading there ramps the picture back up seconds before there is
- |   anything to see. It cannot happen on every read either -- load_room reads
- |   several files and that pulsed the screen once per file.
- |
- |   Arming it here and spending it in cdda_suspend/cdda_restore puts the fade
- |   exactly where content changes: out as the read begins, back in once
- |   cdda_wait_for_sound says the drive is audible, which is the same instant
- |   play_animation starts drawing. Picture and music come up together.
- |
- |   A track with no read behind it -- the one-shot death sound -- never
- |   spends the flag, so it never blacks a screen nothing is going to redraw.
- |   That is the reason this is a flag and not a fade at the call site.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-static bool g_seamPending = false;
-
-/*----------------------
- | cdda_level_set
- | Description: Writes the CD-DA level immediately, presenting no frames.
- |   Sound only -- the picture is not tied to it, because the two sides of a
- |   seam ramp on different clocks: the fade out runs on presented frames
- |   while nothing is drawing, and the fade in runs on rendered frames once
- |   something is. Every caller that leaves a seam is responsible for the
- |   picture as well, either through video_fade_in for a ramp or
- |   video_fade_in(0) to restore it outright.
- | Author: suinevere
- | Dependencies: srl.hpp
- | Globals: g_cddaLevel
- | Params: level -- 0..7
- ----------------------*/
-static void cdda_level_set(int level)
-{
-	g_cddaLevel = level;
-	SRL::Sound::Cdda::SetVolume((uint8_t)level);
-}
-
-/*----------------------
- | cdda_fade
- | Description: Ramps the CD-DA level one step per presented frame, which is
- |   what hides the seam at a cutscene boundary. The drive cannot start or
- |   stop a track instantly -- a seek costs one to three seconds across this
- |   disc -- so the original Sega CD faded rather than cut, and this fades the
- |   music down before the seek that silences it.
- |
- |   Only a read that spends a pending seam fades, plus disc_stop_track. An
- |   ordinary read does not, and that is the whole reason g_seamPending
- |   exists: load_room reads several files in a row, so fading on every read
- |   pulsed the picture dark and light once per file instead of once per
- |   reload.
- |
- |   The sound comes back to full before playback is restarted, never after.
- |   cdda_wait_for_sound gates on SND_GetAnlTlVl, which measures the SCSP's
- |   real output, so a track restarted while the level is still down reads as
- |   silence and the wait runs its entire cap before anything restores the
- |   volume -- three seconds of music playing inaudibly, on every seam. The
- |   fade out may end at zero; the fade back in cannot start there.
- |
- |   The fade also never brackets the wait. cdda_wait_for_sound gates on
- |   SND_GetAnlTlVl, which measures the SCSP's real output, so holding the
- |   level down across the wait would read as silence and burn the full cap
- |   every time.
- |
- |   Seven steps at one frame each is about 117 ms, small beside the
- |   multi-second wait it brackets. platform_frame is what presents
- |   the VDP2 layer and refreshes peripherals, so the picture stays live and
- |   the pad stays responsive across the ramp, the same reason
- |   cdda_wait_for_sound calls it.
- |
- |   Deliberately not called from disc_play_track. Blocking there was measured
- |   distorting the game loop -- main.c's rest() compares against a stale
- |   last_tick afterwards and the game sprints to catch up -- and every
- |   cutscene boundary reaches this code through the file read that follows,
- |   so the seam is covered without taking that risk.
- | Author: suinevere
- | Dependencies: srl.hpp, platform.h
- | Globals: g_cddaLevel
- | Params: target -- level to ramp to, 0..7
- | Returns: N/A
- ----------------------*/
-static void cdda_fade(int target)
-{
-	int from = g_cddaLevel;
-	int i;
-
-	if (target == from)
-	{
-		return;
-	}
-
-	for (i = 1; i <= CDDA_FADE_FRAMES; i++)
-	{
-		cdda_level_set(from + ((target - from) * i) / CDDA_FADE_FRAMES);
-		video_set_brightness(((from * CDDA_FADE_FRAMES + (target - from) * i) * 255)
-		                     / (CDDA_LEVEL_FULL * CDDA_FADE_FRAMES));
-		platform_frame();
-	}
-}
-
-/*----------------------
- | cdda_seam_end
- | Description: Spends a pending seam. Sound returns at once, because
- |   cdda_wait_for_sound has just confirmed the drive is audible and holding
- |   it down any longer would only widen the gap; the picture is handed to
- |   video_fade_in, which ramps it over rendered frames instead.
- |
- |   That split is the point. A brightness ramp run from here would finish
- |   while the screen was still black -- play_animation has not drawn its
- |   first frame yet at this instant -- so it would fade black to black and
- |   the viewer would see the picture snap on afterwards. Counting rendered
- |   frames puts the ramp over what is actually on screen, and incidentally
- |   covers the half second or so the animation spends decompressing its
- |   first pattern before anything appears.
- |
- |   The length is the caller's, not a constant here, because rendered frames
- |   are the unit and different callers draw at different rates: a movie has
- |   frames to spare, a death sequence runs at 15 fps and is over in a second
- |   or two. One count for both left the short one part-way up when it ended.
- |
- |   A no-op when no seam is pending, which is what keeps the reads inside a
- |   room load from touching brightness at all.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: g_seamPending, g_cddaLevel
- | Params: frames -- rendered frames to ramp the picture over
- | Returns: N/A
- ----------------------*/
-static void cdda_seam_end(int frames)
-{
-	if (!g_seamPending)
-	{
-		return;
-	}
-
-	g_seamPending = false;
-	cdda_level_set(CDDA_LEVEL_FULL);
-	video_fade_in(frames);
-}
-
-/*----------------------
  | cdda_wait_for_sound
  | Description: Holds the caller until the drive is measurably producing CD-DA,
  |   so an animation and its music start together. The obvious signal is the
@@ -647,11 +406,6 @@ static void cdda_suspend(void)
 	if (g_musicTrack < 0)
 	{
 		return;
-	}
-
-	if (g_seamPending)
-	{
-		cdda_fade(0);
 	}
 
 	CDC_GetCurStat(&stat);
@@ -755,9 +509,6 @@ static void cdda_restore(void)
 	if (g_musicLoop == 0 && g_musicObserved)
 	{
 		g_musicTrack = -1;
-		g_seamPending = false;
-		cdda_level_set(CDDA_LEVEL_FULL);
-		video_fade_in(0);
 		return;
 	}
 
@@ -769,9 +520,6 @@ static void cdda_restore(void)
 	case CDDA_FORGET:
 		printf("cdda_restore: restore classified as finished or never-started\n");
 		g_musicTrack = -1;
-		g_seamPending = false;
-		cdda_level_set(CDDA_LEVEL_FULL);
-		video_fade_in(0);
 		return;
 
 	case CDDA_RESUME:
@@ -783,10 +531,8 @@ static void cdda_restore(void)
 		CDC_PLY_ETYPE(&ply) = CDC_PTYPE_FAD;
 		CDC_PLY_EFAS(&ply) = end - g_pauseFad;
 		CDC_PLY_PMODE(&ply) = CDC_PM_DFL;
-		cdda_level_set(CDDA_LEVEL_FULL);
 		CDC_CdPlay(&ply);
 		cdda_wait_for_sound();
-		cdda_seam_end(VIDEO_FADE_IN_FRAMES);
 		return;
 	}
 
@@ -796,16 +542,11 @@ static void cdda_restore(void)
 		{
 			printf("cdda_restore: restart declined, track %d not playable\n", cue);
 			g_musicTrack = -1;
-			g_seamPending = false;
-			cdda_level_set(CDDA_LEVEL_FULL);
-			video_fade_in(0);
 			return;
 		}
 
-		cdda_level_set(CDDA_LEVEL_FULL);
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
 		cdda_wait_for_sound();
-		cdda_seam_end(VIDEO_FADE_IN_FRAMES);
 		return;
 	}
 }
@@ -1224,15 +965,9 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   purpose -- the same track keeps playing, so whatever it had already
  |   observed is still true.
  |
- |   This arms the fade rather than performing it. Fading here would ramp the
- |   picture back up while the drive was still seeking and, on the animation
- |   path, before the file had even been read -- seconds before there is
- |   anything to see or hear, which is exactly how the opening movie ended up
- |   with no fade at all. g_seamPending carries it to the read instead.
- |
- |   It also does not wait for the drive, and a build that made it wait is
- |   what proved why. Waiting meant the track was genuinely playing by the
- |   time play_animation's file read suspended it, so cdda_classify saw
+ |   This does not wait for the drive, and a build that made it wait is what
+ |   proved why. Waiting meant the track was genuinely playing by the time
+ |   play_animation's file read suspended it, so cdda_classify saw
  |   was_playing true and chose CDDA_RESUME -- the audio picked up one to
  |   three seconds in while the video started at its first frame. Not waiting
  |   leaves the track still seeking at suspend, which classifies as
@@ -1240,10 +975,9 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   cdda_restore's wait, after the read, and cannot be moved before it.
  |
  |   The repeat-guard above still returns early, so a room re-asserting the
- |   music it is already playing neither arms a seam nor stutters.
+ |   music it is already playing does not stutter.
  | Author: suinevere
- | Globals: g_discOpened, g_toc, g_musicTrack, g_musicLoop, g_musicObserved,
- |   g_cddaLevel
+ | Globals: g_discOpened, g_toc, g_musicTrack, g_musicLoop, g_musicObserved
  | Params: engine_index -- music index 1..41; loop -- nonzero to repeat
  |   forever
  | Returns: N/A
@@ -1287,7 +1021,6 @@ void disc_play_track(int engine_index, int loop)
 	g_musicTrack = engine_index;
 	g_musicLoop = (loop != 0);
 	g_musicObserved = false;
-	g_seamPending = true;
 }
 
 /*----------------------
@@ -1299,13 +1032,9 @@ void disc_play_track(int engine_index, int loop)
  |   observed history. Safe before disc_open, after disc_close, and with
  |   nothing playing, exactly as disc.h requires, which is what lets
  |   atexit_callback call it unconditionally.
- |
- |   Fades before the seek rather than cutting, because play_anm ends every
- |   cutscene with this call and an abrupt stop is the seam. The level goes
- |   back to full afterwards, silently, since the seek has already stopped
- |   playback -- see g_cddaLevel for the invariant that keeps.
+
  | Author: suinevere
- | Globals: g_musicTrack, g_musicObserved, g_cddaLevel
+ | Globals: g_musicTrack, g_musicObserved
  | Params: N/A
  | Returns: N/A
  ----------------------*/
@@ -1316,13 +1045,9 @@ void disc_stop_track(void)
 		return;
 	}
 
-	cdda_fade(0);
 	g_musicTrack = -1;
 	g_musicObserved = false;
-	g_seamPending = false;
 	cdda_halt();
-	cdda_level_set(CDDA_LEVEL_FULL);
-	video_fade_in(0);
 }
 
 /*----------------------

@@ -132,44 +132,6 @@ int  video_get_scroll_register(void);
  ----------------------*/
 void video_toggle_fullscreen(void);
 
-/*----------------------
- | video_set_brightness
- | Description: Dims the picture toward black, so a seam that silences the
- |   music can black the screen with it. 255 is the normal picture and 0 is
- |   fully black; values between scale linearly.
- |
- |   The Saturn backend spends a VDP2 colour offset on this, which is a
- |   hardware subtraction applied after every other colour calculation, so
- |   nothing the engine draws has to know about it and no pixels are
- |   rewritten. The host backend is a documented no-op: the seam this exists
- |   to hide is a CD seek of one to three seconds, and the host reads its
- |   tracks out of files with no seek to hide.
- |
- |   Callers are responsible for restoring 255. disc_srl.cxx holds the
- |   invariant that the picture is full brightness except inside a suspend
- |   window.
- | Author: suinevere
- ----------------------*/
-void video_set_brightness(int level);
-
-/*----------------------
- | video_fade_in
- | Description: Ramps the picture from black back to full over the next
- |   `frames` calls to video_render, rather than immediately.
- |
- |   It counts rendered frames, not elapsed time, and that is the whole
- |   reason it exists. A fade driven from the disc backend finishes while the
- |   drive is still seeking and before an animation has drawn anything, so it
- |   ramps a black screen to a black screen and the viewer sees no fade at
- |   all. Counting renders puts the ramp over the frames the viewer is
- |   actually watching.
- |
- |   frames <= 0 restores full brightness at once. A second call replaces any
- |   ramp still running.
- | Author: suinevere
- ----------------------*/
-void video_fade_in(int frames);
-
 #ifdef __cplusplus
 }
 #endif

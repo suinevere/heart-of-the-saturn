@@ -368,37 +368,6 @@ void video_set_palette(int which)
 	palette[255].b = 255;
 }
 
-/*----------------------
- | video_set_brightness
- | Description: Empty on purpose. video.h makes this a documented no-op on
- |   the host: the seam it exists to hide is a CD seek of one to three
- |   seconds, and this backend reads its tracks out of files with no seek to
- |   hide, so dimming the picture here would darken the screen for nothing.
- | Author: suinevere
- | Globals: N/A
- | Params: level -- 0 (black) to 255 (normal), ignored
- | Returns: N/A
- ----------------------*/
-void video_set_brightness(int level)
-{
-	(void)level;
-}
-
-/*----------------------
- | video_fade_in
- | Description: Empty on purpose, for the same reason video_set_brightness
- |   is: this backend has no seek to hide, so there is nothing to fade back
- |   in from.
- | Author: suinevere
- | Globals: N/A
- | Params: frames -- ignored
- | Returns: N/A
- ----------------------*/
-void video_fade_in(int frames)
-{
-	(void)frames;
-}
-
 void video_toggle_fullscreen()
 {
 	fullscreen = 1 ^ fullscreen;
