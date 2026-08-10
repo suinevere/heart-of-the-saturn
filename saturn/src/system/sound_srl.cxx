@@ -14,16 +14,15 @@
  |   offers exactly four PCM channels against the engine's four, so `channel`
  |   maps straight through with no allocation policy.
  |
- |   Three things this file does that the host does not:
+ |   Four things this file does that the host does not:
  |
  |   It owns its four PCM structs (g_pcm below) rather than going through
  |   SRL::Sound::Pcm::IPcmFile::PlayOnChannel. PlayOnChannel rewrites only
  |   mode, pitch, level and pan in Pcm::Channels[channel] and never
- |   PCM.channel, the SCSP slot number SRL's static initialiser sets once;
- |   nothing re-initialises that field after slPCMOff has touched it, and
- |   PlayOnChannel also discards slPCMOn's int8_t status, making failure
- |   unobservable. Filling a PCM struct in full on every play and calling
- |   slPCMOn directly, keeping its return in g_lastRc, fixes both.
+ |   PCM.channel, the SCSP slot number SRL's static initialiser sets once,
+ |   and nothing re-initialises that field after slPCMOff has touched it.
+ |   Filling a PCM struct in full on every play and calling slPCMOn directly
+ |   removes the dependency on SRL's array entirely.
  |
  |   It stops a channel before playing on it, guarded by slPCMStat so
  |   slPCMOff is never called on a channel that is not playing. A script
@@ -47,6 +46,11 @@
  |   own volume, not a design decision, so this file applies volume fresh on
  |   every call instead of inheriting it -- ignoring a volume the script
  |   explicitly asked for would be an audible defect.
+ |
+ |   It converts that volume rather than halving it. The host's `volume >> 1`
+ |   is linear amplitude on SDL_mixer's scale; slPCMOn's level is attenuation
+ |   in dB steps, so copying the host's arithmetic made every effect
+ |   inaudible. See sfx_level_for_volume.
  |
  |   Where the memory comes from: saturn_lwram_alloc, never malloc.
  |   disc_srl.cxx measured the HWRAM heap at 62,528 bytes and
@@ -193,63 +197,62 @@ static PCM g_pcm[SFX_CHANNELS] = {
 };
 
 /*----------------------
- | SFX diagnostic counters
- | Description: THROWAWAY instrumentation for the gameplay-silence bug. Not a
- |   fix -- counts calls, failure paths, and slPCMOn's refused-vs-played
- |   outcome so a hardware run can tell H1/H2/H3 and "never called" apart. A
- |   later commit reverts this whole block.
+ | sfx_level_for_volume
+ | Description: Maps the engine's 0..255 volume onto slPCMOn's 0..127 level.
+ |   Not a halving, which is what src/sound.c does and what this file did
+ |   until hardware said otherwise: SDL_mixer's volume is a linear amplitude
+ |   multiplier over 0..128, so the host's `volume >> 1` is about -6 dB, but
+ |   SGL's level reaches the SCSP's total-level field, which is attenuation in
+ |   fixed dB steps. Halving the number there is roughly -48 dB, and the
+ |   engine's quieter volume of 50 landed near -72 dB. Both were inaudible on
+ |   hardware, in every room, in every build -- the defect that made sound
+ |   effects look like they had never worked.
+ |
+ |   Taking the SCSP's 96 dB over 256 steps and SGL's 0..127 as every second
+ |   step gives 0.75 dB per level, so reproducing the host's linear gain
+ |   v/255 means level = 127 + 20*log10(v/255)/0.75, which reduces to
+ |   63 + 8*log2(v). That is computed here without floating point: e is the
+ |   integer part of log2, and the remainder term interpolates the mantissa
+ |   linearly, worth at most about half a dB of error.
+ |
+ |   The 0.75 dB step is inferred from the hardware rather than read off a
+ |   datasheet, so the shape is certain -- 63 was inaudible where 127 was not,
+ |   which no linear scale explains -- and the exact slope is not.
  | Author: suinevere
  | Dependencies: N/A
  | Globals: N/A
- | Params: N/A
- | Returns: N/A
+ | Params: volume -- engine volume, 0..255
+ | Returns: level for PCM.level, 0..127
  ----------------------*/
-static int g_nCalls;
-static int g_nLocateFail;
-static int g_nAllocFail;
-static int g_nPlayRefused;
-static int g_nPlayed;
-static int g_lastIndex = -1;
-static int g_lastChannel = -1;
-static int g_lastLen = -1;
-static int g_nPaints;
-static int8_t g_lastRc = 0;
-
-/*----------------------
- | diag_paint
- | Description: THROWAWAY instrumentation. Paints the counters, the last
- |   call's index/channel/length plus current LWRAM headroom, and each
- |   channel's free/busy state onto the debug text layer -- the third line
- |   makes H3's "refused forever" hypothesis directly observable instead of
- |   inferred from g_nPlayRefused alone, and g_nPaints tells a frozen display
- |   apart from one that was never repainted since the cinematic.
- |
- |   snprintfEx (srl_string.hpp) supports only %c %s %0Nd %d %x %u %f -- no
- |   width or flag syntax -- so every specifier below is bare %d, padded with
- |   trailing spaces instead, so a shrinking number can't leave stale digits.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: g_nCalls, g_nLocateFail, g_nAllocFail, g_nPlayRefused, g_nPlayed,
- |   g_lastIndex, g_lastChannel, g_lastLen, g_nPaints, g_lastRc, g_pcm
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-static void diag_paint()
+static int sfx_level_for_volume(int volume)
 {
-	g_nPaints++;
+	int e;
+	int level;
 
-	SRL::Debug::Print(1, 24, "SFX c%d L%d A%d R%d P%d rc%d      ",
-	                  g_nCalls, g_nLocateFail, g_nAllocFail,
-	                  g_nPlayRefused, g_nPlayed, (int)g_lastRc);
-	SRL::Debug::Print(1, 25, "SFX i%d ch%d ln%d lw%d        ",
-	                  g_lastIndex, g_lastChannel, g_lastLen,
-	                  (int)SRL::Memory::LowWorkRam::GetFreeSpace());
-	SRL::Debug::Print(1, 26, "SFX free %d%d%d%d p%d        ",
-	                  slPCMStat(&g_pcm[0]) ? 0 : 1,
-	                  slPCMStat(&g_pcm[1]) ? 0 : 1,
-	                  slPCMStat(&g_pcm[2]) ? 0 : 1,
-	                  slPCMStat(&g_pcm[3]) ? 0 : 1,
-	                  g_nPaints);
+	if (volume <= 0)
+	{
+		return 0;
+	}
+
+	if (volume > 255)
+	{
+		volume = 255;
+	}
+
+	e = 0;
+	while ((volume >> (e + 1)) != 0)
+	{
+		e++;
+	}
+
+	level = 63 + 8 * e + ((volume - (1 << e)) * 8) / (1 << e);
+
+	if (level > 127)
+	{
+		level = 127;
+	}
+
+	return level;
 }
 
 extern "C" {
@@ -269,9 +272,9 @@ extern "C" {
  |   because the host has no bounds checks that can fail, and stay silent
  |   here.
  | Author: suinevere
- | Globals: g_sampleData, g_sampleSize, g_warned, g_pcm, g_lastRc
- | Params: index -- sample identifier, 0 to stop all; volume -- 0..0xff, halved
- |   onto SRL's 0..127; channel -- 0..3
+ | Globals: g_sampleData, g_sampleSize, g_warned, g_pcm
+ | Params: index -- sample identifier, 0 to stop all; volume -- 0..0xff, mapped
+ |   onto SRL's 0..127 by sfx_level_for_volume; channel -- 0..3
  | Returns: N/A
  ----------------------*/
 void play_sample(int index, int volume, int channel)
@@ -281,9 +284,6 @@ void play_sample(int index, int volume, int channel)
 	int padded;
 	int i;
 	signed char *buffer;
-
-	g_nCalls++;
-	g_lastChannel = channel;
 
 	if (index == 0)
 	{
@@ -295,21 +295,17 @@ void play_sample(int index, int volume, int channel)
 			}
 		}
 
-		diag_paint();
 		return;
 	}
 
 	if (channel < 0 || channel >= SFX_CHANNELS)
 	{
-		diag_paint();
 		return;
 	}
 
 	index = index - 1;
-	g_lastIndex = index;
 	if (index < 0 || index >= SFX_CACHE_SLOTS)
 	{
-		diag_paint();
 		return;
 	}
 
@@ -317,25 +313,19 @@ void play_sample(int index, int volume, int channel)
 	{
 		if (!sfxconv_locate(index, &offset, &length))
 		{
-			g_nLocateFail++;
-			diag_paint();
 			return;
 		}
 
 		padded = sfxconv_padded_size(length);
-		g_lastLen = padded;
 		buffer = (signed char *)saturn_lwram_alloc((unsigned long)padded);
 		if (buffer == 0)
 		{
-			g_nAllocFail++;
-
 			if (!g_warned)
 			{
 				g_warned = 1;
 				printf("SFX: lwram full at %d", index + 1);
 			}
 
-			diag_paint();
 			return;
 		}
 
@@ -344,8 +334,6 @@ void play_sample(int index, int volume, int channel)
 		g_sampleSize[index] = (unsigned long)padded;
 	}
 
-	g_lastLen = (int)g_sampleSize[index];
-
 	if (slPCMStat(&g_pcm[channel]))
 	{
 		slPCMOff(&g_pcm[channel]);
@@ -353,7 +341,7 @@ void play_sample(int index, int volume, int channel)
 
 	g_pcm[channel].mode      = _Mono | _PCM8Bit;
 	g_pcm[channel].channel   = (uint8_t)(channel * 2);
-	g_pcm[channel].level     = (uint8_t)(volume >> 1);
+	g_pcm[channel].level     = (uint8_t)sfx_level_for_volume(volume);
 	g_pcm[channel].pan       = 0;
 	g_pcm[channel].pitch     = SFX_PITCH_8KHZ;
 	g_pcm[channel].eflevelR  = 0;
@@ -361,18 +349,7 @@ void play_sample(int index, int volume, int channel)
 	g_pcm[channel].eflevelL  = 0;
 	g_pcm[channel].efselectL = 0;
 
-	g_lastRc = slPCMOn(&g_pcm[channel], g_sampleData[index], g_sampleSize[index]);
-
-	if (g_lastRc >= 0)
-	{
-		g_nPlayed++;
-	}
-	else
-	{
-		g_nPlayRefused++;
-	}
-
-	diag_paint();
+	slPCMOn(&g_pcm[channel], g_sampleData[index], g_sampleSize[index]);
 }
 
 /*----------------------
