@@ -1309,44 +1309,6 @@ void disc_play_track(int engine_index, int loop)
  | Params: N/A
  | Returns: N/A
  ----------------------*/
-/*----------------------
- | disc_music_sync
- | Description: Spends a pending seam for a caller that reads no file, which
- |   is the only way play_death_animation's sequence can start with its own
- |   sound. Fades the picture out over the wait, holds until
- |   cdda_wait_for_sound reports the drive audible, then hands the picture to
- |   video_fade_in so it rises over the sequence's own first frames.
- |
- |   Only the picture fades. The CD-DA level has to stay up across the wait
- |   because cdda_wait_for_sound gates on SND_GetAnlTlVl, which measures real
- |   SCSP output -- a level held at 0 reads as silence and the wait would run
- |   to its cap every time. Nothing is lost by that: disc_play_track has
- |   already commanded the new track, so the drive is mid-seek and silent
- |   anyway for the whole of this fade.
- | Author: suinevere
- | Globals: g_seamPending
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-void disc_music_sync(void)
-{
-	int i;
-
-	if (!g_seamPending)
-	{
-		return;
-	}
-
-	for (i = 1; i <= CDDA_FADE_FRAMES; i++)
-	{
-		video_set_brightness(255 - ((255 * i) / CDDA_FADE_FRAMES));
-		platform_frame();
-	}
-
-	cdda_wait_for_sound();
-	cdda_seam_end(VIDEO_EVENT_FADE_IN_FRAMES);
-}
-
 void disc_stop_track(void)
 {
 	if (g_musicTrack < 0)

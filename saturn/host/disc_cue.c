@@ -620,21 +620,6 @@ void disc_play_track(int engine_index, int loop)
  |   a harmless no-op unhook and the fclose is skipped.
  | Author: suinevere
  ----------------------*/
-/*----------------------
- | disc_music_sync
- | Description: Empty on purpose. disc.h makes this a no-op on any backend
- |   whose tracks come from files: there is no drive to wait for and no seek
- |   to fade across, so a track hooked here is already audible by the time
- |   disc_play_track has returned.
- | Author: suinevere
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-void disc_music_sync(void)
-{
-}
-
 void disc_stop_track(void)
 {
     Mix_HookMusic(NULL, NULL);

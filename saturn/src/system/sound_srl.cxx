@@ -382,6 +382,31 @@ int sfx_play_disc_track(int cue)
 }
 
 /*----------------------
+ | sfx_stop_disc_track
+ | Description: Silences the effect-track channel. Called when a death
+ |   sequence ends, because the sound outlasts the picture otherwise: the
+ |   converted tracks run one to six seconds and a sequence is over well
+ |   before the longest of them, so a splat that used to be cut off by the
+ |   drive being seeked away now runs on into the next screen instead.
+ |
+ |   The buffer is deliberately not freed. Keeping it is the whole point of
+ |   the resident slot -- the next death is the same sound and must not pay
+ |   another read.
+ | Author: suinevere
+ | Dependencies: srl.hpp
+ | Globals: g_pcm
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void sfx_stop_disc_track(void)
+{
+	if (slPCMStat(&g_pcm[SFX_DISC_CHANNEL]))
+	{
+		slPCMOff(&g_pcm[SFX_DISC_CHANNEL]);
+	}
+}
+
+/*----------------------
  | play_sample
  | Description: Plays a sound effect, converting and caching it on first use.
  |   Index 0 stops every channel, which is what src/sound.c's

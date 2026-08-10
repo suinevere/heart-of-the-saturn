@@ -138,26 +138,6 @@ int disc_read_file(const char *name, void *out, int max_size);
 void disc_play_track(int engine_index, int loop);
 void disc_stop_track(void);
 
-/*----------------------
- | disc_music_sync
- | Description: Holds until a track requested by the last disc_play_track is
- |   actually audible, fading the picture out across the wait and back in
- |   afterwards. Call it immediately before showing anything that is meant to
- |   start with its music.
- |
- |   It exists because a file read is normally what covers that wait --
- |   disc_read_file suspends and restores the drive, and the restore does not
- |   return until the music is heard, so an animation loaded from disc is in
- |   sync for free. A sequence already resident in memory reads nothing, so
- |   nothing waits, and on a drive that needs one to three seconds to reach a
- |   track a third of the way across the disc the picture runs well ahead of
- |   the sound. play_death_animation is exactly that case.
- |
- |   A no-op when no track is pending, and on any backend whose tracks come
- |   from files rather than a drive, so callers may use it unconditionally.
- | Author: suinevere
- ----------------------*/
-void disc_music_sync(void);
 
 /*----------------------
  | disc_close
