@@ -82,3 +82,7 @@ saturn/cd/data/0.bin
 saturn/cd/data/SDDRVS.DAT
 saturn/cd/data/SDDRVS.TSK
 saturn/cd/data/BOOTSND.MAP
+
+# Converted CD-DA effect tracks (saturn/tools/mkpcmsfx.py). Derived game audio,
+# same policy as the .BIN blobs above: reproducible from the rip, not committed.
+saturn/cd/data/*.PCM

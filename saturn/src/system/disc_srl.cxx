@@ -76,6 +76,20 @@
 #include "video.h"
 
 /*----------------------
+ | sfx_play_disc_track
+ | Description: Plays a short effect track from PCM instead of CD-DA, in
+ |   saturn/src/system/sound_srl.cxx. Declared here rather than in a shared
+ |   header because it has no host counterpart: the host plays these tracks
+ |   straight out of a file with no seek to avoid.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: cue -- cue track number
+ | Returns: 1 if started, 0 otherwise
+ ----------------------*/
+extern "C" int sfx_play_disc_track(int cue);
+
+/*----------------------
  | g_discOpened
  | Description: Whether disc_open has succeeded and disc_close has not run
  |   since. disc_read_file consults this instead of re-probing the CD, so a
@@ -1235,6 +1249,12 @@ void disc_play_track(int engine_index, int loop)
 	}
 
 	cue = discfmt_cue_track_for_music(engine_index);
+
+	if ((cue >= 26 && cue <= 31) || cue == 42)
+	{
+		sfx_play_disc_track(cue);
+		return;
+	}
 
 	if (cue == 0 || !cdtoc_is_audio(g_toc, cue))
 	{
