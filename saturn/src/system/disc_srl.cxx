@@ -1278,6 +1278,22 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   purpose -- the same track keeps playing, so whatever it had already
  |   observed is still true.
  |
+ |   An event track is waited for here, at the instant it is commanded, and
+ |   that is the earliest the wait can possibly happen. Putting it in
+ |   play_death_animation instead -- where it started -- bought nothing: the
+ |   script commands the track first and calls the sequence second, so a wait
+ |   over there began no sooner and the drive had exactly as far to travel.
+ |   Waiting at the command means the engine does not advance a single opcode
+ |   until the sound is out of the drive, which is the whole of what can be
+ |   done about a seek from software.
+ |
+ |   Only event tracks (cdda_is_event_track) block, and that is what keeps
+ |   this from reopening the desync it caused when every track did. The
+ |   cutscene animations are cues 32 to 35, outside the event set, so they
+ |   still reach the drive through play_anm's read and still classify as
+ |   CDDA_RESTART with their video. Nothing that pairs a track with a movie
+ |   waits here.
+ |
  |   This arms the fade rather than performing it. Fading here would ramp the
  |   picture back up while the drive was still seeking and, on the animation
  |   path, before the file had even been read -- seconds before there is
@@ -1336,6 +1352,15 @@ void disc_play_track(int engine_index, int loop)
 	g_musicLoop = (loop != 0);
 	g_musicObserved = false;
 	g_seamPending = true;
+
+	if (cdda_is_event_track(cue))
+	{
+		if (!cdda_wait_for_sound())
+		{
+			printf("cdda: track %d never became audible in %dms\n",
+			       cue, CDDA_SOUND_CAP_MS);
+		}
+	}
 }
 
 /*----------------------
