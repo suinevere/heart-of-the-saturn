@@ -354,6 +354,29 @@ static uint32_t *bounce_acquire(void)
 #define VIDEO_FADE_IN_FRAMES 48
 
 /*----------------------
+ | VIDEO_EVENT_FADE_IN_FRAMES
+ | Description: Rendered frames the picture ramps up over for a short event
+ |   sequence, as against VIDEO_FADE_IN_FRAMES for a full-length animation.
+ |
+ |   A death sequence runs at 15 fps and is over in a second or two, so it
+ |   draws far fewer frames than a movie does. Ramping it over the movie's
+ |   count spends the entire sequence part-way up and never reaches full
+ |   brightness -- the animation is watched through a ramp that outlives it.
+ |   Eight frames is about half a second at that rate, so the picture is up
+ |   well before the sequence ends.
+ |
+ |   The two counts cannot be one number: the ramp is measured in rendered
+ |   frames, and the whole point of that is to track what is on screen, which
+ |   is exactly what differs between these two callers.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define VIDEO_EVENT_FADE_IN_FRAMES 8
+
+/*----------------------
  | g_cddaLevel
  | Description: The level cdda_level_set last wrote, tracked because
  |   SND_SetCdDaLev is write-only and a fade needs to know where it is
@@ -489,15 +512,20 @@ static void cdda_fade(int target)
  |   covers the half second or so the animation spends decompressing its
  |   first pattern before anything appears.
  |
+ |   The length is the caller's, not a constant here, because rendered frames
+ |   are the unit and different callers draw at different rates: a movie has
+ |   frames to spare, a death sequence runs at 15 fps and is over in a second
+ |   or two. One count for both left the short one part-way up when it ended.
+ |
  |   A no-op when no seam is pending, which is what keeps the reads inside a
  |   room load from touching brightness at all.
  | Author: suinevere
  | Dependencies: N/A
  | Globals: g_seamPending, g_cddaLevel
- | Params: N/A
+ | Params: frames -- rendered frames to ramp the picture over
  | Returns: N/A
  ----------------------*/
-static void cdda_seam_end(void)
+static void cdda_seam_end(int frames)
 {
 	if (!g_seamPending)
 	{
@@ -506,7 +534,7 @@ static void cdda_seam_end(void)
 
 	g_seamPending = false;
 	cdda_level_set(CDDA_LEVEL_FULL);
-	video_fade_in(VIDEO_FADE_IN_FRAMES);
+	video_fade_in(frames);
 }
 
 /*----------------------
@@ -800,7 +828,7 @@ static void cdda_restore(void)
 		CDC_PLY_PMODE(&ply) = CDC_PM_DFL;
 		CDC_CdPlay(&ply);
 		cdda_wait_for_sound();
-		cdda_seam_end();
+		cdda_seam_end(VIDEO_FADE_IN_FRAMES);
 		return;
 	}
 
@@ -818,7 +846,7 @@ static void cdda_restore(void)
 
 		cdda_start_track(cue, g_musicLoop);
 		cdda_wait_for_sound();
-		cdda_seam_end();
+		cdda_seam_end(VIDEO_FADE_IN_FRAMES);
 		return;
 	}
 }
@@ -1351,7 +1379,7 @@ void disc_music_sync(void)
 	}
 
 	cdda_wait_for_sound();
-	cdda_seam_end();
+	cdda_seam_end(VIDEO_EVENT_FADE_IN_FRAMES);
 }
 
 void disc_stop_track(void)
