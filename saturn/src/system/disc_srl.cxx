@@ -236,14 +236,21 @@ extern "C" {
 /*----------------------
  | CDDA_SOUND_CAP_MS
  | Description: How long cdda_wait_for_sound will hold a caller before giving
- |   up. Three seconds because the measured wait is one to three: an animation
- |   that starts on time and silent is the bug this exists to prevent, and one
- |   that starts three seconds late is worse. If the analysis path ever stops
- |   reporting level the cost is a pause per read rather than a lockup, which
- |   is the only reason a cap is acceptable at all.
+ |   up. Six seconds, raised from three: three was set against a measured
+ |   seek of one to three, which left no margin at all for the worst case it
+ |   was sized on. A death sound sits at cue 31, a third of the way across
+ |   the disc, and is requested while the drive is at the front playing room
+ |   music -- the longest stroke the game ever asks for. A wait that expires
+ |   one frame early hands the sequence a silence it then blames on the
+ |   sound, which is precisely the failure this constant exists to prevent.
+ |
+ |   The cap is a backstop, not a delay: the wait returns the moment
+ |   SND_GetAnlTlVl reports output, so raising it costs nothing on any read
+ |   where sound actually arrives. It is only paid when sound never comes at
+ |   all, and there the choice is between a longer pause and a silent scene.
  | Author: suinevere
  ----------------------*/
-#define CDDA_SOUND_CAP_MS 3000
+#define CDDA_SOUND_CAP_MS 6000
 
 /*----------------------
  | DISC_BOUNCE_SECTORS / g_bounce
@@ -610,6 +617,12 @@ static void cdda_start_track(int cue, int loop)
 	if (!cdda_is_event_track(cue) || start == 0 || end == 0 ||
 	    start + CDDA_EVENT_LEAD_FRAMES >= end)
 	{
+		if (cdda_is_event_track(cue))
+		{
+			printf("cdda: track %d lead skip declined, toc %d..%d\n",
+			       cue, (int)start, (int)end);
+		}
+
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
 		return;
 	}
@@ -1358,6 +1371,12 @@ void disc_play_track(int engine_index, int loop)
  |   to its cap every time. Nothing is lost by that: disc_play_track has
  |   already commanded the new track, so the drive is mid-seek and silent
  |   anyway for the whole of this fade.
+ |
+ |   Prints only when the wait expires, which is the one outcome that cannot
+ |   be told apart by listening: a sequence that runs silent looks identical
+ |   whether the drive never arrived, the track was refused, or the sound
+ |   played and was cut. Silence on a working run, a named cause on a broken
+ |   one. cdda_start_track's lead-skip refusal prints on the same terms.
  | Author: suinevere
  | Globals: g_seamPending
  | Params: N/A
@@ -1378,7 +1397,12 @@ void disc_music_sync(void)
 		platform_frame();
 	}
 
-	cdda_wait_for_sound();
+	if (!cdda_wait_for_sound())
+	{
+		printf("cdda: track %d never became audible in %dms\n",
+		       discfmt_cue_track_for_music(g_musicTrack), CDDA_SOUND_CAP_MS);
+	}
+
 	cdda_seam_end(VIDEO_EVENT_FADE_IN_FRAMES);
 }
 
