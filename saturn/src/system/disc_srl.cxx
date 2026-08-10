@@ -331,6 +331,26 @@ static uint32_t *bounce_acquire(void)
 #define CDDA_FADE_FRAMES 24
 
 /*----------------------
+ | VIDEO_FADE_IN_FRAMES
+ | Description: Rendered frames the picture ramps back up over. Separate from
+ |   CDDA_FADE_FRAMES, and larger, because the two ramps are counted on
+ |   different clocks: the fade out advances once per platform_frame, which is
+ |   a vblank, while the fade in advances once per video_render, and the
+ |   engine does not render every frame it presents. Equal counts therefore
+ |   produce unequal durations -- measured on hardware as a fade in visibly
+ |   quicker than the fade out.
+ |
+ |   This is the number to change if the two still do not match. Raising it
+ |   lengthens only the fade in.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define VIDEO_FADE_IN_FRAMES 48
+
+/*----------------------
  | g_cddaLevel
  | Description: The level cdda_level_set last wrote, tracked because
  |   SND_SetCdDaLev is write-only and a fade needs to know where it is
@@ -483,7 +503,7 @@ static void cdda_seam_end(void)
 
 	g_seamPending = false;
 	cdda_level_set(CDDA_LEVEL_FULL);
-	video_fade_in(CDDA_FADE_FRAMES);
+	video_fade_in(VIDEO_FADE_IN_FRAMES);
 }
 
 /*----------------------
@@ -610,6 +630,23 @@ static void cdda_suspend(void)
  |   true, never clears it, so a track observed once stays observed until
  |   disc_play_track or disc_stop_track resets it for the next track.
  |
+ |   A non-looping track that has already been heard is dropped before
+ |   cdda_classify is consulted at all. Such a track is an event, not music:
+ |   it fired, the listener heard it, and a read that interrupts it has ended
+ |   it. Handing it to cdda_classify gets CDDA_RESUME, which replays its tail
+ |   over whatever scene the read was loading -- the death sound's splat,
+ |   then the same track's scream again on the password screen. cdda_classify
+ |   is not wrong to say resume; resuming is right for a long track that is
+ |   still meant to be playing. It cannot tell an event from a score, and
+ |   this is where that distinction is known: only a caller that requested
+ |   loop == 0 and has already been observed playing can be finished with.
+ |
+ |   The observed fold above runs first on purpose, so a track that only
+ |   became audible during this very suspend is caught by this rule rather
+ |   than resumed once and dropped on the next read. play_anm's animation
+ |   tracks are unaffected: their read beats the drive to the track, so they
+ |   are never observed by the time it runs, and they still restart in sync.
+ |
  |   CDDA_RESUME plays the remainder as its own frame range so the listener
  |   hears the track continue rather than restart. CDDA_RESTART is what a
  |   looping track gets even when it looks finished -- resuming one would
@@ -664,6 +701,15 @@ static void cdda_restore(void)
 	if (g_wasPlaying && end != 0 && g_pauseFad >= start && g_pauseFad < end)
 	{
 		g_musicObserved = true;
+	}
+
+	if (g_musicLoop == 0 && g_musicObserved)
+	{
+		g_musicTrack = -1;
+		g_seamPending = false;
+		cdda_level_set(CDDA_LEVEL_FULL);
+		video_fade_in(0);
+		return;
 	}
 
 	action = cdda_classify(g_wasPlaying ? 1 : 0, g_musicLoop,
