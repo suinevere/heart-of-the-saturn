@@ -84,6 +84,7 @@
 #include "sound.h"
 #include "sfxconv.h"
 #include "saturn_compat.h"
+#include "platform.h"
 
 /*----------------------
  | SFX_CHANNELS
@@ -255,6 +256,34 @@ static int sfx_level_for_volume(int volume)
 	return level;
 }
 
+/*----------------------
+ | SFX latency probe
+ | Description: THROWAWAY instrumentation. The host plays these effects in
+ |   sync and the Saturn does not, so the extra delay is somewhere between
+ |   play_sample being called and the SCSP actually sounding. This splits
+ |   that interval in three so one hardware run says which part owns it:
+ |   decode is the first-play conversion, on is time spent inside slPCMOn
+ |   itself, and busy is how long after that call the channel takes to report
+ |   itself playing.
+ |
+ |   The busy measurement spins, so it changes the timing it is measuring --
+ |   acceptable for a number that is currently unknown to an order of
+ |   magnitude, and the reason this comes out again before anything is built
+ |   on it. Capped so a channel that never reports busy cannot hang the game.
+ | Author: suinevere
+ | Dependencies: platform.h
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define SFX_PROBE_CAP_MS 500
+
+static int g_probeDecodeMs;
+static int g_probeOnMs;
+static int g_probeBusyMs;
+static int g_probeWorstMs;
+static int g_probeCount;
+
 extern "C" {
 
 /*----------------------
@@ -284,6 +313,8 @@ void play_sample(int index, int volume, int channel)
 	int padded;
 	int i;
 	signed char *buffer;
+	unsigned int t0;
+	unsigned int t1;
 
 	if (index == 0)
 	{
@@ -329,9 +360,16 @@ void play_sample(int index, int volume, int channel)
 			return;
 		}
 
+		t0 = platform_ticks();
 		sfxconv_decode_into(offset, length, buffer, padded);
+		g_probeDecodeMs = (int)(platform_ticks() - t0);
+
 		g_sampleData[index] = buffer;
 		g_sampleSize[index] = (unsigned long)padded;
+	}
+	else
+	{
+		g_probeDecodeMs = 0;
 	}
 
 	if (slPCMStat(&g_pcm[channel]))
@@ -349,7 +387,31 @@ void play_sample(int index, int volume, int channel)
 	g_pcm[channel].eflevelL  = 0;
 	g_pcm[channel].efselectL = 0;
 
+	t0 = platform_ticks();
 	slPCMOn(&g_pcm[channel], g_sampleData[index], g_sampleSize[index]);
+	t1 = platform_ticks();
+	g_probeOnMs = (int)(t1 - t0);
+
+	while (!slPCMStat(&g_pcm[channel]))
+	{
+		if (platform_ticks() - t1 >= SFX_PROBE_CAP_MS)
+		{
+			break;
+		}
+	}
+
+	g_probeBusyMs = (int)(platform_ticks() - t1);
+	g_probeCount++;
+
+	if (g_probeDecodeMs + g_probeOnMs + g_probeBusyMs > g_probeWorstMs)
+	{
+		g_probeWorstMs = g_probeDecodeMs + g_probeOnMs + g_probeBusyMs;
+	}
+
+	SRL::Debug::Print(1, 25, "SFX dec%d on%d busy%d       ",
+	                  g_probeDecodeMs, g_probeOnMs, g_probeBusyMs);
+	SRL::Debug::Print(1, 26, "SFX worst%d n%d len%d       ",
+	                  g_probeWorstMs, g_probeCount, (int)g_sampleSize[index]);
 }
 
 /*----------------------
