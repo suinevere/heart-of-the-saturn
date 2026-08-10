@@ -236,21 +236,14 @@ extern "C" {
 /*----------------------
  | CDDA_SOUND_CAP_MS
  | Description: How long cdda_wait_for_sound will hold a caller before giving
- |   up. Six seconds, raised from three: three was set against a measured
- |   seek of one to three, which left no margin at all for the worst case it
- |   was sized on. A death sound sits at cue 31, a third of the way across
- |   the disc, and is requested while the drive is at the front playing room
- |   music -- the longest stroke the game ever asks for. A wait that expires
- |   one frame early hands the sequence a silence it then blames on the
- |   sound, which is precisely the failure this constant exists to prevent.
- |
- |   The cap is a backstop, not a delay: the wait returns the moment
- |   SND_GetAnlTlVl reports output, so raising it costs nothing on any read
- |   where sound actually arrives. It is only paid when sound never comes at
- |   all, and there the choice is between a longer pause and a silent scene.
+ |   up. Three seconds because the measured wait is one to three: an animation
+ |   that starts on time and silent is the bug this exists to prevent, and one
+ |   that starts three seconds late is worse. If the analysis path ever stops
+ |   reporting level the cost is a pause per read rather than a lockup, which
+ |   is the only reason a cap is acceptable at all.
  | Author: suinevere
  ----------------------*/
-#define CDDA_SOUND_CAP_MS 6000
+#define CDDA_SOUND_CAP_MS 3000
 
 /*----------------------
  | DISC_BOUNCE_SECTORS / g_bounce
@@ -323,22 +316,19 @@ static uint32_t *bounce_acquire(void)
 
 /*----------------------
  | CDDA_FADE_FRAMES
- | Description: Vblanks the fade out runs over, a quarter of a second at
- |   60 Hz. Bracketed on hardware rather than guessed: seven frames read as a
- |   glitch, forty-five as slow, and twenty-four still as slow against the
- |   fade in. Length is a frame count rather than a level count because the
- |   picture has 256 steps where the CD-DA level has 8, so the ramp is timed
- |   and the coarse level is sampled along it.
- |
- |   Out only. The fade in is VIDEO_FADE_IN_FRAMES and is counted separately,
- |   for the reason given there.
+ | Description: Frames a seam fade runs over, about two fifths of a second at
+ |   60 Hz. Bracketed on hardware rather than guessed: seven frames, one per
+ |   CD-DA level, read as a glitch rather than a transition, and forty-five
+ |   read as slow. Length is a frame count rather than a level count because
+ |   the picture has 256 steps where the CD-DA level has 8, so the ramp is
+ |   timed and the coarse level is sampled along it.
  | Author: suinevere
  | Dependencies: N/A
  | Globals: N/A
  | Params: N/A
  | Returns: N/A
  ----------------------*/
-#define CDDA_FADE_FRAMES 15
+#define CDDA_FADE_FRAMES 24
 
 /*----------------------
  | VIDEO_FADE_IN_FRAMES
@@ -369,8 +359,8 @@ static uint32_t *bounce_acquire(void)
  |   draws far fewer frames than a movie does. Ramping it over the movie's
  |   count spends the entire sequence part-way up and never reaches full
  |   brightness -- the animation is watched through a ramp that outlives it.
- |   Four frames is about a quarter of a second at that rate, so the picture
- |   is up well before the sequence ends.
+ |   Eight frames is about half a second at that rate, so the picture is up
+ |   well before the sequence ends.
  |
  |   The two counts cannot be one number: the ramp is measured in rendered
  |   frames, and the whole point of that is to track what is on screen, which
@@ -545,157 +535,6 @@ static void cdda_seam_end(int frames)
 }
 
 /*----------------------
- | CDDA_EVENT_LEAD_FRAMES
- | Description: Sectors of silence to skip at the head of an event track,
- |   150 being 2.0 seconds at the CD's 75 frames per second.
- |
- |   Measured, not assumed. Every one of cues 26-31 and 42 carries about two
- |   seconds of digital silence before its audio begins -- content starts at
- |   2.02 s on cue 31, 2.14 s on cue 26, 2.02 to 2.04 s on the rest -- which
- |   is the Red Book four-second minimum track length showing through on
- |   effects that are only one to six seconds long. Playing from the track
- |   start therefore spends two seconds saying nothing before the drive has
- |   anything to be heard doing, on top of the seek.
- |
- |   That is what cut the death sound off: cue 31 needs 2.02 s of lead plus
- |   3.57 s of content, and the sequence and the password screen's room load
- |   arrive well before 5.6 s are up.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define CDDA_EVENT_LEAD_FRAMES 150
-
-/*----------------------
- | cdda_is_event_track
- | Description: Whether a cue track is one of the short effect tracks rather
- |   than music. Cues 26-31 and 42 are the game's one-shot sounds -- deaths
- |   and stings, one to six seconds of content each. The distinction matters
- |   only for the lead skip: a music track's opening quiet is part of the
- |   piece and must not be cut, while an effect track's is Red Book padding
- |   and must be.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: cue -- cue track number
- | Returns: true for an effect track
- ----------------------*/
-static bool cdda_is_event_track(int cue)
-{
-	return (cue >= 26 && cue <= 31) || cue == 42;
-}
-
-/*----------------------
- | cdda_start_track
- | Description: Starts a cue track, skipping an effect track's silent lead so
- |   the sound is heard as soon as the drive arrives rather than two seconds
- |   later. Music, and anything whose bounds the table of contents cannot
- |   supply, is played whole through PlaySingle exactly as before.
- |
- |   The guards are not decoration: cdtoc_track_start and cdtoc_track_end
- |   return 0 for unknown, never a real frame address (see cdtoc.h), and a
- |   track shorter than its own lead would otherwise produce an empty or
- |   inverted range. Any of those falls back to playing the whole track,
- |   which is merely late rather than silent.
- | Author: suinevere
- | Dependencies: srl.hpp, cdtoc.h
- | Globals: g_toc
- | Params: cue -- cue track number; loop -- nonzero to repeat forever
- | Returns: the frame address playback was started at, or 0 if the table of
- |   contents could not supply one -- cdda_wait_for_head keys off it
- ----------------------*/
-static uint32_t cdda_start_track(int cue, int loop)
-{
-	uint32_t start;
-	uint32_t end;
-	CdcPly ply;
-
-	start = cdtoc_track_start(g_toc, cue);
-	end = cdtoc_track_end(g_toc, cue);
-
-	if (!cdda_is_event_track(cue) || start == 0 || end == 0 ||
-	    start + CDDA_EVENT_LEAD_FRAMES >= end)
-	{
-		if (cdda_is_event_track(cue))
-		{
-			printf("cdda: track %d lead skip declined, toc %d..%d\n",
-			       cue, (int)start, (int)end);
-		}
-
-		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
-		return start;
-	}
-
-	start += CDDA_EVENT_LEAD_FRAMES;
-
-	CDC_PLY_STYPE(&ply) = CDC_PTYPE_FAD;
-	CDC_PLY_SFAD(&ply) = start;
-	CDC_PLY_ETYPE(&ply) = CDC_PTYPE_FAD;
-	CDC_PLY_EFAS(&ply) = end - start;
-	CDC_PLY_PMODE(&ply) = CDC_PM_DFL | (loop != 0 ? 0xf : 0);
-	CDC_CdPlay(&ply);
-
-	return start;
-}
-
-/*----------------------
- | cdda_wait_for_head
- | Description: Holds until the drive is playing and its head has reached a
- |   given frame address, or the cap expires.
- |
- |   This exists because cdda_wait_for_sound cannot answer the question it
- |   was being asked. SND_GetAnlTlVl reports the SCSP's total output, and the
- |   SCSP mixes CD-DA with the four PCM channels -- so during a death, when
- |   the engine is firing sound effects, the analysis reads non-zero from the
- |   effects alone and the wait returns while the drive is still crossing the
- |   disc. Every wait placed against it was being satisfied by a footstep.
- |
- |   Asking the CD block directly has no such confusion. CDC_ST_PLAY on its
- |   own is not an audibility signal -- it is raised before any sound exists,
- |   which the CD-DA work already established -- but paired with a head
- |   position at or past where playback was asked to start, it means the
- |   drive is over the content and reading it out. For an event track that
- |   address is past the silent lead, so it is the first frame of real audio.
- | Author: suinevere
- | Dependencies: srl.hpp, platform.h
- | Globals: N/A
- | Params: fromFad -- frame address playback was started at; 0 to refuse
- | Returns: 1 if the head reached it, 0 on timeout or unknown address
- ----------------------*/
-static int cdda_wait_for_head(uint32_t fromFad)
-{
-	unsigned int t0;
-
-	if (fromFad == 0)
-	{
-		return 0;
-	}
-
-	t0 = platform_ticks();
-
-	for (;;)
-	{
-		CdcStat stat;
-
-		platform_frame();
-		CDC_GetCurStat(&stat);
-
-		if (CDC_GET_STC(&stat) == CDC_ST_PLAY &&
-		    (uint32_t)CDC_STAT_FAD(&stat) >= fromFad)
-		{
-			return 1;
-		}
-
-		if (platform_ticks() - t0 >= CDDA_SOUND_CAP_MS)
-		{
-			return 0;
-		}
-	}
-}
-
-/*----------------------
  | cdda_wait_for_sound
  | Description: Holds the caller until the drive is measurably producing CD-DA,
  |   so an animation and its music start together. The obvious signal is the
@@ -819,6 +658,23 @@ static void cdda_suspend(void)
  |   true, never clears it, so a track observed once stays observed until
  |   disc_play_track or disc_stop_track resets it for the next track.
  |
+ |   A non-looping track that has already been heard is dropped before
+ |   cdda_classify is consulted at all. Such a track is an event, not music:
+ |   it fired, the listener heard it, and a read that interrupts it has ended
+ |   it. Handing it to cdda_classify gets CDDA_RESUME, which replays its tail
+ |   over whatever scene the read was loading -- the death sound's splat,
+ |   then the same track's scream again on the password screen. cdda_classify
+ |   is not wrong to say resume; resuming is right for a long track that is
+ |   still meant to be playing. It cannot tell an event from a score, and
+ |   this is where that distinction is known: only a caller that requested
+ |   loop == 0 and has already been observed playing can be finished with.
+ |
+ |   The observed fold above runs first on purpose, so a track that only
+ |   became audible during this very suspend is caught by this rule rather
+ |   than resumed once and dropped on the next read. play_anm's animation
+ |   tracks are unaffected: their read beats the drive to the track, so they
+ |   are never observed by the time it runs, and they still restart in sync.
+ |
  |   CDDA_RESUME plays the remainder as its own frame range so the listener
  |   hears the track continue rather than restart. CDDA_RESTART is what a
  |   looping track gets even when it looks finished -- resuming one would
@@ -875,6 +731,15 @@ static void cdda_restore(void)
 		g_musicObserved = true;
 	}
 
+	if (g_musicLoop == 0 && g_musicObserved)
+	{
+		g_musicTrack = -1;
+		g_seamPending = false;
+		cdda_level_set(CDDA_LEVEL_FULL);
+		video_fade_in(0);
+		return;
+	}
+
 	action = cdda_classify(g_wasPlaying ? 1 : 0, g_musicLoop,
 		g_musicObserved ? 1 : 0, g_pauseFad, start, end);
 
@@ -915,7 +780,7 @@ static void cdda_restore(void)
 			return;
 		}
 
-		cdda_start_track(cue, g_musicLoop);
+		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
 		cdda_wait_for_sound();
 		cdda_seam_end(VIDEO_FADE_IN_FRAMES);
 		return;
@@ -1336,22 +1201,6 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   purpose -- the same track keeps playing, so whatever it had already
  |   observed is still true.
  |
- |   An event track is waited for here, at the instant it is commanded, and
- |   that is the earliest the wait can possibly happen. Putting it in
- |   play_death_animation instead -- where it started -- bought nothing: the
- |   script commands the track first and calls the sequence second, so a wait
- |   over there began no sooner and the drive had exactly as far to travel.
- |   Waiting at the command means the engine does not advance a single opcode
- |   until the sound is out of the drive, which is the whole of what can be
- |   done about a seek from software.
- |
- |   Only event tracks (cdda_is_event_track) block, and that is what keeps
- |   this from reopening the desync it caused when every track did. The
- |   cutscene animations are cues 32 to 35, outside the event set, so they
- |   still reach the drive through play_anm's read and still classify as
- |   CDDA_RESTART with their video. Nothing that pairs a track with a movie
- |   waits here.
- |
  |   This arms the fade rather than performing it. Fading here would ramp the
  |   picture back up while the drive was still seeking and, on the animation
  |   path, before the file had even been read -- seconds before there is
@@ -1379,7 +1228,6 @@ int disc_read_file(const char *name, void *out, int max_size)
 void disc_play_track(int engine_index, int loop)
 {
 	int cue;
-	uint32_t from;
 
 	if (!g_discOpened || cls.nosound != 0)
 	{
@@ -1406,17 +1254,11 @@ void disc_play_track(int engine_index, int loop)
 		}
 	}
 
-	from = cdda_start_track(cue, loop);
+	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
 	g_musicTrack = engine_index;
 	g_musicLoop = (loop != 0);
 	g_musicObserved = false;
 	g_seamPending = true;
-
-	if (cdda_is_event_track(cue) && !cdda_wait_for_head(from))
-	{
-		printf("cdda: track %d head never reached %d in %dms\n",
-		       cue, (int)from, CDDA_SOUND_CAP_MS);
-	}
 }
 
 /*----------------------
@@ -1452,11 +1294,6 @@ void disc_play_track(int engine_index, int loop)
  |   to its cap every time. Nothing is lost by that: disc_play_track has
  |   already commanded the new track, so the drive is mid-seek and silent
  |   anyway for the whole of this fade.
- |
- |   It no longer waits. disc_play_track already held the engine at the
- |   moment the track was commanded, which is strictly earlier than here, so
- |   by the time a sequence reaches this call the drive is over its content
- |   and there is nothing left to wait for. All this does now is fade.
  | Author: suinevere
  | Globals: g_seamPending
  | Params: N/A
@@ -1477,6 +1314,7 @@ void disc_music_sync(void)
 		platform_frame();
 	}
 
+	cdda_wait_for_sound();
 	cdda_seam_end(VIDEO_EVENT_FADE_IN_FRAMES);
 }
 
