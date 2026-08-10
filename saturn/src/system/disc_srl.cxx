@@ -75,20 +75,6 @@
 #include "platform.h"
 
 /*----------------------
- | sfx_play_disc_track
- | Description: Plays a short effect track from PCM instead of CD-DA, in
- |   saturn/src/system/sound_srl.cxx. Declared here rather than in a shared
- |   header because it has no host counterpart: the host plays these tracks
- |   straight out of a file with no seek to avoid.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: cue -- cue track number
- | Returns: 1 if started, 0 otherwise
- ----------------------*/
-extern "C" int sfx_play_disc_track(int cue);
-
-/*----------------------
  | g_discOpened
  | Description: Whether disc_open has succeeded and disc_close has not run
  |   since. disc_read_file consults this instead of re-probing the CD, so a
@@ -343,9 +329,9 @@ static uint32_t *bounce_acquire(void)
  | Author: suinevere
  | Globals: N/A
  | Params: N/A
- | Returns: 1 if output was detected, 0 if the cap was reached first
+ | Returns: N/A
  ----------------------*/
-static int cdda_wait_for_sound(void)
+static void cdda_wait_for_sound(void)
 {
 	unsigned int t0 = platform_ticks();
 
@@ -358,12 +344,12 @@ static int cdda_wait_for_sound(void)
 
 		if (vol.LeftChannel != 0 || vol.RightChannel != 0)
 		{
-			return 1;
+			return;
 		}
 
 		if (platform_ticks() - t0 >= CDDA_SOUND_CAP_MS)
 		{
-			return 0;
+			return;
 		}
 	}
 }
@@ -433,23 +419,6 @@ static void cdda_suspend(void)
  |   true, never clears it, so a track observed once stays observed until
  |   disc_play_track or disc_stop_track resets it for the next track.
  |
- |   A non-looping track that has already been heard is dropped before
- |   cdda_classify is consulted at all. Such a track is an event, not music:
- |   it fired, the listener heard it, and a read that interrupts it has ended
- |   it. Handing it to cdda_classify gets CDDA_RESUME, which replays its tail
- |   over whatever scene the read was loading -- the death sound's splat,
- |   then the same track's scream again on the password screen. cdda_classify
- |   is not wrong to say resume; resuming is right for a long track that is
- |   still meant to be playing. It cannot tell an event from a score, and
- |   this is where that distinction is known: only a caller that requested
- |   loop == 0 and has already been observed playing can be finished with.
- |
- |   The observed fold above runs first on purpose, so a track that only
- |   became audible during this very suspend is caught by this rule rather
- |   than resumed once and dropped on the next read. play_anm's animation
- |   tracks are unaffected: their read beats the drive to the track, so they
- |   are never observed by the time it runs, and they still restart in sync.
- |
  |   CDDA_RESUME plays the remainder as its own frame range so the listener
  |   hears the track continue rather than restart. CDDA_RESTART is what a
  |   looping track gets even when it looks finished -- resuming one would
@@ -504,12 +473,6 @@ static void cdda_restore(void)
 	if (g_wasPlaying && end != 0 && g_pauseFad >= start && g_pauseFad < end)
 	{
 		g_musicObserved = true;
-	}
-
-	if (g_musicLoop == 0 && g_musicObserved)
-	{
-		g_musicTrack = -1;
-		return;
 	}
 
 	action = cdda_classify(g_wasPlaying ? 1 : 0, g_musicLoop,
@@ -964,18 +927,6 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   it (see cdda_classify.h). The repeat-guard's early return skips this on
  |   purpose -- the same track keeps playing, so whatever it had already
  |   observed is still true.
- |
- |   This does not wait for the drive, and a build that made it wait is what
- |   proved why. Waiting meant the track was genuinely playing by the time
- |   play_animation's file read suspended it, so cdda_classify saw
- |   was_playing true and chose CDDA_RESUME -- the audio picked up one to
- |   three seconds in while the video started at its first frame. Not waiting
- |   leaves the track still seeking at suspend, which classifies as
- |   CDDA_RESTART, and picture and sound begin together. The sync belongs to
- |   cdda_restore's wait, after the read, and cannot be moved before it.
- |
- |   The repeat-guard above still returns early, so a room re-asserting the
- |   music it is already playing does not stutter.
  | Author: suinevere
  | Globals: g_discOpened, g_toc, g_musicTrack, g_musicLoop, g_musicObserved
  | Params: engine_index -- music index 1..41; loop -- nonzero to repeat
@@ -992,12 +943,6 @@ void disc_play_track(int engine_index, int loop)
 	}
 
 	cue = discfmt_cue_track_for_music(engine_index);
-
-	if ((cue >= 26 && cue <= 31) || cue == 42)
-	{
-		sfx_play_disc_track(cue);
-		return;
-	}
 
 	if (cue == 0 || !cdtoc_is_audio(g_toc, cue))
 	{
@@ -1032,7 +977,6 @@ void disc_play_track(int engine_index, int loop)
  |   observed history. Safe before disc_open, after disc_close, and with
  |   nothing playing, exactly as disc.h requires, which is what lets
  |   atexit_callback call it unconditionally.
-
  | Author: suinevere
  | Globals: g_musicTrack, g_musicObserved
  | Params: N/A

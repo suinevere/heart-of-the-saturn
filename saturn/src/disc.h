@@ -138,7 +138,6 @@ int disc_read_file(const char *name, void *out, int max_size);
 void disc_play_track(int engine_index, int loop);
 void disc_stop_track(void);
 
-
 /*----------------------
  | disc_close
  | Description: Releases whatever disc_open acquired (the data track

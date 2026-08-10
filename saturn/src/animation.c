@@ -27,22 +27,6 @@
 #include "debug.h"
 #include "disc.h"
 #include "video.h"
-
-/*----------------------
- | sfx_stop_disc_track
- | Description: Silences a PCM effect track, in
- |   saturn/src/system/sound_srl.cxx. Declared here rather than in a shared
- |   header because it has no host counterpart -- the host has no effect
- |   tracks in PCM to silence.
- | Author: suinevere
- | Dependencies: N/A
- | Globals: N/A
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#ifdef HOTA_SATURN
-extern void sfx_stop_disc_track(void);
-#endif
 #include "common.h"
 #include "client.h"
 #include "input.h"
@@ -903,14 +887,7 @@ int play_death_animation(int index)
 
 	/* set palette 2 ? */
 	offset = 0xf910 + (index << 2);
-
 	int ret = play_sequence(get_long(offset), 15);
-
-	/* the effect track outlives the sequence, so end it with the picture */
-#ifdef HOTA_SATURN
-	sfx_stop_disc_track();
-#endif
-
 	toggle_aux(old);
 	rest(0);
 	return ret;
