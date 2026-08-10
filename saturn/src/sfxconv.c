@@ -121,11 +121,14 @@ int sfxconv_padded_size(int length)
 
 void sfxconv_decode_into(int offset, int length, signed char *dst, int dst_size)
 {
+	const unsigned char *src;
 	int i;
+
+	src = get_memory_ptr(offset);
 
 	for (i = 0; i < length; i++)
 	{
-		dst[i] = g_decode[get_byte(offset + i)];
+		dst[i] = g_decode[src[i]];
 	}
 
 	for (; i < dst_size; i++)

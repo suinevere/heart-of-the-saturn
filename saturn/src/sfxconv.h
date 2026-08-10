@@ -101,6 +101,18 @@ signed char sfxconv_decode_byte(unsigned char u);
 int sfxconv_locate(int index, int *out_offset, int *out_length);
 
 /*----------------------
+ | sfxconv_decode_into note
+ | Description: Reads the sample through one get_memory_ptr rather than a
+ |   get_byte per byte. get_byte is a one-line array read but it lives in
+ |   vm.c and the decode lives here, so every byte of a sample was crossing a
+ |   translation unit -- tens of thousands of out-of-line calls for one sound,
+ |   paid on its first play in every room, since sound_flush_cache empties the
+ |   cache at each load_room. The bounds that matter are already checked by
+ |   sfxconv_locate before the pointer is taken.
+ | Author: suinevere
+ ----------------------*/
+
+/*----------------------
  | sfxconv_padded_size
  | Description: The buffer size a sample of this length needs in order to be
  |   playable -- its own length, or SFXCONV_MIN_PLAYABLE if that is larger.
