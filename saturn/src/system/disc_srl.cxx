@@ -362,7 +362,7 @@ static uint32_t *bounce_acquire(void)
  | Params: N/A
  | Returns: N/A
  ----------------------*/
-#define VIDEO_FADE_IN_FRAMES 16
+#define VIDEO_FADE_IN_FRAMES 6
 
 /*----------------------
  | VIDEO_EVENT_FADE_IN_FRAMES
@@ -385,7 +385,7 @@ static uint32_t *bounce_acquire(void)
  | Params: N/A
  | Returns: N/A
  ----------------------*/
-#define VIDEO_EVENT_FADE_IN_FRAMES 4
+#define VIDEO_EVENT_FADE_IN_FRAMES 3
 
 /*----------------------
  | g_cddaLevel
@@ -466,6 +466,13 @@ static void cdda_level_set(int level)
  |   exists: load_room reads several files in a row, so fading on every read
  |   pulsed the picture dark and light once per file instead of once per
  |   reload.
+ |
+ |   The sound comes back to full before playback is restarted, never after.
+ |   cdda_wait_for_sound gates on SND_GetAnlTlVl, which measures the SCSP's
+ |   real output, so a track restarted while the level is still down reads as
+ |   silence and the wait runs its entire cap before anything restores the
+ |   volume -- three seconds of music playing inaudibly, on every seam. The
+ |   fade out may end at zero; the fade back in cannot start there.
  |
  |   The fade also never brackets the wait. cdda_wait_for_sound gates on
  |   SND_GetAnlTlVl, which measures the SCSP's real output, so holding the
@@ -776,6 +783,7 @@ static void cdda_restore(void)
 		CDC_PLY_ETYPE(&ply) = CDC_PTYPE_FAD;
 		CDC_PLY_EFAS(&ply) = end - g_pauseFad;
 		CDC_PLY_PMODE(&ply) = CDC_PM_DFL;
+		cdda_level_set(CDDA_LEVEL_FULL);
 		CDC_CdPlay(&ply);
 		cdda_wait_for_sound();
 		cdda_seam_end(VIDEO_FADE_IN_FRAMES);
@@ -794,6 +802,7 @@ static void cdda_restore(void)
 			return;
 		}
 
+		cdda_level_set(CDDA_LEVEL_FULL);
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
 		cdda_wait_for_sound();
 		cdda_seam_end(VIDEO_FADE_IN_FRAMES);
