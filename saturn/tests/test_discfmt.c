@@ -109,20 +109,26 @@ static void test_iso_name_eq(void)
 
 static void test_cue_track_for_music(void)
 {
-    /* The disc has 41 audio tracks, TRACK 02 through TRACK 42, and the engine
-       indexes music 0..40. 41 onto 41, in order. */
-    CHECK_EQ(discfmt_cue_track_for_music(0),  2);
-    CHECK_EQ(discfmt_cue_track_for_music(1),  3);
-    CHECK_EQ(discfmt_cue_track_for_music(31), 33);  /* INTRO1.BIN's track */
-    CHECK_EQ(discfmt_cue_track_for_music(35), 37);  /* MAKE2MB.BIN's track */
-    CHECK_EQ(discfmt_cue_track_for_music(40), 42);  /* END4.BIN's track */
+    /* The disc has 41 audio tracks, TRACK 02 through TRACK 42, reached from
+       engine indices 1..41. The index already counts the data track. */
+    CHECK_EQ(discfmt_cue_track_for_music(1),  2);
+    CHECK_EQ(discfmt_cue_track_for_music(2),  3);
+    CHECK_EQ(discfmt_cue_track_for_music(41), 42);
 
-    /* The whole point. The deleted music.c built its filename as track + 1,
-       because the mp3 rip numbered the 41 AUDIO tracks 01..41 -- audio track 1
-       is disc track 2. Reading that as a cue-track formula aims engine index 0
-       at TRACK 01, which is the DATA track: noise or a hang on hardware, and
-       often silence in an emulator. Nothing may ever return 1. */
-    for (int i = 0; i <= 40; i++) {
+    /* anm_files' three intro entries, pinned against the game itself: the
+       intro plays cue 32, then 33, then 34. Getting this wrong is not subtle
+       to a listener and was not caught by any amount of reasoning about how
+       the deleted music.c numbered its mp3 rip. */
+    CHECK_EQ(discfmt_cue_track_for_music(31), 32);  /* INTRO1.BIN */
+    CHECK_EQ(discfmt_cue_track_for_music(32), 33);  /* INTRO2.BIN */
+    CHECK_EQ(discfmt_cue_track_for_music(33), 34);  /* INTRO3.BIN */
+
+    /* TRACK 01 is the DATA track: noise or a hang on hardware, and often just
+       silence in an emulator, so it survives casual testing. Nothing may ever
+       return 1 -- index 0 is refused rather than mapped onto it. */
+    CHECK_EQ(discfmt_cue_track_for_music(0), 0);
+
+    for (int i = 1; i <= 41; i++) {
         CHECK(discfmt_cue_track_for_music(i) >= 2);
         CHECK(discfmt_cue_track_for_music(i) <= 42);
     }
@@ -130,7 +136,7 @@ static void test_cue_track_for_music(void)
     /* Out of range is refused rather than clamped: a bytecode operand that
        lands here is a bug worth seeing, not one worth papering over. */
     CHECK_EQ(discfmt_cue_track_for_music(-1), 0);
-    CHECK_EQ(discfmt_cue_track_for_music(41), 0);
+    CHECK_EQ(discfmt_cue_track_for_music(42), 0);
 }
 
 /*----------------------
@@ -341,7 +347,157 @@ static void test_cue_parse_multi_file(void)
         CHECK_EQ(disc_cue.tracks[i].is_audio, 1);
         sprintf(want, "Heart of the Alien (Track %02d).bin", i + 1);
         CHECK(strcmp(disc_cue.tracks[i].filename, want) == 0);
+
+        /* Two seconds between INDEX 00 and INDEX 01, the real disc's layout. */
+        CHECK_EQ(disc_cue.tracks[i].pregap_sectors, 150);
     }
+
+    /* The data track declares INDEX 01 alone, so it has no pregap to skip. */
+    CHECK_EQ(disc_cue.tracks[0].pregap_sectors, 0);
+}
+
+static void test_cue_parse_pregap_widths(void)
+{
+    /* Three shapes that all appear on this disc's own cue sheet, plus the
+       no-INDEX-00 case that every generated cue in this repo emits. The
+       00:02:01 tracks (21, 26 and 40 on the real rip) are why this is read
+       off the cue instead of assumed to be a flat 150 everywhere. */
+    static const char cue[] =
+        "FILE \"t01.bin\" BINARY\r\n"
+        "  TRACK 01 MODE1/2352\r\n"
+        "    INDEX 01 00:00:00\r\n"
+        "FILE \"t02.bin\" BINARY\r\n"
+        "  TRACK 02 AUDIO\r\n"
+        "    INDEX 00 00:00:00\r\n"
+        "    INDEX 01 00:02:00\r\n"
+        "FILE \"t03.bin\" BINARY\r\n"
+        "  TRACK 03 AUDIO\r\n"
+        "    INDEX 00 00:00:00\r\n"
+        "    INDEX 01 00:02:01\r\n"
+        "FILE \"t04.bin\" BINARY\r\n"
+        "  TRACK 04 AUDIO\r\n"
+        "    INDEX 01 00:00:00\r\n"
+        "FILE \"t05.bin\" BINARY\r\n"
+        "  TRACK 05 AUDIO\r\n"
+        "    INDEX 00 00:00:00\r\n"
+        "    INDEX 01 01:03:02\r\n";
+    DiscCue disc_cue;
+    int single_file = -1;
+
+    CHECK(discfmt_cue_parse(cue, sizeof(cue) - 1, &disc_cue, &single_file));
+    CHECK_EQ(disc_cue.count, 5);
+
+    CHECK_EQ(disc_cue.tracks[0].pregap_sectors, 0);
+    CHECK_EQ(disc_cue.tracks[1].pregap_sectors, 150);
+    CHECK_EQ(disc_cue.tracks[2].pregap_sectors, 151);
+    CHECK_EQ(disc_cue.tracks[3].pregap_sectors, 0);
+
+    /* 1 minute 3 seconds 2 frames = (60 + 3) * 75 + 2. Not a shape this disc
+       uses; here to pin the minutes term, which 00:02:00 cannot. */
+    CHECK_EQ(disc_cue.tracks[4].pregap_sectors, 63 * 75 + 2);
+}
+
+static void test_cue_parse_pregap_keyword_is_not_a_pregap(void)
+{
+    /* A PREGAP line means silence the burner generates and the image does NOT
+       contain. Counting it would strip real audio off the front of the track,
+       so it must leave pregap_sectors alone -- the opposite of INDEX 00. */
+    static const char cue[] =
+        "FILE \"t01.bin\" BINARY\r\n"
+        "  TRACK 01 MODE1/2352\r\n"
+        "    INDEX 01 00:00:00\r\n"
+        "FILE \"t02.bin\" BINARY\r\n"
+        "  TRACK 02 AUDIO\r\n"
+        "    PREGAP   00:02:00\r\n"
+        "    INDEX 01 00:00:00\r\n";
+    DiscCue disc_cue;
+    int single_file = -1;
+
+    CHECK(discfmt_cue_parse(cue, sizeof(cue) - 1, &disc_cue, &single_file));
+    CHECK_EQ(disc_cue.count, 2);
+    CHECK_EQ(disc_cue.tracks[1].pregap_sectors, 0);
+}
+
+static void test_cue_parse_higher_indexes_ignored(void)
+{
+    /* INDEX 02 and up are legal subdivisions inside a track. They are not
+       pregap and must not disturb the value INDEX 01 established. */
+    static const char cue[] =
+        "FILE \"t01.bin\" BINARY\r\n"
+        "  TRACK 01 AUDIO\r\n"
+        "    INDEX 00 00:00:00\r\n"
+        "    INDEX 01 00:02:00\r\n"
+        "    INDEX 02 01:30:00\r\n"
+        "    INDEX 03 02:45:15\r\n";
+    DiscCue disc_cue;
+    int single_file = -1;
+
+    CHECK(discfmt_cue_parse(cue, sizeof(cue) - 1, &disc_cue, &single_file));
+    CHECK_EQ(disc_cue.count, 1);
+    CHECK_EQ(disc_cue.tracks[0].pregap_sectors, 150);
+}
+
+static void test_cue_parse_rejects_bad_indexes(void)
+{
+    /* INDEX 01 before INDEX 00 would yield a negative pregap. Silently
+       clamping it to 0 would hide a corrupt cue behind audio that merely
+       sounds late, which is the exact failure this whole field exists to
+       stop being invisible. */
+    static const char backwards[] =
+        "FILE \"t01.bin\" BINARY\r\n"
+        "  TRACK 01 AUDIO\r\n"
+        "    INDEX 00 00:02:00\r\n"
+        "    INDEX 01 00:00:00\r\n";
+
+    /* An INDEX line with no TRACK to attach it to. */
+    static const char orphan[] =
+        "FILE \"t01.bin\" BINARY\r\n"
+        "    INDEX 01 00:00:00\r\n";
+
+    /* Frames field at 75 and above is not a valid MSF -- 75 frames is one
+       second, so it should have been carried. */
+    static const char overflow[] =
+        "FILE \"t01.bin\" BINARY\r\n"
+        "  TRACK 01 AUDIO\r\n"
+        "    INDEX 00 00:00:00\r\n"
+        "    INDEX 01 00:01:75\r\n";
+
+    /* Truncated MSF: two fields where three are required. */
+    static const char truncated[] =
+        "FILE \"t01.bin\" BINARY\r\n"
+        "  TRACK 01 AUDIO\r\n"
+        "    INDEX 01 00:02\r\n";
+
+    DiscCue disc_cue;
+    int single_file = -1;
+
+    CHECK(!discfmt_cue_parse(backwards, sizeof(backwards) - 1, &disc_cue, &single_file));
+    CHECK_EQ(single_file, 0);
+    CHECK(!discfmt_cue_parse(orphan, sizeof(orphan) - 1, &disc_cue, &single_file));
+    CHECK(!discfmt_cue_parse(overflow, sizeof(overflow) - 1, &disc_cue, &single_file));
+    CHECK(!discfmt_cue_parse(truncated, sizeof(truncated) - 1, &disc_cue, &single_file));
+}
+
+static void test_cue_parse_pregap_does_not_leak_between_tracks(void)
+{
+    /* A track with no INDEX 00 following one that had one must report 0, not
+       inherit its neighbour's. The generated cues in this repo are all of the
+       second kind, so an inherited value would strip audio off every one. */
+    static const char cue[] =
+        "FILE \"t01.bin\" BINARY\r\n"
+        "  TRACK 01 AUDIO\r\n"
+        "    INDEX 00 00:00:00\r\n"
+        "    INDEX 01 00:02:00\r\n"
+        "FILE \"t02.bin\" BINARY\r\n"
+        "  TRACK 02 AUDIO\r\n"
+        "    INDEX 01 00:00:00\r\n";
+    DiscCue disc_cue;
+    int single_file = -1;
+
+    CHECK(discfmt_cue_parse(cue, sizeof(cue) - 1, &disc_cue, &single_file));
+    CHECK_EQ(disc_cue.count, 2);
+    CHECK_EQ(disc_cue.tracks[0].pregap_sectors, 150);
+    CHECK_EQ(disc_cue.tracks[1].pregap_sectors, 0);
 }
 
 static void test_cue_parse_single_file_rejected(void)
@@ -453,6 +609,11 @@ int main(void)
     test_cue_parse_multi_file();
     test_cue_parse_single_file_rejected();
     test_cue_parse_malformed_not_single_file();
+    test_cue_parse_pregap_widths();
+    test_cue_parse_pregap_keyword_is_not_a_pregap();
+    test_cue_parse_higher_indexes_ignored();
+    test_cue_parse_rejects_bad_indexes();
+    test_cue_parse_pregap_does_not_leak_between_tracks();
 #ifdef _WIN32
     test_cue_parse_no_trailing_newline_track_number_bound();
 #endif

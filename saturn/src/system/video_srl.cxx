@@ -36,6 +36,7 @@
 
 #include "video.h"
 #include "game2bin.h"
+#include "fadecalc.h"
 
 /*----------------------
  | SCREEN_W / SCREEN_H / VRAM_PITCH / VRAM_ROWS / OFFSET_X / OFFSET_Y
@@ -106,6 +107,25 @@ static uint8_t *g_vram = nullptr;
  | Author: suinevere
  ----------------------*/
 static int g_currentPalette = 0;
+
+/*----------------------
+ | g_srcRgb12 / g_fadeLevel
+ | Description: The raw RGB444 the engine last set, and the level it is
+ |   currently displayed at. Kept because a fade has to be reversible:
+ |   dimming g_colors in place and brightening it back would compound the
+ |   rounding of every step, and eight steps out and eight back would leave
+ |   the picture measurably dark for the rest of the session. Re-deriving
+ |   from the source instead makes a return to FADECALC_LEVEL_NORMAL exact by
+ |   construction rather than by luck.
+ |
+ |   g_fadeLevel starts at FADECALC_LEVEL_NORMAL so a build that never calls
+ |   video_set_fade behaves exactly as it did before this existed. 32 bytes
+ |   of .bss plus 4, recorded because disc_srl.cxx tracks this project's .bss
+ |   to the byte.
+ | Author: suinevere
+ ----------------------*/
+static unsigned char g_srcRgb12[16 * 2];
+static int g_fadeLevel = FADECALC_LEVEL_NORMAL;
 
 /*----------------------
  | g_scrollShadow
@@ -348,6 +368,37 @@ void video_set_palette(int which)
  | Params: rgb12 -- 16 entries of two bytes each
  | Returns: N/A
  ----------------------*/
+/*----------------------
+ | palette_rebuild
+ | Description: Rebuilds g_colors[0..15] from g_srcRgb12 at g_fadeLevel and
+ |   pushes them to CRAM. The widening to CRAM's 5 bits happens before the
+ |   dim, not after: fading in the 4-bit source domain would leave a fade
+ |   with sixteen distinguishable levels per channel instead of thirty-two,
+ |   and the banding would be visible on the darker steps of the ladder.
+ | Author: suinevere
+ | Globals: g_colors, g_srcRgb12, g_fadeLevel
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void palette_rebuild(void)
+{
+	for (int32_t i = 0; i < 16; i++)
+	{
+		const uint32_t c = ((uint32_t)g_srcRgb12[i * 2] << 8) | (uint32_t)g_srcRgb12[i * 2 + 1];
+		const int r = (int)(c & 0xf);
+		const int g = (int)((c >> 4) & 0xf);
+		const int b = (int)((c >> 8) & 0xf);
+
+		const int r5 = fadecalc_scale((r << 1) | (r >> 3), g_fadeLevel);
+		const int g5 = fadecalc_scale((g << 1) | (g >> 3), g_fadeLevel);
+		const int b5 = fadecalc_scale((b << 1) | (b >> 3), g_fadeLevel);
+
+		g_colors[i] = SRL::Types::HighColor::FromRGB555((uint8_t)r5, (uint8_t)g5, (uint8_t)b5);
+	}
+
+	palette_flush();
+}
+
 void video_set_palette_rgb12(unsigned char *rgb12)
 {
 	if (rgb12 == nullptr)
@@ -355,19 +406,14 @@ void video_set_palette_rgb12(unsigned char *rgb12)
 		return;
 	}
 
-	for (int32_t i = 0; i < 16; i++)
-	{
-		const uint32_t c = ((uint32_t)rgb12[i * 2] << 8) | (uint32_t)rgb12[i * 2 + 1];
-		const uint8_t r = (uint8_t)(c & 0xf);
-		const uint8_t g = (uint8_t)((c >> 4) & 0xf);
-		const uint8_t b = (uint8_t)((c >> 8) & 0xf);
+	memcpy(g_srcRgb12, rgb12, sizeof(g_srcRgb12));
+	palette_rebuild();
+}
 
-		g_colors[i] = SRL::Types::HighColor::FromRGB555((uint8_t)((r << 1) | (r >> 3)),
-		                                                (uint8_t)((g << 1) | (g >> 3)),
-		                                                (uint8_t)((b << 1) | (b >> 3)));
-	}
-
-	palette_flush();
+void video_set_fade(int level)
+{
+	g_fadeLevel = level;
+	palette_rebuild();
 }
 
 /*----------------------

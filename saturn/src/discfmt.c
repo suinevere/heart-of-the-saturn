@@ -10,12 +10,11 @@
 #include "discfmt.h"
 #include <string.h>
 
-#define DISCFMT_RAW_SECTOR   2352
 #define DISCFMT_USER_SECTOR  2048
 #define DISCFMT_SYNC_HEADER  16
 
-#define DISCFMT_MUSIC_FIRST_TRACK 2   /* TRACK 01 is data */
-#define DISCFMT_MUSIC_MAX_INDEX   40  /* 41 audio tracks, 02..42 */
+#define DISCFMT_MUSIC_FIRST_TRACK 1   /* engine index already counts the data track */
+#define DISCFMT_MUSIC_MAX_INDEX   41  /* cue 02..42 reached from engine 1..41 */
 
 uint32_t discfmt_mode1_user_offset(uint32_t lba)
 {
@@ -76,7 +75,7 @@ int discfmt_iso_name_eq(const char *iso_name, uint8_t iso_len, const char *want)
 
 int discfmt_cue_track_for_music(int engine_index)
 {
-    if (engine_index < 0 || engine_index > DISCFMT_MUSIC_MAX_INDEX)
+    if (engine_index < 1 || engine_index > DISCFMT_MUSIC_MAX_INDEX)
     {
         return 0;
     }
@@ -225,11 +224,70 @@ static int discfmt_cue_track_number(const char *p, size_t avail)
     return n;
 }
 
+/*----------------------
+ | discfmt_cue_msf_frames
+ | Description: Parses a cue sheet's mm:ss:ff timestamp into a frame (sector)
+ |   count. Every field is exactly two digits and the separator is exactly a
+ |   colon, so this refuses anything looser rather than guessing: a
+ |   mis-parsed timestamp becomes a byte offset that silently truncates a
+ |   track, which is far harder to see than a rejected cue.
+ |
+ |   Frames are bounded at 74 because 75 of them are one second and should
+ |   have been carried. Minutes are not bounded -- Red Book allows 99 and no
+ |   overflow is reachable at two digits.
+ | Author: suinevere
+ | Params: p -- first byte of the timestamp; avail -- bytes left on the line;
+ |   out_frames -- receives the frame count, untouched on failure
+ | Returns: 1 on a well-formed timestamp, 0 otherwise
+ ----------------------*/
+static int discfmt_cue_msf_frames(const char *p, size_t avail, int *out_frames)
+{
+    int m;
+    int s;
+    int f;
+    int k;
+
+    if (avail < 8)
+    {
+        return 0;
+    }
+
+    for (k = 0; k < 8; k++)
+    {
+        if (k == 2 || k == 5)
+        {
+            if (p[k] != ':')
+            {
+                return 0;
+            }
+        }
+        else if (p[k] < '0' || p[k] > '9')
+        {
+            return 0;
+        }
+    }
+
+    m = (p[0] - '0') * 10 + (p[1] - '0');
+    s = (p[3] - '0') * 10 + (p[4] - '0');
+    f = (p[6] - '0') * 10 + (p[7] - '0');
+
+    if (s > 59 || f > 74)
+    {
+        return 0;
+    }
+
+    *out_frames = (m * 60 + s) * 75 + f;
+    return 1;
+}
+
 int discfmt_cue_parse(const char *text, size_t len, DiscCue *out, int *single_file)
 {
     size_t i = 0;
     char cur_filename[256];
     int have_file = 0;
+    int index0_frames = 0;
+    int have_index0 = 0;
+    int have_index1 = 0;
 
     if (single_file != NULL)
     {
@@ -366,12 +424,99 @@ int discfmt_cue_parse(const char *text, size_t len, DiscCue *out, int *single_fi
 
                 out->tracks[out->count].number = number;
                 out->tracks[out->count].is_audio = is_audio;
+                out->tracks[out->count].pregap_sectors = 0;
                 memcpy(out->tracks[out->count].filename, cur_filename, sizeof(cur_filename));
                 out->count++;
 
                 /* This FILE line has now been consumed by a TRACK; a second
                    TRACK before another FILE line is the single-file case. */
                 have_file = 0;
+
+                /* Index state belongs to one TRACK. Not clearing it here would
+                   let a track with no INDEX 00 inherit its predecessor's and
+                   strip audio off its own front. */
+                index0_frames = 0;
+                have_index0 = 0;
+                have_index1 = 0;
+            }
+            else if (line_len - j >= 5 && memcmp(line + j, "INDEX", 5) == 0)
+            {
+                /* Only INDEX 00 and INDEX 01 are read, and only their
+                   difference is kept. Higher indexes subdivide a track and
+                   are none of this parser's business.
+
+                   These are offsets into the track's own file rather than
+                   absolute disc addresses, which holds only because the
+                   single-file layout is rejected above -- there, INDEX times
+                   are absolute and their difference would still be right but
+                   INDEX 00 at 00:00:00 would not mean "byte 0 of the file".
+                   That distinction is why this reads the difference rather
+                   than trusting INDEX 01 alone. */
+                int number;
+                int frames;
+                size_t k = j + 5;
+
+                if (out->count == 0)
+                {
+                    return 0;
+                }
+
+                while (k < line_len && line[k] == ' ')
+                {
+                    k++;
+                }
+
+                number = discfmt_cue_track_number(line + k, (size_t)(line_len - k));
+
+                while (k < line_len && line[k] >= '0' && line[k] <= '9')
+                {
+                    k++;
+                }
+
+                while (k < line_len && line[k] == ' ')
+                {
+                    k++;
+                }
+
+                if (number > 1)
+                {
+                    continue;
+                }
+
+                if (!discfmt_cue_msf_frames(line + k, (size_t)(line_len - k), &frames))
+                {
+                    return 0;
+                }
+
+                if (number == 0)
+                {
+                    if (have_index0 || have_index1)
+                    {
+                        return 0;
+                    }
+
+                    index0_frames = frames;
+                    have_index0 = 1;
+                }
+                else
+                {
+                    if (have_index1)
+                    {
+                        return 0;
+                    }
+
+                    if (have_index0)
+                    {
+                        if (frames < index0_frames)
+                        {
+                            return 0;
+                        }
+
+                        out->tracks[out->count - 1].pregap_sectors = frames - index0_frames;
+                    }
+
+                    have_index1 = 1;
+                }
             }
         }
     }

@@ -1844,24 +1844,18 @@ int decode(int current_task, int start_pc)
 				}
 				else if (next_script == 7)
 				{
-					disc_play_track(35, 0);
-					play_animation("MAKE2MB.BIN", 0x109a);
-					disc_play_track(36, 0);
-					play_animation("MID2.BIN", 0);
+					play_animation("MAKE2MB.BIN", 0x109a, 35);
+					play_animation("MID2.BIN", 0, 36);
 					disc_stop_track();
 					next_script = 6;
 					leave = 1;
 				}
 				else if (next_script == 6)
 				{
-					disc_play_track(37, 0);
-					play_animation("END1.BIN", 0);
-					disc_play_track(38, 0);
-					play_animation("END2.BIN", 0);
-					disc_play_track(39, 0);
-					play_animation("END3.BIN", 0);
-					disc_play_track(40, 0);
-					play_animation("END4.BIN", 0);
+					play_animation("END1.BIN", 0, 37);
+					play_animation("END2.BIN", 0, 38);
+					play_animation("END3.BIN", 0, 39);
+					play_animation("END4.BIN", 0, 40);
 
 					/* return to password selection */
 					next_script = 7;
@@ -1973,7 +1967,15 @@ int decode(int current_task, int start_pc)
 			case 0x21:
 			imm8 = next_pc() % 32;
 			LOG(("play death animation %d\n", imm8));
-			play_death_animation(imm8);
+
+			/* A multi-segment death is two 0x21 opcodes with nothing
+			   between them -- see the room-script disassembly in
+			   mem/2026-08-11-death-animation-cdda-sync.md. Peeking the
+			   next opcode byte tells play_death_animation that its
+			   delay has a second segment to cover, which is a static
+			   property of the script and so cannot race the drive the
+			   way every runtime signal tried here did. */
+			play_death_animation(imm8, get_byte(script_ptr + pc) == 0x21);
 			break;
 
 			case 0x24:

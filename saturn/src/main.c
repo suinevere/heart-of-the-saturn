@@ -23,6 +23,7 @@
 #include <assert.h>
 #include <dirent.h>
 
+#include "main.h"
 #include "client.h"
 #include "vm.h"
 #include "disc_manifest.h"
@@ -33,6 +34,7 @@
 #include "disc.h"
 #include "decode.h"
 #include "video.h"
+#include "fadecalc.h"
 #include "input.h"
 #include "platform.h"
 #include "screen.h"
@@ -486,6 +488,163 @@ void rest(int fps)
 	}
 }
 
+/*----------------------
+ | FADE_HOLD_MS
+ | Description: How long one step of a fade stays on screen. Eight steps at
+ |   60 ms is a fade just under half a second, and the hold is the part worth
+ |   keeping: the fade shows eight distinct pictures rather than a smooth
+ |   per-frame ramp, which is a different effect belonging to a different
+ |   console.
+ |
+ |   250 ms was tried first, on the reasoning that the original's fade spans
+ |   about two seconds. On this port it read as far too slow, and the reason
+ |   is that the fade is not carrying what the original's was: there, the
+ |   fade is sized to the load happening behind it. Here the load is a
+ |   separate black screen that follows, so a fade stretched to cover it just
+ |   delays the black. This is the transition alone; the waiting is the
+ |   read's and disc_wait_for_music's, and neither needs the palette to move
+ |   while it happens.
+ |
+ |   The one number to change if the fade still feels wrong. Eight steps at
+ |   this hold is 480 ms; the step count lives in fadecalc.h.
+ | Author: suinevere
+ ----------------------*/
+#define FADE_HOLD_MS 60
+
+/*----------------------
+ | fade_walk
+ | Description: Walks the fade ladder from one step to another inclusive,
+ |   holding each for FADE_HOLD_MS and presenting frames the whole way, then
+ |   resets rest()'s baseline.
+ |
+ |   That reset is not housekeeping. rest() paces the game by comparing
+ |   platform_ticks() against last_tick, and a fade returns two seconds after
+ |   last_tick was current, so without rest(0) the loop reads itself as two
+ |   seconds behind and sprints to catch up -- the same speed wobble that
+ |   kept cdda_wait_for_sound out of disc_play_track. rest(0) sets last_tick
+ |   to now and clears the fractional carry, which is exactly the baseline a
+ |   long block needs on the way out.
+ |
+ |   The inner wait calls platform_frame() rather than only platform_delay(),
+ |   so the VDP2 layer is presented and peripherals refreshed while the fade
+ |   runs. A fade that froze the display would be a black screen either way
+ |   on the last step, and a locked-up one on the first.
+ | Author: suinevere
+ | Dependencies: video.h, fadecalc.h, platform.h
+ | Globals: N/A
+ | Params: from -- first step to show; to -- last step to show; both 0
+ |   (normal) to FADECALC_SEGA_CD_STEPS (black)
+ | Returns: N/A
+ ----------------------*/
+/*----------------------
+ | g_fadeStart / g_fadeActive / g_fadeStep / g_fadeHold
+ | Description: State for a fade that is running underneath disc work rather
+ |   than in front of it. g_fadeStart is when it began, g_fadeStep the last
+ |   level actually written -- kept so fade_pump can skip the CRAM write when
+ |   the schedule has not moved on, which matters because it is called from
+ |   inside a read loop.
+ |
+ |   g_fadeHold is this fade's per-step hold, set at every fade_out_begin and
+ |   left alone by everything else, so a fade asked to last longer stretches
+ |   rather than gaining steps: the same eight pictures, held longer, which is
+ |   the effect FADE_HOLD_MS's banner is about.
+ | Author: suinevere
+ ----------------------*/
+static unsigned int g_fadeStart = 0;
+static int g_fadeActive = 0;
+static int g_fadeStep = 0;
+static unsigned int g_fadeHold = FADE_HOLD_MS;
+
+/*----------------------
+ | fade_pump
+ | Description: Advances the fade to whatever step elapsed time says it
+ |   should be on, and writes it. Scheduled on the clock rather than counted
+ |   per call, because its callers cannot promise how often they will call
+ |   it: a read hands control back twice for a whole animation, while the
+ |   music wait polls every frame. Counting steps would make the fade's speed
+ |   depend on which one happened to be running.
+ |
+ |   Writes CRAM and nothing else -- no frame is presented and none is
+ |   needed, since VDP2 reads the palette continuously, which is what lets
+ |   this be called from inside a disc read where the game loop is not
+ |   running.
+ |
+ |   Installed as the disc layer's tick, so it is invoked from a context that
+ |   must not touch the disc. It does not.
+ | Author: suinevere
+ | Globals: g_fadeStart, g_fadeActive, g_fadeStep
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void fade_pump(void)
+{
+	unsigned int elapsed;
+	int step;
+
+	if (!g_fadeActive)
+	{
+		return;
+	}
+
+	elapsed = platform_ticks() - g_fadeStart;
+	step = (int)(elapsed / g_fadeHold) + 1;
+
+	if (step > FADECALC_SEGA_CD_STEPS)
+	{
+		step = FADECALC_SEGA_CD_STEPS;
+	}
+
+	if (step != g_fadeStep)
+	{
+		g_fadeStep = step;
+		video_set_fade(fadecalc_step_level(step, FADECALC_SEGA_CD_STEPS));
+	}
+}
+
+void fade_out_begin(void)
+{
+	fade_out_begin_hold(FADE_HOLD_MS);
+}
+
+void fade_out_begin_hold(unsigned int hold_ms)
+{
+	if (hold_ms < 1)
+	{
+		hold_ms = 1;
+	}
+
+	g_fadeHold = hold_ms;
+
+	/* Starts at step 1, not 0: step 0 is the undimmed picture already on
+	   screen, and re-writing it would spend a step of the fade showing the
+	   viewer what they are already looking at. */
+	g_fadeStart = platform_ticks();
+	g_fadeActive = 1;
+	g_fadeStep = 0;
+
+	disc_set_tick(fade_pump);
+	fade_pump();
+}
+
+void fade_out_finish(void)
+{
+	/* Whatever time the disc work took, the fade ends black. If that work
+	   outlasted the fade this has already been reached and the remaining
+	   wait happened behind black, which is the intended shape; if the work
+	   was shorter, this spends what little is left rather than cutting a
+	   half-faded picture to black. */
+	while (g_fadeStep < FADECALC_SEGA_CD_STEPS)
+	{
+		fade_pump();
+		platform_frame();
+		platform_delay(1);
+	}
+
+	disc_set_tick(NULL);
+	g_fadeActive = 0;
+	rest(0);
+}
+
 /** Initializes all tasks to stopped state
 */
 void init_tasks()
@@ -526,8 +685,7 @@ int play_anm(anm_file_t *anm, int n, int skippable)
 		{
 			int ok;
 
-			disc_play_track(anm[seq].track, 0);
-			ok = play_animation(anm[seq].filename, anm[seq].offset);
+			ok = play_animation(anm[seq].filename, anm[seq].offset, anm[seq].track);
 			if (ok < 0)
 			{
 				ret = ok;

@@ -57,8 +57,17 @@ static DiscCue disc_cue;
 static char disc_cue_dir[512];
 
 /*----------------------
- | disc_music_fp / disc_music_loop / disc_music_eof
+ | disc_music_fp / disc_music_loop / disc_music_start / disc_music_eof
  | Description: State for the single currently-hooked CD-DA track.
+ |
+ |   disc_music_start is the byte offset where the track's audio begins,
+ |   which is not byte 0: this disc's cue declares INDEX 00 on every audio
+ |   track, so its file opens with 150 sectors of pregap silence that a real
+ |   drive never plays, because a TOC's track start is INDEX 01. Both the
+ |   initial seek and the loop rewind in disc_music_callback use this rather
+ |   than 0, so a looping track does not re-insert two seconds of silence on
+ |   every repeat. Written by disc_play_track before Mix_HookMusic, exactly
+ |   like disc_music_loop, so the audio thread never observes it half-set.
  |   disc_music_fp is NULL whenever nothing has ever been hooked, or after
  |   disc_stop_track/disc_play_track has closed it -- which is also what
  |   disc_music_callback checks before touching the file -- so a callback
@@ -78,6 +87,7 @@ static char disc_cue_dir[512];
  ----------------------*/
 static FILE *disc_music_fp = NULL;
 static int disc_music_loop = 0;
+static long disc_music_start = 0;
 static int disc_music_eof = 0;
 
 /*----------------------
@@ -469,9 +479,11 @@ static void disc_music_callback(void *udata, Uint8 *stream, int len)
 
     if (got < want && disc_music_loop != 0)
     {
-        /* CD-DA tracks carry no header, so "the start of the track" is
-           just byte 0 of the file -- looping is a plain rewind. */
-        if (fseek(disc_music_fp, 0, SEEK_SET) == 0)
+        /* CD-DA tracks carry no header, so looping is a plain seek -- but to
+           the track's INDEX 01, not to byte 0. Byte 0 is the head of the
+           pregap, and rewinding there would drop two seconds of silence into
+           the middle of a looping track on every repeat. */
+        if (fseek(disc_music_fp, disc_music_start, SEEK_SET) == 0)
         {
             got += fread(stream + got, 1, want - got, disc_music_fp);
         }
@@ -518,6 +530,7 @@ void disc_play_track(int engine_index, int loop)
     int cue_track;
     int i;
     const char *filename = NULL;
+    long pregap = 0;
     char path[768];
     FILE *fp;
     int spec_freq = 0;
@@ -574,6 +587,7 @@ void disc_play_track(int engine_index, int loop)
         if (disc_cue.tracks[i].is_audio && disc_cue.tracks[i].number == cue_track)
         {
             filename = disc_cue.tracks[i].filename;
+            pregap = (long)disc_cue.tracks[i].pregap_sectors * DISCFMT_RAW_SECTOR;
             break;
         }
     }
@@ -606,10 +620,56 @@ void disc_play_track(int engine_index, int loop)
         return;
     }
 
+    /* Start at INDEX 01, which is where a drive commanded to play this track
+       would start. A failed seek is not fatal -- the track plays from byte 0,
+       two seconds late, which is what this backend did before pregap was
+       parsed at all -- but it is worth a line, since nothing else about the
+       playback would look wrong. */
+    if (pregap > 0 && fseek(fp, pregap, SEEK_SET) != 0)
+    {
+        fprintf(stderr, "disc_play_track: can't seek past pregap of '%s'\n", path);
+        pregap = 0;
+    }
+
     disc_music_fp = fp;
     disc_music_loop = loop;
+    disc_music_start = pregap;
     disc_music_eof = 0;
     Mix_HookMusic(disc_music_callback, NULL);
+}
+
+/*----------------------
+ | disc_set_tick
+ | Description: Accepted and ignored. The hook exists so a caller can run a
+ |   transition during drive work; this backend's reads are host file I/O and
+ |   its playback needs no seek, so there is no such time to lend out. A
+ |   fade here simply runs at its own pace against fade_out_finish, which is
+ |   correct -- just not free the way it is on hardware.
+ | Author: suinevere
+ | Params: tick -- unused
+ | Returns: N/A
+ ----------------------*/
+void disc_set_tick(disc_tick_fn tick)
+{
+    (void)tick;
+}
+
+/*----------------------
+ | disc_wait_for_music
+ | Description: Nothing to wait for. Playback here is an fread through
+ |   Mix_HookMusic on a file handle of its own, so a track is producing sound
+ |   from the next mixer callback -- there is no seek between the request and
+ |   the audio the way there is on a drive with one head.
+ |
+ |   Present rather than absent because disc.h declares it and the engine
+ |   calls it unconditionally. Making the engine ask which backend it is
+ |   talking to would put a hardware detail on the wrong side of the seam.
+ | Author: suinevere
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void disc_wait_for_music(void)
+{
 }
 
 /*----------------------

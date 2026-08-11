@@ -296,19 +296,29 @@ The alignment is a property of `ANIMATION_LOAD_BASE`, not of where the read
 starts, so no amount of splitting the request fixes it — every sector of an
 animation lands at the same offset mod 4.
 
-*How the first emulator run settles it:* `INTRO1.BIN` is the first thing the
-game loads into an unaligned destination, on the way into the first intro
-animation, before any input is needed. That run either produces a correct
-animation or an obviously broken one, immediately, with no ambiguity and nothing
-to drive the game into first. **Do not claim this works until that run has
-happened.**
+*How the first emulator run settled it — RESOLVED 2026-08-06, and the answer was
+no.* `INTRO1.BIN` hung: black screen and no `probe read:` line at all, the
+probe's `printf` sitting after the read returns. `GFS_SetTmode(file.Handle,
+GFS_TMODE_CPU)` (`sega_gfs.h:423`) was applied for misaligned destinations in
+`1dd0167` and **changed nothing** — the rebuilt disc behaved identically. A
+software transfer cannot care about a 2-byte offset, so **destination alignment
+is not the cause of the hang**, and `1dd0167` was reverted in `91bd437` rather
+than left in place as an unexplained workaround.
 
-*Mitigation if it does not:* `GFS_SetTmode(file.Handle, GFS_TMODE_CPU)`
-(`sega_gfs.h:423`) before the body read, using the public `Handle` member
-(`srl_cd.hpp:241`), trading DMA for a software transfer that still costs one
-request instead of forty-three. That is a two-line change inside `disc_srl.cxx`,
-still touches no submodule file, and is why this risk is survivable rather than
-fatal to the approach.
+This risk is retired as written. It is left here rather than deleted because the
+`0x809a` load base makes alignment the obvious suspect, and the next person to
+look at this file will reach for it again unless the record says it was tested.
+
+**The constraint that actually governs is request size.** A `GFS_Fread` for more
+sectors than the CD block's buffer partition holds does not fail — it never
+returns. `GAME2.BIN` is exactly 200 sectors and read in 1,450 ms; every animation
+is 211 and hung; `MAKE2MB.BIN` is 213. SRL never hit this because
+`SectorsToReadAtOnce` is 5, far under any partition, so the deadlock was
+introduced by asking for a whole file at once. The body read is therefore chunked
+to `GFS_GetNumCdbuf(file.Handle)` (`sega_gfs.h:390`) clamped to
+`DISC_MAX_REQUEST_SECTORS` (128), which costs two requests per animation against
+`File::Read`'s forty-three. Whether the animations then render correctly — as
+opposed to hanging — is what the run after `91bd437` decides.
 
 **Emulator fidelity.** Whether Mednafen models per-request drive latency the way
 a real CD block does is unknown. The 160 ms constant is what Mednafen charges;

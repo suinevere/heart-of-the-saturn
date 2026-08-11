@@ -330,13 +330,24 @@ static int extract_blob(FILE *data_fp, const uint8_t *root_dir, uint32_t root_le
 
 /*----------------------
  | extract_audio_track
- | Description: Copies one CD-DA track's raw PCM bytes, unmodified, behind a
- |   44-byte WAV header into music_out_dir/track<NN>.wav where NN is the cue
- |   TRACK number (02..42) -- not the engine's music index -- then appends
- |   that filename to the tracklist. The source track file carries no header
- |   of its own (audio tracks in a multi-file bin/cue are raw interleaved
- |   PCM samples starting at byte 0), so this is a plain streamed copy, not
- |   a per-sector MODE1 read: only the data track needs that.
+ | Description: Copies one CD-DA track's raw PCM bytes, past its pregap and
+ |   behind a 44-byte WAV header, into music_out_dir/track<NN>.wav where NN is
+ |   the cue TRACK number (02..42) -- not the engine's music index -- then
+ |   appends that filename to the tracklist. The source track file carries no
+ |   header of its own (audio tracks in a multi-file bin/cue are raw
+ |   interleaved PCM samples starting at byte 0), so this is a streamed copy,
+ |   not a per-sector MODE1 read: only the data track needs that.
+ |
+ |   The pregap skip is the whole reason this is not a plain copy. This rip
+ |   declares INDEX 00 on every audio track, meaning the first 150 sectors of
+ |   each track file -- two seconds, verified digital silence, peak sample 102
+ |   of 32767 at worst -- sit before INDEX 01. A drive told to play track N
+ |   starts at INDEX 01 and never reaches them, because that is what a TOC's
+ |   track start address means. Copying them into the WAV moved them past both
+ |   cue generators downstream, neither of which emits an INDEX 00 of its own,
+ |   so they became the head of the playable track and every track came in two
+ |   seconds late. Dropping them here is not an edit to the audio: it
+ |   reproduces what the console does.
  | Author: suinevere
  ----------------------*/
 static int extract_audio_track(const char *cue_dir, const DiscCueTrack *track,
@@ -349,6 +360,7 @@ static int extract_audio_track(const char *cue_dir, const DiscCueTrack *track,
     FILE *out_fp;
     long size_l;
     uint32_t size;
+    uint32_t pregap;
     uint32_t remaining;
     static uint8_t buf[COPY_BUF_BYTES];
 
@@ -388,12 +400,32 @@ static int extract_audio_track(const char *cue_dir, const DiscCueTrack *track,
 
     size = (uint32_t)size_l;
 
-    if (fseek(src_fp, 0, SEEK_SET) != 0)
+    if (track->pregap_sectors < 0)
     {
-        fprintf(stderr, "extract_disc: can't rewind '%s'\n", src_path);
+        fprintf(stderr, "extract_disc: negative pregap on track %d\n", track->number);
         fclose(src_fp);
         return 0;
     }
+
+    pregap = (uint32_t)track->pregap_sectors * DISCFMT_RAW_SECTOR;
+
+    if (pregap >= size)
+    {
+        fprintf(stderr, "extract_disc: track %d is %u bytes but its cue claims a "
+                        "%u-byte pregap\n",
+                track->number, (unsigned)size, (unsigned)pregap);
+        fclose(src_fp);
+        return 0;
+    }
+
+    if (fseek(src_fp, (long)pregap, SEEK_SET) != 0)
+    {
+        fprintf(stderr, "extract_disc: can't seek past pregap of '%s'\n", src_path);
+        fclose(src_fp);
+        return 0;
+    }
+
+    size -= pregap;
 
     snprintf(out_name, sizeof(out_name), "track%02d.wav", track->number);
 
@@ -459,7 +491,8 @@ static int extract_audio_track(const char *cue_dir, const DiscCueTrack *track,
         return 0;
     }
 
-    printf("music: %-14s %10u bytes (cue track %02d)\n", out_name, (unsigned)size, track->number);
+    printf("music: %-14s %10u bytes (cue track %02d, %d pregap sectors dropped)\n",
+           out_name, (unsigned)size, track->number, track->pregap_sectors);
     return 1;
 }
 

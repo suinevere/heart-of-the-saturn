@@ -7,4 +7,4 @@
 # of host-gcc-plus-discfmt.c build.
 set -e
 cd "$(dirname "$0")/.."
-gcc -std=c99 -Wall -Wextra -O2 -Isrc -o tools/extract_disc tools/extract_disc.c src/discfmt.c
+gcc -std=c99 -Wall -Wextra -O2 -Isaturn/src -o tools/extract_disc tools/extract_disc.c saturn/src/discfmt.c

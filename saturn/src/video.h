@@ -91,6 +91,31 @@ void video_set_palette(int which);
 void video_set_palette_rgb12(unsigned char *rgb12);
 
 /*----------------------
+ | video_set_fade
+ | Description: Dims the whole displayed palette toward black without
+ |   disturbing the palette itself. Level 0 is black and
+ |   FADECALC_LEVEL_NORMAL (255) is the picture unchanged; the backends keep
+ |   the raw RGB444 the engine last set and re-derive their native colours
+ |   from it on every call, so a fade out followed by a fade in restores the
+ |   original entries exactly rather than accumulating rounding.
+ |
+ |   Setting a palette does not clear the fade. That is deliberate: a scene
+ |   change under a black screen sets its palette first and fades in after,
+ |   and a video_set_palette that reset the level to normal would flash the
+ |   new scene at full brightness for one frame before the fade in started.
+ |   Callers that mean "stop fading" say so, with
+ |   video_set_fade(FADECALC_LEVEL_NORMAL).
+ |
+ |   This is a palette operation, not an animation: it applies one level and
+ |   returns. Walking the ladder and holding each step belongs to the caller,
+ |   which is the only place that knows what it is waiting for -- see
+ |   fadecalc.h for the ladder and for why a Sega CD fade is eight held
+ |   pictures rather than a per-frame ramp.
+ | Author: suinevere
+ ----------------------*/
+void video_set_fade(int level);
+
+/*----------------------
  | video_get_current_palette
  | Description: Returns the index last passed to video_set_palette, so
  |   callers that only track palette state (not raw RGB12) can query it

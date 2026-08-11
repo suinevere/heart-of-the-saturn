@@ -62,8 +62,10 @@ SOURCES += $(patsubst ./%,%,$(shell find src/ -name '*.cxx'))
 # Host-only translation units. scale2x/scale3x type their buffers as SDL's
 # Uint8 and sound.c is built on Mix_Chunk, so none of the three compiles for
 # SH-2. They stay under src/ because the host build needs them, which means
-# the glob above finds them and they have to be removed by name. Sound is a
-# later sub-project; the pixel doublers have no Saturn equivalent at all.
+# the glob above finds them and they have to be removed by name. sound.c
+# stays out because it is built on Mix_Chunk; src/system/sound_srl.cxx is the
+# Saturn implementation of the same header. The pixel doublers have no Saturn
+# equivalent at all.
 SOURCES := $(filter-out src/scale2x.c src/scale3x.c src/sound.c,$(SOURCES))
 
 # BYPASS_PROTECTION starts the game at GAME_PART2 (the intro) instead of
@@ -100,6 +102,24 @@ SRL_CUSTOM_CCFLAGS += -DHAVE_DECL_GETOPT=0
 # per-file path edits. SRL_CUSTOM_CCFLAGS is appended to CCFLAGS by shared.mk
 # for both C and C++ TUs.
 SRL_CUSTOM_CCFLAGS += $(patsubst %,-I%,$(shell find src -type d))
+
+# One-click self-repair. The 19 game blobs are not in the repository, and a disc
+# authored without them boots to disc_open's "19 missing" panic rather than to
+# the game. data.bat is a no-op once they are present, so hanging it off every
+# build costs a directory count and removes a step people have to remember.
+#
+# Declared BEFORE the include on purpose: make records prerequisites in the
+# order it first sees them, and shared.mk's own `all:` lines (42 and 535) would
+# otherwise schedule the repair after the build that depends on it.
+#
+# The extractor is built here too when absent, because a fresh clone has the
+# source but not the binary, and "one click" has to include that click.
+all: game_assets
+
+.PHONY: game_assets
+game_assets:
+	@[ -x ../tools/extract_disc ] || [ -x ../tools/extract_disc.exe ] || sh ../tools/build.sh
+	@sh ../tools/assets/data.bat
 
 # Include shared makefile
 SDK_ROOT = $(SRL_INSTALL_ROOT)/saturnringlib

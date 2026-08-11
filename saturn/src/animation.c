@@ -27,6 +27,8 @@
 #include "debug.h"
 #include "disc.h"
 #include "video.h"
+#include "fadecalc.h"
+#include "main.h"
 #include "common.h"
 #include "client.h"
 #include "input.h"
@@ -88,13 +90,110 @@ static void post_render(int fps)
 }
 
 /*----------------------
+ | g_restorePending
+ | Description: Set by play_animation when it has faded to black and wants
+ |   brightness back on the first frame that has something new in it, rather
+ |   than immediately. Only play_animation sets it; play_death_animation
+ |   restores its own level directly, exactly as before, so nothing here
+ |   changes what a death does.
+ | Author: suinevere
+ ----------------------*/
+static int g_restorePending = 0;
+
+/*----------------------
+ | DEATH_FADE_IN_HOLD_MS
+ | Description: Per-step hold for the fade in at the front of a death
+ |   sequence. Eight steps at 60 ms is 480 ms, the same speed as an ordinary
+ |   fade out, so a death fades down and back up at one rate.
+ | Author: suinevere
+ ----------------------*/
+#define DEATH_FADE_IN_HOLD_MS 60
+
+/*----------------------
+ | g_fadeInStep
+ | Description: Where the death fade in has got to: FADECALC_SEGA_CD_STEPS is
+ |   black, 0 is both "normal" and "not running", which is the same state and
+ |   so needs no separate flag.
+ |
+ |   Only the death path arms this. A cutscene still comes back at full
+ |   brightness in one write, which is what the Sega CD does and what main.h's
+ |   fade banner describes.
+ | Author: suinevere
+ ----------------------*/
+static int g_fadeInStep = 0;
+static unsigned int g_fadeInStart = 0;
+
+/*----------------------
+ | death_fade_in_begin
+ | Description: Arms the fade in, leaving the screen black. Deliberately
+ |   writes no palette: the fade out that precedes it has already put the
+ |   screen where this starts from, and writing it again would spend a step
+ |   showing the viewer what they are already looking at.
+ | Author: suinevere
+ | Dependencies: platform.h, fadecalc.h
+ | Globals: g_fadeInStep, g_fadeInStart
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void death_fade_in_begin(void)
+{
+	g_fadeInStart = platform_ticks();
+	g_fadeInStep = FADECALC_SEGA_CD_STEPS;
+}
+
+/*----------------------
+ | death_fade_in_pump
+ | Description: Walks the fade in down to normal on the clock, one write per
+ |   step it has actually reached.
+ |
+ |   Scheduled on elapsed time rather than counted per frame so the fade takes
+ |   the same wall clock whatever the sequence's frame rate is -- and, more to
+ |   the point, so it costs no time of its own. It runs over the animation's
+ |   opening frames rather than in front of them. Anything inserted ahead of
+ |   the sequence would push every frame after it back, and where those frames
+ |   fall against the death cue is the one thing on this path that is not free
+ |   to move.
+ | Author: suinevere
+ | Dependencies: video.h, fadecalc.h, platform.h
+ | Globals: g_fadeInStep, g_fadeInStart
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void death_fade_in_pump(void)
+{
+	unsigned int elapsed;
+	int step;
+
+	if (g_fadeInStep <= 0)
+	{
+		return;
+	}
+
+	elapsed = platform_ticks() - g_fadeInStart;
+	step = FADECALC_SEGA_CD_STEPS - (int)(elapsed / DEATH_FADE_IN_HOLD_MS);
+
+	if (step < 0)
+	{
+		step = 0;
+	}
+
+	if (step != g_fadeInStep)
+	{
+		g_fadeInStep = step;
+		video_set_fade(fadecalc_step_level(step, FADECALC_SEGA_CD_STEPS));
+	}
+}
+
+/*----------------------
  | copy_to_screen
  | Description: Hands the animation player's working buffer across the video
- |   seam. Does not present it -- post_render does, on the next line at every
- |   call site.
+ |   seam, then brings brightness back if a fade is waiting on new pixels --
+ |   in one write for a cutscene, a step at a time for a death.
+ |   Does not present the frame -- post_render does, on the next line at
+ |   every call site.
  | Author: suinevere
- | Dependencies: video.h
- | Globals: screen0
+ | Dependencies: video.h, fadecalc.h
+ | Globals: screen0, g_restorePending, g_fadeInStep
  | Params: a4 -- byte offset into screen0 the frame starts at
  | Returns: N/A
  ----------------------*/
@@ -102,6 +201,20 @@ static void copy_to_screen(int a4)
 {
 	//video_set_scroll(0); /////////
 	video_render((char *)screen0 + a4);
+
+	death_fade_in_pump();
+
+	/* Brightness returns here, after the pixels, and not when the fade
+	   ended. A fade blacks the screen by darkening the palette while the
+	   framebuffer still holds the outgoing scene, so restoring the level
+	   before anything new is drawn shows that old scene at full brightness
+	   for the gap before the first frame lands -- the flash at the end of a
+	   cutscene fade. Ordering is the whole fix: pixels, then light. */
+	if (g_restorePending)
+	{
+		g_restorePending = 0;
+		video_set_fade(FADECALC_LEVEL_NORMAL);
+	}
 }
 
 static void draw_pixel(unsigned char *out, int offset, int color)
@@ -873,21 +986,220 @@ int play_sequence(int offset, int fps)
 	return 0;
 }
 
+/*----------------------
+ | DEATH_CHAINED_HOLD_MS
+ | Description: Per-step hold for the one fade in front of a two-segment
+ |   death. Eight steps at 120 ms is 960 ms, which is exactly what the two
+ |   separate fades this replaced used to add up to.
+ |
+ |   960 is the confirmed number and the tuning range around it is narrower
+ |   than it looks. 1200 was tried and was too long; 600 was tried on the
+ |   reasoning that holding the last frame had made the head start unnecessary,
+ |   and it opened too large a gap before the splat. Both directions were
+ |   rejected by eye, which puts this back where five earlier rounds also
+ |   landed. Treat it as measured, not chosen.
+ | Author: suinevere
+ ----------------------*/
+#define DEATH_CHAINED_HOLD_MS 200
+
+/*----------------------
+ | DEATH_LAST_FRAME_MIN_MS
+ | Description: How long a death's final picture is held before the button
+ |   that dismisses it is listened for at all.
+ |
+ |   Deaths are usually reached mid-struggle with a button already down, so
+ |   without a floor the held shot would be dismissed by the press that caused
+ |   it. The floor also guarantees the beat exists for a player who mashes
+ |   through everything.
+ |
+ |   Free of the synchronisation the rest of this path is built around: the
+ |   splat is a frame inside the sequence, and time spent after the last frame
+ |   cannot move a frame that has already been drawn. Tune by eye.
+ | Author: suinevere
+ ----------------------*/
+#define DEATH_LAST_FRAME_MIN_MS 400
+
+/*----------------------
+ | death_button_down
+ | Description: Whether any button a player would press to dismiss a held shot
+ |   is down. The d-pad is deliberately not included: a held direction is how
+ |   the player arrived at most deaths.
+ | Author: suinevere
+ | Dependencies: input.h
+ | Globals: key_a, key_b, key_c, key_select
+ | Params: N/A
+ | Returns: non-zero if any dismiss button is down
+ ----------------------*/
+static int death_button_down(void)
+{
+	return key_a || key_b || key_c || key_select;
+}
+
+/*----------------------
+ | hold_last_frame
+ | Description: Keeps presenting whatever is already on screen until the
+ |   player presses a button, then resets rest()'s baseline.
+ |
+ |   The press has to be a fresh one. After the floor expires the loop first
+ |   waits for every button to be up and only then watches for one going down,
+ |   so a button still held from the death itself neither dismisses the shot
+ |   nor has to be noticed by the player as the thing they must let go of.
+ |
+ |   Presents rather than sleeps, for the same reason the fade does: a display
+ |   that stops being handed frames reads as a lockup rather than a held shot.
+ |   Nothing is drawn, so what stays up is the sequence's own last frame.
+ |   check_events is called because it is the only thing that refreshes the pad
+ |   -- and, on the host backend, the only thing that can set cls.quit, which
+ |   is what stops this being a way to hang the game.
+ |
+ |   rest(0) on the way out is load bearing. rest() paces the game against
+ |   last_tick, and returning long after last_tick was current makes the loop
+ |   read itself as behind and sprint to catch up.
+ | Author: suinevere
+ | Dependencies: platform.h, input.h, client.h, main.h (rest)
+ | Globals: cls
+ | Params: min_ms -- how long to hold before a press is listened for
+ | Returns: N/A
+ ----------------------*/
+static void hold_last_frame(unsigned int min_ms)
+{
+	unsigned int start = platform_ticks();
+	int armed = 0;
+
+	while (!cls.quit)
+	{
+		platform_frame();
+		check_events();
+		update_keys();
+		platform_delay(1);
+
+		if (platform_ticks() - start < min_ms)
+		{
+			continue;
+		}
+
+		if (!armed)
+		{
+			armed = !death_button_down();
+		}
+		else if (death_button_down())
+		{
+			break;
+		}
+	}
+
+	rest(0);
+}
+
+/*----------------------
+ | g_deathContinues
+ | Description: Set when the death opcode just played said another death
+ |   opcode follows it, so the next call knows it is the back half of one
+ |   death rather than the start of a new one and skips the fade and the wait
+ |   that have already been spent on its behalf.
+ |
+ |   Cleared on anything but a clean finish, so an aborted sequence cannot
+ |   leave a later, unrelated death with no fade and no music wait.
+ | Author: suinevere
+ ----------------------*/
+static int g_deathContinues = 0;
+
 /** Plays a death sequence
     @param index    animation index in resources
+    @param chained  non-zero if another death opcode follows this one
 
     Death animations are stored as resources in the room file itself,
     along with the rest of the level
 */
-int play_death_animation(int index)
+/*----------------------
+ | play_death_animation
+ | Description: Runs one death sequence, fading out first unless the previous
+ |   opcode already paid for this one.
+ |
+ |   These frames are already in the room file, so unlike play_animation there
+ |   is no disc read here -- and therefore no cdda_restore, which is what waits
+ |   for the music everywhere else. The script commands its track and arrives
+ |   here immediately, so without the wait the sequence plays against a drive
+ |   still seeking. The only time being spent is that seek, so the fade runs
+ |   across it rather than before it: begin installs the tick, the wait polls
+ |   and advances the palette as it goes, and finish spends whatever remains.
+ |
+ |   A death written as two adjacent opcodes used to fade twice, and the second
+ |   fade covered no disc work at all -- there is no cue and no seek between
+ |   two opcodes. Its half second was not decoration though: the splat lives in
+ |   the second sequence, and four attempts to delete that delay each lost the
+ |   splat. So the delay is not skipped, it is moved: `chained` makes the first
+ |   segment fade at DEATH_CHAINED_HOLD_MS, long enough to cover both segments'
+ |   delay, and the second not fade at all. Nothing now interrupts the middle of
+ |   a death, and the splat moves only by however much that hold exceeds the two
+ |   fades it replaced. The cost is that the first segment starts that much
+ |   later against its music. See mem/2026-08-11-death-animation-cdda-sync.md.
+ |
+ |   Where a cutscene comes back at full brightness in a single write, a death
+ |   fades back in, over its own opening frames so the ramp costs no time and
+ |   moves nothing. Deaths are the only path that does this.
+ |
+ |   The last segment then holds its final frame until the player presses a
+ |   button rather than handing the script straight back, so a death ends on
+ |   its own picture instead of cutting to the game over screen on the frame
+ |   after the animation runs out.
+ |
+ |   The fade in is disarmed after the sequence whatever happened, since a
+ |   sequence that drew nothing would otherwise leave the game behind a black
+ |   screen with nothing left running to lift it.
+ | Author: suinevere
+ | Dependencies: main.h (fades), disc.h, video.h, fadecalc.h
+ | Globals: g_deathContinues
+ | Params: index -- animation index in the room's resources; chained -- non-zero
+ |   if the opcode after this one is another death
+ | Returns: zero if played completely, 1 if aborted, negative on error
+ ----------------------*/
+int play_death_animation(int index, int chained)
 {
 	unsigned long offset;
+	int ret;
+	int continuing = g_deathContinues;
 	int old = toggle_aux(0);
 	toggle_aux(old);
 
+	g_deathContinues = 0;
+
+	if (!continuing)
+	{
+		if (chained)
+		{
+			fade_out_begin_hold(DEATH_CHAINED_HOLD_MS);
+		}
+		else
+		{
+			fade_out_begin();
+		}
+
+		disc_wait_for_music();
+		fade_out_finish();
+		death_fade_in_begin();
+	}
+
 	/* set palette 2 ? */
 	offset = 0xf910 + (index << 2);
-	int ret = play_sequence(get_long(offset), 15);
+	ret = play_sequence(get_long(offset), 15);
+
+	if (g_fadeInStep > 0)
+	{
+		g_fadeInStep = 0;
+		video_set_fade(FADECALC_LEVEL_NORMAL);
+	}
+
+	if (ret == 0)
+	{
+		g_deathContinues = chained;
+
+		if (!chained)
+		{
+			hold_last_frame(DEATH_LAST_FRAME_MIN_MS);
+		}
+	}
+
 	toggle_aux(old);
 	rest(0);
 	return ret;
@@ -898,7 +1210,7 @@ int play_death_animation(int index)
     @param fileoffset  offset in bytes where to start reading from
     @returns zero if played completely, 1 if aborted, negative on error
 */
-int play_animation(const char *filename, int fileoffset)
+int play_animation(const char *filename, int fileoffset, int track)
 {
 	int pattern;
 	int pattern_offset;
@@ -913,14 +1225,65 @@ int play_animation(const char *filename, int fileoffset)
 
 	LOG(("playing animation %s\n", filename));
 
+	/* Fade to completion first, then read behind the black it leaves.
+
+	   Running it across the read was tried and cannot look right here. A GFS
+	   request is uninterruptible and an aligned animation is only two of
+	   them, so the tick fires once at the start and once more a second and a
+	   half later -- one dim step, a long pause on that step, then a jump
+	   straight to black. Manufacturing more yield points means more
+	   requests, each costing the drive a revolution to re-acquire its place,
+	   which is about a second added to a second-and-a-half read to hide half
+	   a second of it.
+
+	   fade_out_finish immediately after begin is what makes this the
+	   blocking form: no disc work happens between them, so it walks all
+	   eight steps itself and uninstalls the tick before the read starts.
+
+	   play_death_animation is deliberately not changed to match. It waits on
+	   a seek rather than a read, and a seek is a poll loop that yields every
+	   frame, so the overlapped form works there and is what its timing is
+	   currently built on. */
+	fade_out_begin();
+	fade_out_finish();
+
 	/* animations are loaded into a fixed place in 68000 memory */
 	read_offset = ANIMATION_LOAD_BASE - fileoffset;
 	ptr = get_memory_ptr(read_offset);
 	if (disc_read_file(filename, ptr, get_memory_size() - read_offset) < 0)
 	{
 		LOG(("play_animation: unable to read %s\n", filename));
+		video_set_fade(FADECALC_LEVEL_NORMAL);
 		return -1;
 	}
+
+	/* The music starts here, after the read, and not at the call site
+	   before it. There is one drive: a track commanded before this read is
+	   audible for as long as the fade lasts, then silenced by the read's
+	   cdda_suspend and started again from its first frame by cdda_restore --
+	   heard as a second of music, a pause the length of the read, and the
+	   track beginning a second time. Commanding it here costs one seek
+	   instead of two and cannot be interrupted by a read that has already
+	   finished. */
+	disc_play_track(track, 0);
+
+	/* Hold on the black already on screen until the music is up, so the
+	   first frame and the first note arrive together. Nothing is fading by
+	   now -- fade_out_finish above uninstalled the tick before the read --
+	   so this is a plain wait against a black screen and costs the viewer
+	   nothing visible. */
+	disc_wait_for_music();
+	rest(0);
+
+	/* Brightness is not restored here. It comes back in copy_to_screen, on
+	   the first frame that has new pixels: the fade blacked the screen
+	   through the palette while the framebuffer still holds the outgoing
+	   scene, so restoring it now flashes that old scene at full brightness
+	   in the gap before anything new is drawn. video_set_palette_rgb12
+	   below deliberately does not reset the level either (see video.h), so
+	   the animation stays black until that first frame lands and then comes
+	   up with the new picture already in place. */
+	g_restorePending = 1;
 
 	pattern = 0;
 	pattern_offset = get_long(0x809e);
@@ -959,6 +1322,16 @@ int play_animation(const char *filename, int fileoffset)
 	}
 
 	rest(0);
+
+	/* If the sequence drew nothing at all, copy_to_screen never ran and the
+	   deferred restore above is still pending -- leaving the game behind a
+	   black screen with nothing to explain it. Clear it here so the fade can
+	   only ever outlast the thing it was covering, never the animation. */
+	if (g_restorePending)
+	{
+		g_restorePending = 0;
+		video_set_fade(FADECALC_LEVEL_NORMAL);
+	}
 
 	/* just in case, clean variable 250 (key_a pressed) */
 	set_variable(250, 0);

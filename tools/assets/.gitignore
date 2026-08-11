@@ -1,6 +1,8 @@
-# Working dirs produced by running the kit scripts in place. In a checkout
-# data.bat writes to saturn/cd/data instead (see CONFIG.ME), so these only
-# appear when someone exercises the released-kit layout locally.
-/data/
-/Another World (USA)/
-/Another World (USA) - Complete/
+# Your own copy of the disc, and the working dirs produced by running the kit
+# scripts in place. Nothing here is redistributable: the rip, the extracted
+# blobs and the finished disc are all game data, not part of this project.
+# In a checkout data.bat writes the extracted files to saturn/cd instead (see
+# CONFIG.ME), so the last two only appear in the released-kit layout.
+/assets/
+/Heart of the Alien (USA)/
+/Heart of the Alien (USA) - Complete/

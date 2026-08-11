@@ -14,16 +14,25 @@
  |   the only reason music survives the whole-file load that follows every
  |   disc_play_track in play_anm.
  |
- |   Heap cost, which is not obvious from anything in this file:
- |   srl_cd.hpp:441 allocates SectorSize * SectorsToReadAtOnce = 2048 * 5 =
- |   10,240 bytes on the first Read of every SRL::Cd::File and frees it at
- |   close. That is 14.7% of the 69,440-byte HWRAM heap the linker map leaves,
- |   held for the duration of each disc_read_file -- and saturn_compat.cxx's
- |   malloc deliberately refuses to fall back to LWRAM, so a caller holding
- |   59 KB across a read turns it into a NULL rather than a slow read. Nothing
- |   here stacks two open files to make it worse, and it is transient, but any
- |   future allocator sharing this heap has to be sized against what is left
- |   after it, not against the whole.
+ |   Heap cost, which is not obvious from anything in this file: there is none
+ |   on the HWRAM heap this paragraph is about. srl_cd.hpp:441 allocates
+ |   SectorSize * SectorsToReadAtOnce = 2048 * 5 = 10,240 bytes on the first
+ |   File::Read of every SRL::Cd::File and frees it at close; this file no
+ |   longer calls File::Read, so that buffer is never created. ReadSectors
+ |   hands the caller's destination straight to GFS_Fread and allocates
+ |   nothing. The linker map leaves 62,528 bytes of HWRAM heap (__heap_start
+ |   0x060b0bc0 .. __heap_end 0x060c0000), and saturn_compat.cxx's malloc
+ |   deliberately refuses to fall back to LWRAM, so that figure is the entire
+ |   budget for any future allocator on this heap -- but it is no longer
+ |   competing with a 10,240-byte transient that existed for exactly as long
+ |   as a read was in flight.
+ |
+ |   LWRAM is a different pool from that HWRAM heap, so the 62,528-byte figure
+ |   above still stands untouched by bounce_acquire's allocation below: 16 *
+ |   2,048 + 4 = 32,772 bytes taken from LWRAM on the first misaligned read
+ |   and never freed for the rest of the run. "There is none" is true of the
+ |   heap it is measuring and false of memory overall -- say so here rather
+ |   than leave a reader to rediscover LWRAM is a separate pool on their own.
  |
  |   This file's own static state also comes out of that same HWRAM. Measured
  |   2026-08-04 by building this branch's tip (24f387f) and the commit just
@@ -40,8 +49,16 @@
  |   padding from linking in cdtoc.o and cdda_classify.o, both of which
  |   contribute 0 bytes of their own .bss -- and were not chased further,
  |   since they are not this file's own state. Static, not transient, so it
- |   is already subtracted from the 69,440-byte figure above rather than
+ |   is already subtracted from the 62,528-byte figure above rather than
  |   stacking on it.
+ |
+ |   g_tailSector adds 2,048 bytes on top of that, taking total .bss to
+ |   583,680 (0x8e800) and this file's own object to 2,469, and frees none of it in
+ |   exchange -- the 10,240 bytes it displaces were heap, not .bss. The trade
+ |   is still strongly positive: those 10,240 bytes came out of the same HWRAM
+ |   the heap figure above is computed from, and came out of it at exactly the
+ |   moment a read was in flight, so peak HWRAM during a read drops by 8,192
+ |   bytes even though total .bss rises.
  | Author: suinevere
  | Dependencies: srl.hpp, disc.h, disc_manifest.h, saturn_compat.h
  ----------------------*/
@@ -50,6 +67,7 @@
 #include "saturn_compat.h"
 
 #include "disc.h"
+#include "discsec.h"
 #include "discfmt.h"
 #include "cdtoc.h"
 #include "cdda_classify.h"
@@ -121,6 +139,33 @@ static bool g_wasPlaying = false;
 static bool g_musicObserved = false;
 
 /*----------------------
+ | g_tailSector
+ | Description: Where the final, partial sector of a file lands so that only
+ |   the bytes the file actually has reach the caller. A whole-sector read
+ |   straight into the engine's pointer would also write the rest of that
+ |   sector -- for ROOMS7.BIN, 966 bytes of whatever the mastering tool put
+ |   after 160,826 bytes of room data -- into the emulated 68000 map past the
+ |   end of the room. disc.h promises that will not happen, and none of the
+ |   three call sites bounds-checks the pointer it hands in.
+ |
+ |   File-scope static, not a stack array, for three reasons in order of
+ |   weight. The stack cannot absorb it: disc_read_file is reached through
+ |   main -> play_anm -> play_animation -> disc_read_file, and nothing in this
+ |   tree states the SH-2 master stack size -- SGL's convention puts it below
+ |   the 0x06004000 load address sgl.linker:4 gives PRELOADER, which is
+ |   single-digit kilobytes, so a 2 KB frame against an unstated budget is an
+ |   overflow that would present as corruption somewhere else entirely. A
+ |   static is visible: it appears in the map as .bss and comes out of the same
+ |   HWRAM the heap figure above is computed from, so the cost is subtracted
+ |   once and stays subtracted, where a stack frame is invisible to the map and
+ |   gets argued about instead of measured. And uint32_t guarantees the
+ |   alignment: GFS transfers into this buffer, and a char[2048] has no
+ |   alignment contract beyond whatever the compiler happens to give it.
+ | Author: suinevere
+ ----------------------*/
+static uint32_t g_tailSector[DISC_MAX_SECTOR_BYTES / 4];
+
+/*----------------------
  | normalize_name
  | Description: Turns the engine's filename into the 8.3 uppercase form GFS
  |   matches on the disc: drop any directory part, upper-case the rest,
@@ -188,42 +233,168 @@ static bool normalize_name(const char *name, char *out, int32_t outSize)
 extern "C" {
 
 /*----------------------
- | cdda_probe_wait
- | Description: TEMPORARY MEASUREMENT PROBE -- remove before this lands.
- |   Spins on CDC_GetCurStat until the drive reports CDC_ST_PLAY or the cap
- |   expires, then prints how long that took. The vblank handler advances
- |   platform_ticks' counter from an interrupt, so this loop does not need
- |   SRL::Core::Synchronize to make the clock move. Answers the only question
- |   the code cannot: how much of the audible gap is the drive acquiring the
- |   track, and how much is anything else.
+ | CDDA_SOUND_CAP_MS
+ | Description: How long cdda_wait_for_sound will hold a caller before giving
+ |   up. An animation that starts on time and silent is the bug this exists to
+ |   prevent, and one that starts three seconds late is worse. If the analysis
+ |   path ever stops reporting level the cost is a pause per read rather than
+ |   a lockup, which is the only reason a cap is acceptable at all.
+ |
+ |   Three seconds was chosen when the measured wait was one to three, but
+ |   that measurement was not drive latency. Roughly two seconds of it was
+ |   pregap: this disc's rip declares INDEX 00 on every audio track, and the
+ |   150 sectors of silence behind it were being copied into the built disc
+ |   as the head of the playable track, so every wait sat through two seconds
+ |   of digital silence before the first sample the analysis could see. That
+ |   is fixed in the assets now (tools/extract_disc.c drops the pregap), which
+ |   leaves the seek alone -- separately measured at 167 to 500 ms. The cap
+ |   stays at three seconds because it is a backstop for the analysis path
+ |   failing, not a budget for the seek, and a backstop costs nothing while
+ |   the normal path returns in a third of a second. It is now roughly ten
+ |   times the wait it guards rather than barely longer than it, so it can be
+ |   cut once a listening test confirms the new timing on hardware.
  | Author: suinevere
- | Globals: N/A
- | Params: where -- call site tag; cue -- cue track commanded
- | Returns: N/A
  ----------------------*/
-#define CDDA_PROBE_CAP_MS 4000
+#define CDDA_SOUND_CAP_MS 3000
 
-static void cdda_probe_wait(const char *where, int cue)
+/*----------------------
+ | DISC_BOUNCE_SECTORS / g_bounce
+ | Description: Where a read lands when the caller's destination is not
+ |   4-byte aligned. GFS will not write one: measured on the emulator
+ |   2026-08-06, INTRO1.BIN at ANIMATION_LOAD_BASE 0x809a -- 2 mod 4 -- died
+ |   inside its first request, printing the request line and never the line
+ |   after it, while GAME2.BIN at an aligned destination read straight through.
+ |   Forcing GFS_TMODE_CPU on the same handle did not help, so the transfer
+ |   mode is not the lever and the destination has to be aligned before GFS
+ |   ever sees it.
+ |
+ |   uint32_t-typed so the alignment is a property of the type rather than a
+ |   thing to remember. Sixteen sectors is a compromise, not a measurement:
+ |   large enough that a 211-sector animation costs fourteen requests instead
+ |   of 211, small enough to leave the HWRAM heap usable. Aligned destinations
+ |   -- GAME2.BIN and every room, since ROOMS_LOAD_BASE is 0xf900 -- skip this
+ |   entirely and still read straight into the caller's buffer.
+ | Author: suinevere
+ ----------------------*/
+#define DISC_BOUNCE_SECTORS 16
+
+static uint32_t *g_bounce = nullptr;
+
+/*----------------------
+ | bounce_acquire
+ | Description: Hands back the aligned bounce, allocating it from LWRAM on
+ |   first use. Not a .bss array: a 32 KB static took the HWRAM heap from
+ |   62,528 bytes to 29,344 and the build stopped producing any diagnostic
+ |   output at all -- not even the boot stamp -- because SRL's own bring-up
+ |   allocates from that heap before the debug layer exists. LWRAM is where
+ |   bulk blobs belong anyway, and the VM map and GAME2.BIN already live there.
+ |   The four extra bytes and the round-up make the alignment this buffer
+ |   exists to provide independent of whatever saturn_lwram_alloc returns.
+ |   A failed allocation is not fatal: g_tailSector is already aligned, so the
+ |   caller falls back to one sector per request -- slow, but correct, and it
+ |   keeps a memory shortage from turning into a hang.
+ | Author: suinevere
+ | Globals: g_bounce
+ | Params: N/A
+ | Returns: the buffer, or nullptr if LWRAM had nothing to give
+ ----------------------*/
+static uint32_t *bounce_acquire(void)
 {
-	unsigned int t0 = platform_ticks();
-	unsigned int waited;
-	CdcStat stat;
-	int state;
-
-	for (;;)
+	if (g_bounce == nullptr)
 	{
-		CDC_GetCurStat(&stat);
-		state = CDC_GET_STC(&stat);
-		waited = platform_ticks() - t0;
+		void *raw = saturn_lwram_alloc(DISC_BOUNCE_SECTORS * DISC_MAX_SECTOR_BYTES + 4);
 
-		if (state == CDC_ST_PLAY || waited >= CDDA_PROBE_CAP_MS)
+		if (raw != nullptr)
 		{
-			break;
+			g_bounce = (uint32_t *)(((uintptr_t)raw + 3u) & ~(uintptr_t)3u);
 		}
 	}
 
-	printf("probe %s: cue %d play after %u ms (state %d, fad %d)\n",
-		where, cue, waited, state, (int)CDC_STAT_FAD(&stat));
+	return g_bounce;
+}
+
+/*----------------------
+ | cdda_wait_for_sound
+ | Description: Holds the caller until the drive is measurably producing CD-DA,
+ |   so an animation and its music start together. The obvious signal is the
+ |   wrong one: CDC_ST_PLAY is raised before any sound exists, and a build that
+ |   gated on it still started the intro visibly early. SND_GetAnlTlVl, through
+ |   Cdda::Analysis, reports actual output level and is updated every 16 ms.
+ |
+ |   Called only from cdda_restore, never from disc_play_track. Blocking in
+ |   disc_play_track was measured distorting the game loop: main.c's rest()
+ |   compares against a stale last_tick afterwards, so the game sprints to
+ |   catch up and then settles, which is visible as a speed wobble. That is
+ |   only half of why this spin is where it is, not the whole reason: this
+ |   call's other caller, cdda_restore, runs inside disc_read_file, which
+ |   main.c's load_room calls from the game loop, so a spin here that presented
+ |   nothing would freeze the picture and stop polling the pad for as long as
+ |   it ran -- one to three seconds, measured. Each iteration below calls
+ |   platform_frame() for exactly that reason: it is what presents the VDP2
+ |   layer and refreshes peripherals, so the display stays live and the pad
+ |   stays responsive while the wait runs. One frame of granularity on a
+ |   multi-second wait costs nothing.
+ |
+ |   The vblank handler advances platform_ticks' counter from an interrupt, so
+ |   the loop's own timing does not depend on platform_frame() to make the
+ |   clock move -- platform_frame() is here to keep the game alive during the
+ |   wait, not to drive it.
+ | Author: suinevere
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+/*----------------------
+ | g_tick
+ | Description: The caller's transition hook, or null. Called wherever this
+ |   file is about to spend time so that time can carry a fade instead of
+ |   merely preceding one. Null is the normal state and costs one branch.
+ | Author: suinevere
+ ----------------------*/
+static disc_tick_fn g_tick = nullptr;
+
+void disc_set_tick(disc_tick_fn tick)
+{
+	g_tick = tick;
+}
+
+/*----------------------
+ | disc_tick
+ | Description: Fires the hook if one is installed. A function rather than an
+ |   inline branch at each site so the null check is written once.
+ | Author: suinevere
+ | Globals: g_tick
+ ----------------------*/
+static void disc_tick(void)
+{
+	if (g_tick != nullptr)
+	{
+		g_tick();
+	}
+}
+
+static void cdda_wait_for_sound(void)
+{
+	unsigned int t0 = platform_ticks();
+
+	for (;;)
+	{
+		disc_tick();
+		platform_frame();
+
+		SRL::Sound::Cdda::Analysis::TotalVolume vol =
+			SRL::Sound::Cdda::Analysis::GetTotalVolume();
+
+		if (vol.LeftChannel != 0 || vol.RightChannel != 0)
+		{
+			return;
+		}
+
+		if (platform_ticks() - t0 >= CDDA_SOUND_CAP_MS)
+		{
+			return;
+		}
+	}
 }
 
 /*----------------------
@@ -367,7 +538,7 @@ static void cdda_restore(void)
 		CDC_PLY_EFAS(&ply) = end - g_pauseFad;
 		CDC_PLY_PMODE(&ply) = CDC_PM_DFL;
 		CDC_CdPlay(&ply);
-		cdda_probe_wait("restore/resume", cue);
+		cdda_wait_for_sound();
 		return;
 	}
 
@@ -381,7 +552,7 @@ static void cdda_restore(void)
 		}
 
 		SRL::Sound::Cdda::PlaySingle((uint16_t)cue, g_musicLoop != 0);
-		cdda_probe_wait("restore/restart", cue);
+		cdda_wait_for_sound();
 		return;
 	}
 }
@@ -471,6 +642,10 @@ int disc_open(const char *cue_path)
 		return 0;
 	}
 
+	printf("build %s\n", __TIME__);
+
+	SRL::Sound::Cdda::Analysis::Start();
+
 	CDC_TgetToc(g_toc);
 	g_maxAudioTrack = cdtoc_max_audio_track(g_toc);
 	printf("disc_open: highest audio track %d\n", g_maxAudioTrack);
@@ -486,10 +661,72 @@ int disc_open(const char *cue_path)
  |   overrun past max_size. That bound is not optional: all three callers
  |   (main.c, animation.c, game2bin.c) hand in raw addresses into the
  |   emulated 68000 map with no bounds check of their own, and the map is
- |   512 KB. File::Read copies byte-by-byte into the destination through an
- |   internal sector buffer rather than GFS_Load's sector-rounded
- |   destination write, so it cannot overshoot max_size the way a raw
- |   LoadBytes into a tight buffer could.
+ |   512 KB. That claim used to rest on File::Read, which copied byte-by-byte
+ |   into the destination through an internal sector buffer and so could not
+ |   overshoot. It no longer does, and the guarantee is now this function's own
+ |   to keep: the whole-sector body goes through the chunk loop below --
+ |   2 ReadSectors calls for an aligned read (MAKE2MB.BIN's 213 sectors
+ |   finishes in two, per DISC_MAX_REQUEST_SECTORS below), up to 14 for a
+ |   bounced one -- instead of File::Read's forty-three five-sector requests,
+ |   each of which cost about 160 ms of the drive losing its place and
+ |   re-acquiring it -- and the partial final sector goes into g_tailSector,
+ |   out of which exactly discsec_tail_bytes bytes are copied.
+ |   ROOMS7.BIN is the only file that takes that second path, and it is the
+ |   reason the path exists: its last sector carries 1,082 bytes of room data
+ |   and 966 bytes belonging to nobody.
+ |
+ |   The body read is chunked, and the ceiling is not arbitrary: a GFS_Fread for
+ |   more sectors than the CD block's buffer partition holds does not fail, it
+ |   never returns. Measured on the emulator 2026-08-06, GAME2.BIN -- exactly
+ |   200 sectors -- read in 1,450 ms, while every animation at 211 sectors hung
+ |   with a black screen and no probe line at all, the probe's printf sitting
+ |   after this function returns. 200 is the partition size, which is why that
+ |   one file worked and nothing larger did. GFS_GetNumCdbuf reports the real
+ |   figure, so this asks the drive rather than trusting the 200 that boundary
+ |   implies, and clamps to DISC_MAX_REQUEST_SECTORS besides. Clamped only at
+ |   the top, though: a drive reporting a smaller partition than 128 is used
+ |   as-is, with no ceiling on how small, and a small enough figure turns one
+ |   request into many with nothing to show why an animation slowed down. The
+ |   first time a run actually uses a reported figure below
+ |   DISC_MAX_REQUEST_SECTORS, this prints it once so that regression is
+ |   visible instead of mysterious.
+ |
+ |   SRL never hit this because SectorsToReadAtOnce is 5, far under any
+ |   partition. The deadlock is a property of asking for a whole file at once,
+ |   not of the transfer mode: ANIMATION_LOAD_BASE is 0x809a, 2 bytes off a
+ |   longword boundary, and forcing GFS_TMODE_CPU for a misaligned destination
+ |   changed nothing about the hang -- that measurement rules out the transfer
+ |   mode as this deadlock's cause, and only that. It does not rule out
+ |   alignment as a hazard in general, and it is not license to remove
+ |   DISC_BOUNCE_SECTORS below: that buffer exists because a misaligned
+ |   destination is a second, separate failure, measured directly -- GFS died
+ |   inside its first request at this same load base when read straight into
+ |   the caller's buffer. Do not re-derive the chunk-ceiling theory from the
+ |   load base and try again, but do not read this paragraph as saying
+ |   alignment is harmless either; it answers a different question than
+ |   DISC_BOUNCE_SECTORS does.
+ |
+ |   Successive ReadSectors calls continue where the last stopped -- it takes
+ |   its own position from GFS_Tell (srl_cd.hpp:513) -- so the chunk loop needs
+ |   no Seek, which would allocate the same 10,240-byte work buffer this change
+ |   exists to avoid. The tail read is always one sector and so is never over
+ |   any partition.
+ |
+ |   Both sector counts derive from Size.Bytes, never from Size.Sectors, and
+ |   that is load-bearing rather than tidy. ReadSectors clamps its buffer size
+ |   to the sectors actually remaining but forwards the unclamped sectorCount
+ |   to GFS_Fread (srl_cd.hpp:515-519), so asking for more sectors than the
+ |   file has hands GFS a count larger than the buffer it was told about.
+ |   Size.Bytes is the one number max_size was compared against, so a split
+ |   derived from it cannot exceed what was bounded; the guard below then
+ |   cross-checks that split against Size.Sectors and Size.LastSectorSize and
+ |   refuses on any disagreement, rather than trusting either pair alone.
+ |
+ |   Neither Seek nor LoadBytes is used. Seek (srl_cd.hpp:538) allocates the
+ |   same 10,240-byte work buffer this change exists to remove. LoadBytes
+ |   (srl_cd.hpp:399) would be one GFS_Load for the whole file, but it closes
+ |   and reopens the handle around the call and GFS_Load's destination write is
+ |   sector-rounded -- precisely the overrun refused above.
  |
  |   Private because it must not be called without the CD-DA bracket around
  |   it; disc_read_file below is the only caller.
@@ -535,7 +772,110 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
 		return -1;
 	}
 
-	int32_t got = file.Read(file.Size.Bytes, out);
+	int32_t whole = discsec_whole_sectors(file.Size.Bytes, file.Size.SectorSize);
+	int32_t tail = discsec_tail_bytes(file.Size.Bytes, file.Size.SectorSize);
+
+	if (file.Size.Bytes <= 0 ||
+		file.Size.SectorSize <= 0 ||
+		file.Size.SectorSize > DISC_MAX_SECTOR_BYTES ||
+		whole + (tail != 0 ? 1 : 0) != file.Size.Sectors ||
+		(tail != 0 ? tail : file.Size.SectorSize) != file.Size.LastSectorSize)
+	{
+		printf("split bad %s\n", resolved);
+		printf(" b%d s%d ss%d ls%d w%d t%d\n",
+			(int)file.Size.Bytes, (int)file.Size.Sectors,
+			(int)file.Size.SectorSize, (int)file.Size.LastSectorSize,
+			(int)whole, (int)tail);
+		file.Close();
+		return -1;
+	}
+
+	int32_t got = 0;
+	int32_t maxChunk = GFS_GetNumCdbuf(file.Handle);
+	int32_t remaining = whole;
+
+	static bool smallCdbufWarned = false;
+
+	if (maxChunk <= 0 || maxChunk > DISC_MAX_REQUEST_SECTORS)
+	{
+		maxChunk = DISC_MAX_REQUEST_SECTORS;
+	}
+	else if (maxChunk < DISC_MAX_REQUEST_SECTORS && !smallCdbufWarned)
+	{
+		printf("cdbuf %d < %d\n", (int)maxChunk, DISC_MAX_REQUEST_SECTORS);
+		smallCdbufWarned = true;
+	}
+
+	uint32_t *bounce = nullptr;
+
+	if (((uintptr_t)out & 3u) != 0)
+	{
+		bounce = bounce_acquire();
+
+		if (bounce == nullptr)
+		{
+			bounce = g_tailSector;
+			maxChunk = 1;
+		}
+		else if (maxChunk > DISC_BOUNCE_SECTORS)
+		{
+			maxChunk = DISC_BOUNCE_SECTORS;
+		}
+	}
+
+	while (remaining > 0)
+	{
+		int32_t take = discsec_request_sectors(remaining, maxChunk);
+		int32_t chunkGot;
+
+		if (take <= 0)
+		{
+			break;
+		}
+
+		/* Between chunks, not inside one: a GFS request cannot be
+		   interrupted, so this is the only place in a read where the caller
+		   can be given the CPU back at all. An aligned animation is two
+		   requests, so a fade driven from here gets few opportunities and
+		   must therefore be scheduled on elapsed time rather than counted in
+		   steps -- see fade_pump. */
+		disc_tick();
+
+		uint8_t *dest = (uint8_t *)out + (whole - remaining) * file.Size.SectorSize;
+
+		if (bounce != nullptr)
+		{
+			chunkGot = file.ReadSectors(take, bounce);
+
+			if (chunkGot == take * file.Size.SectorSize)
+			{
+				memcpy(dest, bounce, (size_t)chunkGot);
+			}
+		}
+		else
+		{
+			chunkGot = file.ReadSectors(take, dest);
+		}
+
+		if (chunkGot != take * file.Size.SectorSize)
+		{
+			break;
+		}
+
+		got += chunkGot;
+		remaining -= take;
+	}
+
+	if (remaining == 0 && tail > 0)
+	{
+		int32_t tailGot = file.ReadSectors(1, g_tailSector);
+
+		if (tailGot >= tail)
+		{
+			memcpy((uint8_t *)out + (whole * file.Size.SectorSize), g_tailSector, (size_t)tail);
+			got += tail;
+		}
+	}
 
 	file.Close();
 
@@ -561,21 +901,18 @@ static int disc_read_file_body(const char *name, void *out, int max_size)
  |   two branches per read and nothing else.
  | Author: suinevere
  | Globals: via cdda_suspend and cdda_restore
- | Params: name -- disc filename; out -- destination; max_size -- capacity of
- |   out in bytes
+ | Params: name -- disc filename; out -- destination, undefined on failure --
+ |   disc_read_file_body's chunk loop can have already written part of it
+ |   before an error surfaces, and disc.h promises nothing about its contents
+ |   in that case; max_size -- capacity of out in bytes
  | Returns: 0 on success, negative on failure
  ----------------------*/
 int disc_read_file(const char *name, void *out, int max_size)
 {
 	int result;
-	unsigned int t0;
-	unsigned int t1;
 
 	cdda_suspend();
-	t0 = platform_ticks();
 	result = disc_read_file_body(name, out, max_size);
-	t1 = platform_ticks();
-	printf("probe read: '%s' took %u ms\n", name, t1 - t0);
 	cdda_restore();
 
 	return result;
@@ -586,7 +923,7 @@ int disc_read_file(const char *name, void *out, int max_size)
  | Description: Starts a CD-DA track for the engine's music index. Refuses
  |   silently before disc_open, after disc_close, and with cls.nosound set.
  |   Refuses with a printf -- the one place this function is not silent --
- |   for an index outside 0..40 or, the case that matters for every routine
+ |   for an index outside 1..41 or, the case that matters for every routine
  |   build, for any track that does not exist on the disc or exists but is
  |   not audio, which is every index on the 12 MB HOTA_AUDIO=none disc. That
  |   last guard is not defensive programming: CDC_CdPlay for a track outside
@@ -607,8 +944,21 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   other refusal on both backends, including this one, runs before
  |   touching state.
  |
- |   The +2 mapping is not repeated here. discfmt_cue_track_for_music owns it
- |   for both backends and returns 0, an invalid track, when out of range.
+ |   The +1 mapping is not repeated here. discfmt_cue_track_for_music owns it
+ |   for both backends and returns 0, an invalid track, when out of range --
+ |   which is what makes index 1..41 the live contract, not 0..40: index 0
+ |   would name TRACK 01, the data track, so discfmt_cue_track_for_music
+ |   refuses it and this function's cue == 0 check turns that into the same
+ |   printed refusal as any other out-of-range index.
+ |
+ |   decode.c:1894 and :1901 both subtract 1 from the raw script operand
+ |   before calling this function, so a script operand of 1 now yields
+ |   engine_index 0 and is refused here -- where, before this branch changed
+ |   discfmt_cue_track_for_music's mapping, the same operand played cue 2.
+ |   That is a real behavior change and it is not this function's to fix: it
+ |   belongs to whoever reconciles decode.c's own -1 against the current
+ |   +1 mapping. Recorded here so the next person chasing silent in-game
+ |   music starts from the explanation instead of re-deriving it.
  |
  |   SRL::Sound::Cdda::PlaySingle is safe to use where the rest of Cdda is
  |   not: it is CDC_CdPlay by track number and never consults the table of
@@ -630,7 +980,7 @@ int disc_read_file(const char *name, void *out, int max_size)
  |   observed is still true.
  | Author: suinevere
  | Globals: g_discOpened, g_toc, g_musicTrack, g_musicLoop, g_musicObserved
- | Params: engine_index -- music index 0..40; loop -- nonzero to repeat
+ | Params: engine_index -- music index 1..41; loop -- nonzero to repeat
  |   forever
  | Returns: N/A
  ----------------------*/
@@ -664,10 +1014,35 @@ void disc_play_track(int engine_index, int loop)
 	}
 
 	SRL::Sound::Cdda::PlaySingle((uint16_t)cue, loop != 0);
-	cdda_probe_wait("play_track", cue);
 	g_musicTrack = engine_index;
 	g_musicLoop = (loop != 0);
 	g_musicObserved = false;
+}
+
+/*----------------------
+ | disc_wait_for_music
+ | Description: The public face of cdda_wait_for_sound, for the one caller
+ |   shape that cannot reach it any other way: a disc_play_track with no read
+ |   behind it. Every read already waits inside its own cdda_restore, so
+ |   nothing that loads from disc needs this.
+ |
+ |   Guarded on g_musicTrack so a scene with no music does not sit out the
+ |   whole cap waiting for a level that was never coming. That guard is the
+ |   difference between this being usable unconditionally and it being a
+ |   three-second stall on every silent transition.
+ | Author: suinevere
+ | Globals: g_musicTrack
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void disc_wait_for_music(void)
+{
+	if (!g_discOpened || cls.nosound != 0 || g_musicTrack < 0)
+	{
+		return;
+	}
+
+	cdda_wait_for_sound();
 }
 
 /*----------------------

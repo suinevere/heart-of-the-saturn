@@ -1,5 +1,14 @@
-# CD-DA audio: the .raw files are sox build artifacts; the .wav source tracks are
-# large (~550 MB) and kept local rather than in git. `tracklist` (track order) IS
-# tracked. To version the audio, use Git LFS or un-ignore below.
+# CD-DA audio: the .raw files are sox build artifacts, and the source tracks are
+# both large and game data, so neither is kept in git.
+#
+# `tracklist` is ignored too, and is NOT hand-maintained: tools/extract_disc
+# writes it alongside the tracks it extracts. It must still exist at build time
+# -- shared.mk falls back to a bare `find` when it is absent, with no sort, so
+# disc-track numbers would follow directory order and the wrong music would play
+# with nothing in the build log to say so. Deleting it is safe only because
+# data.bat regenerates it; deleting it and building without regenerating is not.
 *.raw
 *.wav
+*.mp3
+*.flac
+tracklist

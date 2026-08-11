@@ -87,6 +87,22 @@ int disc_open(const char *cue_path);
  |   failure, matching the `< 0` check every call site already has. Requires
  |   a prior disc_open that returned success and no disc_close since --
  |   called any other time, returns negative without touching *out.
+ |
+ |   Any other failure leaves *out undefined. A backend reading in chunks can
+ |   fail partway through and hand back a destination that is part real data,
+ |   part whatever was there before -- this header makes no promise about
+ |   which -- and neither backend's own error path relies on partial contents,
+ |   nor does any of the three call sites read *out after a negative return,
+ |   so this is a documentation gap, not a live bug.
+ |
+ |   max_size bounds the bytes written to out, not the sectors read off the
+ |   disc. A backend is free to transfer whole sectors for speed -- that is
+ |   the difference between one drive request and forty -- but the partial
+ |   final sector of a file carries bytes past the file's end that belong to
+ |   nobody, and those must land somewhere the backend owns rather than in the
+ |   caller's buffer. saturn/src/system/disc_srl.cxx does exactly that. This is
+ |   the non-obvious constraint a third implementer would otherwise discover
+ |   the way the second one nearly did.
  | Author: suinevere
  ----------------------*/
 int disc_read_file(const char *name, void *out, int max_size);
@@ -121,6 +137,66 @@ int disc_read_file(const char *name, void *out, int max_size);
  ----------------------*/
 void disc_play_track(int engine_index, int loop);
 void disc_stop_track(void);
+
+/*----------------------
+ | disc_tick_fn / disc_set_tick
+ | Description: A hook the disc layer calls whenever it is about to spend
+ |   real time -- between read chunks, and around each poll of the music
+ |   wait. It exists so a caller can run a transition during that time
+ |   instead of before it.
+ |
+ |   The problem it solves: the drive work in a scene change is a read of
+ |   about a second and a half and a seek of a few hundred milliseconds, and
+ |   a fade played before them is not masking anything, it is adding to them.
+ |   Given this hook the same fade advances while the read is in flight and
+ |   costs nothing at all.
+ |
+ |   A tick must be cheap and must not touch the disc. On Saturn the
+ |   intended body is a palette write and nothing else: VDP2 reads CRAM
+ |   continuously, so a fade step is visible the instant it is written, with
+ |   no frame to present and no dependence on the game loop running -- which
+ |   it is not, inside a read.
+ |
+ |   Set it around a transition and clear it with NULL afterwards. It stays
+ |   installed until changed, so a tick left behind would fire on every
+ |   unrelated read for the rest of the session.
+ | Author: suinevere
+ ----------------------*/
+typedef void (*disc_tick_fn)(void);
+
+void disc_set_tick(disc_tick_fn tick);
+
+/*----------------------
+ | disc_wait_for_music
+ | Description: Blocks until the music disc_play_track was last asked for is
+ |   measurably producing sound, so a caller can start a picture knowing the
+ |   audio is already up. Returns immediately when no track is wanted, so a
+ |   silent scene costs nothing.
+ |
+ |   This exists because only one of the two ways a track reaches the drive
+ |   waits by itself. A read bracketed by suspend and restore waits inside
+ |   the restore, which is why animations loaded from disc come up in sync.
+ |   A disc_play_track with no read after it -- a death sequence, whose
+ |   frames are already in the room file -- has nothing to wait, so the
+ |   picture starts while the head is still travelling. That is the case this
+ |   is for.
+ |
+ |   Bounded, not indefinite: if the level never rises this gives up rather
+ |   than hanging, on the reasoning that a late picture beats a dead one.
+ |   Presents frames while it waits, so the display stays live and the pad
+ |   stays polled.
+ |
+ |   Not a guarantee about which track. It reports that CD-DA output exists,
+ |   and a track still playing from before a just-issued disc_play_track can
+ |   satisfy it during the moment before that command's seek silences the
+ |   old one. In practice the seek lands first; a caller needing certainty
+ |   would have to compare frame addresses, which nothing here does.
+ |
+ |   The host backend streams through the mixer and has no seek to wait on,
+ |   so it is a no-op there.
+ | Author: suinevere
+ ----------------------*/
+void disc_wait_for_music(void);
 
 /*----------------------
  | disc_close

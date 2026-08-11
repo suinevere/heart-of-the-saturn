@@ -20,6 +20,7 @@
 #include <SDL.h>
 #include "debug.h"
 #include "video.h"
+#include "fadecalc.h"
 #include "game2bin.h"
 
 #include "client.h"
@@ -44,6 +45,12 @@ static int renderer_change_sync;
 static int palette_changed = 0;
 static int current_palette = 0;
 static SDL_Color palette[256];
+
+/* The raw RGB444 the engine last set, and the level it is displayed at.
+   video_set_fade re-derives from these rather than dimming palette[] in
+   place, so a fade out and back in restores the original entries exactly. */
+static unsigned char src_rgb12[16*2];
+static int fade_level = FADECALC_LEVEL_NORMAL;
 
 /** Returns the current palette used
     @returns palette
@@ -328,10 +335,15 @@ int video_init()
 	return 0;
 }
 
-/** Converts a Sega CD RGB444 to RGB888
-    @param rgb12   pointer to 16x2 of palette data
+/** Rebuilds the displayed palette from src_rgb12 at fade_level
+
+    Kept separate from video_set_palette_rgb12 so video_set_fade can re-derive
+    the colors from the untouched source rather than dimming the live entries
+    in place -- eight steps out and eight back would otherwise compound their
+    rounding and leave the picture permanently dark. The widen to 8 bits
+    happens before the dim so the fade has the full range to work in.
 */
-void video_set_palette_rgb12(unsigned char *rgb12)
+static void palette_rebuild(void)
 {
 	int i;
 
@@ -339,19 +351,37 @@ void video_set_palette_rgb12(unsigned char *rgb12)
 	{
 		int c, r, g, b;
 
-		c = (rgb12[i*2] << 8) | rgb12[i*2+1];
+		c = (src_rgb12[i*2] << 8) | src_rgb12[i*2+1];
 		r = (c & 0xf) << 4;
 		g = ((c >> 4) & 0xf) << 4;
 		b = ((c >> 8) & 0xf) << 4;
 
-		palette[i].r = r | (r >> 4);
-		palette[i].g = g | (g >> 4);
-		palette[i].b = b | (b >> 4);
+		palette[i].r = fadecalc_scale(r | (r >> 4), fade_level);
+		palette[i].g = fadecalc_scale(g | (g >> 4), fade_level);
+		palette[i].b = fadecalc_scale(b | (b >> 4), fade_level);
 
 		texture_palette[i] = (texture_red_low) ? (palette[i].r | (palette[i].g << 8) | (palette[i].b << 16)) : (palette[i].b | (palette[i].g << 8) | (palette[i].r << 16));
 	}
 
 	palette_changed = 1;
+}
+
+/** Converts a Sega CD RGB444 to RGB888
+    @param rgb12   pointer to 16x2 of palette data
+*/
+void video_set_palette_rgb12(unsigned char *rgb12)
+{
+	memcpy(src_rgb12, rgb12, sizeof(src_rgb12));
+	palette_rebuild();
+}
+
+/** Dims the displayed palette toward black without disturbing the palette
+    @param level   0 (black) to FADECALC_LEVEL_NORMAL (normal)
+*/
+void video_set_fade(int level)
+{
+	fade_level = level;
+	palette_rebuild();
 }
 
 void video_set_palette(int which)

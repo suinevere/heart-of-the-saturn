@@ -23,3 +23,15 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src \
     -o run_tests_cdda_classify test_cdda_classify.c ../src/cdda_classify.c
 ./run_tests_cdda_classify
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_discsec test_discsec.c ../src/discsec.c
+./run_tests_discsec
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_sfxconv test_sfxconv.c ../src/sfxconv.c ../src/vm.c
+./run_tests_sfxconv
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_fadecalc test_fadecalc.c ../src/fadecalc.c
+./run_tests_fadecalc

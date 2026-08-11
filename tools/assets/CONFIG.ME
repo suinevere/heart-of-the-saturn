@@ -1,26 +1,50 @@
-# Another-Saturn asset kit configuration.
+# Heart-of-the-Saturn asset kit configuration.
 # KEY=VALUE, one per line. Lines starting with '#' are ignored by both halves
 # of the scripts (POSIX anchors on '^KEY=', cmd uses FOR /F "eol=#").
 # Relative paths resolve against this file's own directory, not the caller's cwd.
 
 # --- data.bat ---------------------------------------------------------------
 
-# Original Another World / Out of This World PC DOS release. The archive is
-# flat: another.exe, bank01..bank0d, memlist.bin, config.*, music, logo, ...
-# Only bank* and memlist.bin are installed; the rest is DOS-side.
-GAME_URL=https://archive.org/download/another_world_pc/another_world_pc.zip
+# Where your own copy of the Sega CD disc is kept. data.bat looks here for a
+# .cue (with its .bin tracks beside it), or for a .7z/.zip holding one, and
+# caches the unpacked rip here so later runs skip the work. Nothing in this
+# directory is redistributable and .gitignore keeps it out of the repository.
+ASSET_DIR=./assets
 
-# Where the data files land. In a source checkout this is the CD skeleton the
-# makefile turns into BuildDrop/<CD_NAME>.iso. In the released kit it is a
-# working dir whose contents update.bat injects into BASE_ISO.
-DATA_DIR=../../saturn/cd/data
+# Fallback searched when ASSET_DIR holds no cue. In a source tree the disc this
+# port is developed against already sits at <repo>/cd, and pointing at it means
+# a checkout self-repairs without anyone staging a second copy of a 400 MB rip.
+# Simply not found in the released kit, which has no such directory.
+RIP_DIR=../../cd
+
+# Fetched into ASSET_DIR when no cue is found there, then unpacked and cached,
+# so the download happens once. curl writes to a .part sibling and the file is
+# only renamed into place after a clean exit -- an interrupted fetch must not
+# look like a complete archive to the next run. Never reached in a source
+# checkout, where RIP_DIR already holds the disc.
+#
+# Stored percent-encoded so it is handed to curl exactly as written, with no
+# escaping step on either half. A literal space stops curl before it reaches
+# the network -- it cannot form the request line at all. Literal parentheses do
+# fetch, but they break cmd.exe: the URL is echoed inside a parenthesised IF
+# block, and an unquoted ')' closes that block early. %28/%29 avoids both.
+GAME_URL=https://archive.org/download/rd-se-mcd/Heart%20of%20the%20Alien%20-%20Out%20of%20This%20World%20Parts%20I%20and%20II%20%28USA%29%20%28RE%29.7z
+
+# The CD skeleton extract_disc fills: <CD_DIR>/data takes the 19 blobs off the
+# data track, <CD_DIR>/music takes the 41 CD-DA tracks and the tracklist that
+# pins their order. shared.mk authors BuildDrop's ISO from the same two.
+CD_DIR=../../saturn/cd
+
+# The extractor. A source checkout builds it with tools/build.sh; the released
+# kit ships a prebuilt one under bin/<platform>/.
+EXTRACT_DISC=../extract_disc
 
 # --- update.bat (released kit only) -----------------------------------------
 
 # Engine-only disc image shipped with the kit -- no game data in it. update.bat
-# injects DATA_DIR's files at its root and re-emits the burnable track.
-BASE_ISO=./Another World (USA)/Another World (USA).iso
+# injects CD_DIR/data's files at its root and re-emits the burnable track.
+BASE_ISO=./Heart of the Alien (USA)/Heart of the Alien (USA).iso
 
 # Basename of the finished bin/cue, and the folder they are written to.
-DISC_NAME=Another World (USA)
-OUTPUT_DIR=./Another World (USA) - Complete
+DISC_NAME=Heart of the Alien (USA)
+OUTPUT_DIR=./Heart of the Alien (USA) - Complete

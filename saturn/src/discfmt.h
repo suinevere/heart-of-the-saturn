@@ -67,17 +67,38 @@ int discfmt_iso_name_eq(const char *iso_name, uint8_t iso_len, const char *want)
  | discfmt_cue_track_for_music
  | Description: Maps the engine's music index onto a cue track number.
  |
- |   cue_track = engine_index + 2. The disc carries 41 audio tracks, TRACK 02
- |   through TRACK 42, and the engine indexes music 0..40.
+ |   cue_track = engine_index + 1. Corrected 2026-08-07 against the game:
+ |   Suinevere identified the intro playing one track too high, and the intro's
+ |   three animations are cue 32, 33 and 34 against anm_files' engine indices
+ |   31, 32 and 33 -- engine indices, the input this function actually takes,
+ |   not the raw bytecode operand decode.c reads off disc.
  |
- |   The +2 is the whole reason this is a function. The deleted music.c built
- |   its filename as "%02d" of track + 1, but that numbered the mp3 RIP, which
- |   numbered the 41 audio tracks 01..41 -- audio track 1 being disc track 2.
- |   Carrying that +1 over as a cue-track formula aims engine index 0 at
- |   TRACK 01, the DATA track. On hardware that is noise or a hang; in an
- |   emulator it is often just silence, so it survives casual testing.
+ |   This was +2 until then, on the reasoning that the deleted music.c built
+ |   its filename as "%02d" of track + 1 and that this numbered the mp3 rip
+ |   01..41, audio track 1 being disc track 2. That inferred an extra step the
+ |   engine's index does not take: the index already counts from the data
+ |   track, so cue_track = engine_index + 1, not +2. The disc itself was
+ |   verified innocent first -- every saturn/cd/music/trackNN.wav is byte-for-
+ |   byte the rip's (Track NN).bin plus a 44-byte header, and cd/music/tracklist
+ |   lays them down in that order -- so the fault was here and only here.
+ |
+ |   Separately, and not to be confused with the relationship above: decode.c
+ |   subtracts 1 from its raw script operand before it ever reaches
+ |   engine_index (decode.c:1891, :1898), so a script operand V produces
+ |   engine_index V-1, which this function then maps to cue (V-1)+1 = V. The
+ |   operand happens to equal the cue number, but only as the composition of
+ |   two separate, independently-motivated offsets in two different files --
+ |   it is not evidence that this function's own contract is "V reaches V".
+ |   This function's contract is engine_index in, engine_index + 1 out; state
+ |   the operand relationship only if you need it, and always as derived from
+ |   that, never as a restatement of it.
+ |
+ |   Index 0 is refused rather than returned as TRACK 01, the DATA track. On
+ |   hardware playing that is noise or a hang; in an emulator it is often just
+ |   silence, so it survives casual testing. Refusing keeps the data track
+ |   unreachable by construction rather than by a caller remembering to check.
  | Author: suinevere
- | Params: engine_index -- 0..40. Returns 0 (an invalid track) if out of range.
+ | Params: engine_index -- 1..41. Returns 0 (an invalid track) if out of range.
  ----------------------*/
 int discfmt_cue_track_for_music(int engine_index);
 
@@ -91,16 +112,39 @@ int discfmt_cue_track_for_music(int engine_index);
 #define DISCFMT_MAX_TRACKS 99
 
 /*----------------------
+ | DISCFMT_RAW_SECTOR
+ | Description: Bytes in one raw CD sector, the unit both MODE1/2352 data and
+ |   CD-DA audio are addressed in. Exposed rather than private to discfmt.c
+ |   because DiscCueTrack.pregap_sectors is only usable multiplied by it, and
+ |   a caller that spelled 2352 itself would be free to disagree.
+ | Author: suinevere
+ ----------------------*/
+#define DISCFMT_RAW_SECTOR 2352
+
+/*----------------------
  | DiscCueTrack
  | Description: One TRACK entry from the cue sheet: its number, whether it is
- |   audio (vs. the MODE1/2352 data track), and the exact filename from its
- |   FILE line. filename is fixed-size because discfmt.c never allocates --
- |   256 comfortably covers this disc's longest name plus headroom.
+ |   audio (vs. the MODE1/2352 data track), how many sectors of pregap sit at
+ |   the head of its file, and the exact filename from its FILE line.
+ |   filename is fixed-size because discfmt.c never allocates -- 256
+ |   comfortably covers this disc's longest name plus headroom.
+ |
+ |   pregap_sectors is INDEX 01 minus INDEX 00, and it is 0 for a track whose
+ |   cue declares no INDEX 00. Because this parser accepts only the
+ |   one-FILE-per-TRACK layout, both indexes are offsets into that track's own
+ |   file, so the difference is directly a byte count into it -- which is what
+ |   makes this field usable rather than merely descriptive. On this disc every
+ |   audio track carries 150 (a few carry 151): two seconds of silence the
+ |   ripper wrote into the track file, which a drive commanded to play track N
+ |   never reaches, because a TOC's track start is INDEX 01 by definition. A
+ |   consumer that starts at byte 0 plays that silence and lands two seconds
+ |   late; every consumer in this repo did, until this field existed.
  | Author: suinevere
  ----------------------*/
 typedef struct {
     int number;
     int is_audio;
+    int pregap_sectors;
     char filename[256];
 } DiscCueTrack;
 
