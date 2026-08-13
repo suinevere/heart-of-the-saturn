@@ -1072,6 +1072,28 @@ void disc_stop_track(void)
 }
 
 /*----------------------
+ | disc_set_music_volume
+ | Description: Forwards to the SCSP's CD-DA level register through SRL.
+ |   Clamped rather than asserted: a caller computing a fade has no business
+ |   knowing the hardware's ceiling, and a level above it is a rounding
+ |   mistake rather than a bug worth a panic.
+ | Author: suinevere
+ | Dependencies: srl_sound.hpp
+ | Globals: N/A
+ | Params: level -- 0 (silent) to 7 (full)
+ | Returns: N/A
+ ----------------------*/
+void disc_set_music_volume(uint8_t level)
+{
+	if (level > 7)
+	{
+		level = 7;
+	}
+
+	SRL::Sound::Cdda::SetVolume(level);
+}
+
+/*----------------------
  | disc_close
  | Description: Drops back to the never-been-opened state. Every
  |   SRL::Cd::File this backend touches is stack-local and already closed by

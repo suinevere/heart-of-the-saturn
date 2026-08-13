@@ -48,6 +48,8 @@
 #ifndef DISC_H
 #define DISC_H
 
+#include <stdint.h>
+
 /* The Saturn backend is C++; without this its definitions would get C++
    linkage and fail to satisfy the C callers. */
 #ifdef __cplusplus
@@ -137,6 +139,23 @@ int disc_read_file(const char *name, void *out, int max_size);
  ----------------------*/
 void disc_play_track(int engine_index, int loop);
 void disc_stop_track(void);
+
+/*----------------------
+ | disc_set_music_volume
+ | Description: Sets CD-DA output level, 0 for silence up to 7 for full.
+ |   Exists so the boot sequence can fade the title music out before the
+ |   attract loop replays the opening, which is the only fade the game has --
+ |   the engine's own music starts and stops at full level.
+ |
+ |   Eight steps is the hardware's whole range, not a simplification:
+ |   SND_SetCdDaLev takes 0..7, so any fade built on this is a staircase.
+ |   Levels above 7 are clamped rather than refused. Safe to call at any time,
+ |   including before disc_open and with nothing playing, and the host backend
+ |   ignores it entirely -- SDL_mixer owns its own volume and the boot
+ |   sequence does not run there.
+ | Author: suinevere
+ ----------------------*/
+void disc_set_music_volume(uint8_t level);
 
 /*----------------------
  | disc_tick_fn / disc_set_tick

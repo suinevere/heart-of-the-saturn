@@ -692,3 +692,19 @@ void disc_stop_track(void)
 
     disc_music_eof = 0;
 }
+
+/*----------------------
+ | disc_set_music_volume
+ | Description: Ignored on the host. SDL_mixer owns music volume here, and the
+ |   boot sequence this exists for is Saturn-only. Present so the seam has one
+ |   shape on both backends rather than a caller-side ifdef.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: level -- ignored
+ | Returns: N/A
+ ----------------------*/
+void disc_set_music_volume(uint8_t level)
+{
+    (void)level;
+}

@@ -30,8 +30,26 @@ SRL_USE_SGL_SOUND_DRIVER = 1    # Set to 1 if you want to use SGL sound driver, 
 SRL_ENABLE_FREQ_ANALYSIS = 0    # Set to 1 if you want to enable frequency analysis for CD audio, this will load a DSP program into effect slot 1, SGL sound driver must be enabled
 
 # SGL configuration
-SGL_MAX_VERTICES = 2500         # Number of vertices that can be used
-SGL_MAX_POLYGONS = 1500         # Number of polygons that can be used
+#
+# These two set the HWRAM heap size, which is the non-obvious part. workarea.c
+# sizes SortList, SpriteBuf and Pbuffer from them; sgl.linker rounds that struct
+# up to 4 KB and places it at __heap_end = 0x060EA000 - SIZEOF(WORK_AREA_DUMMY),
+# so every polygon costs 84 bytes of heap and every vertex 16. At the stock
+# 1500/2500 the work area is 0x2a000 and the heap is 29,440 bytes, of which TLSF
+# takes 3,196 for its control block and pool header -- leaving 26,244, which is
+# 366 bytes short of the 26,610-byte SDDRVS.TSK that
+# SRL::Sound::Hardware::Initialize stages through `new` during Core::Initialize.
+# That allocation returns NULL, nothing on the path checks it, and SND_Init
+# copies the sound driver out of the boot ROM at address 0 and takes an address
+# error. The symptom is a black screen before any of this port's code runs.
+#
+# 256/256 gives a 168,704-byte heap. The ceiling is still 128x what the port
+# asks for: the game renders entirely into VDP2 NBG0 bitmap memory by slDMACopy,
+# and the only VDP1 sprites in the tree are saturn_bootart.cxx's two. Raise them
+# again if something starts drawing real sprite counts, but check the heap
+# against SDDRVS.TSK in the map when you do.
+SGL_MAX_VERTICES = 256          # Number of vertices that can be used
+SGL_MAX_POLYGONS = 256          # Number of polygons that can be used
 SGL_MAX_EVENTS = 1             	# Number of events that can be used
 SGL_MAX_WORKS = 1             	# Number of works that can be used
 

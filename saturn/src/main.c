@@ -42,6 +42,10 @@
 #include "game2bin.h"
 #include "animation.h"
 #include "getopt.h"
+#include "bootmenu.h"
+#ifdef HOTA_SATURN
+#include "system/saturn_bootart.h"
+#endif
 
 static char *VERSION = "1.2.4";
 
@@ -1020,6 +1024,119 @@ static struct option options[] =
 };
 #endif /* !HOTA_SATURN */
 
+#ifdef HOTA_SATURN
+/*----------------------
+ | boot_key_mask
+ | Description: Folds input.h's eight key globals into a BOOT_KEY_* mask.
+ | Author: suinevere
+ | Dependencies: input.h, bootmenu.h
+ | Globals: key_up, key_down, key_left, key_right, key_a, key_b, key_c,
+ |          key_select
+ | Params: N/A
+ | Returns: The mask of keys currently held
+ ----------------------*/
+static uint32_t boot_key_mask(void)
+{
+	uint32_t mask = 0u;
+
+	if (key_up)     mask |= BOOT_KEY_UP;
+	if (key_down)   mask |= BOOT_KEY_DOWN;
+	if (key_left)   mask |= BOOT_KEY_LEFT;
+	if (key_right)  mask |= BOOT_KEY_RIGHT;
+	if (key_a)      mask |= BOOT_KEY_A;
+	if (key_b)      mask |= BOOT_KEY_B;
+	if (key_c)      mask |= BOOT_KEY_C;
+	if (key_select) mask |= BOOT_KEY_SELECT;
+
+	return mask;
+}
+
+/*----------------------
+ | boot_sequence
+ | Description: Runs the opening stills and the game-select menu, returning
+ |   when the player starts Heart of the Alien. Sits between initialize() and
+ |   run() so the disc reads it needs are already done and the drive is free
+ |   for CD-DA.
+ |
+ |   Returns immediately if the artwork will not load: a missing decoration
+ |   must never brick the disc, so a build without the TGAs boots into the
+ |   game instead of hanging on a black screen.
+ |
+ |   One frame is drawn and presented before the pad is ever sampled, and this
+ |   ordering is the whole defence against a button held at power-on skipping
+ |   the opening. check_events() only reads SRL's peripheral array; the thing
+ |   that refreshes it is Core::Synchronize, reached solely through
+ |   boot_art_present (srl_core.hpp:125). Until that first refresh, port 0
+ |   holds its static initialiser 0xff, which reads as not-connected, and
+ |   check_events zeroes every key. Priming from that would capture a
+ |   synthetic zero rather than the pad, so the first genuine sample would
+ |   arrive with a stale zero behind it and report every held button as newly
+ |   pressed. Sampling after a present means previous holds what the player is
+ |   actually holding.
+ |
+ |   The final present, after the loop, submits an empty VDP1 command list so
+ |   the last menu frame's sprites are not left composited over the game.
+ |   boot_art_release only toggles NBG0; nothing else in the port draws
+ |   sprites, so nothing would otherwise replace them.
+ | Author: suinevere
+ | Dependencies: bootmenu.h, saturn_bootart.h, disc.h, input.h, platform.h
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void boot_sequence(void)
+{
+	bootmenu_state state;
+	boot_frame frame;
+	uint32_t previous;
+	uint32_t current;
+	uint32_t pressed;
+
+	if (!boot_art_load())
+	{
+		return;
+	}
+
+	boot_art_draw((int)BOOT_SCREEN_LEGAL, (int)BOOT_ENTRY_OUT_OF_THIS_WORLD);
+	boot_art_present();
+
+	check_events();
+	previous = boot_key_mask();
+
+	bootmenu_init(&state, (uint32_t)platform_ticks());
+
+	for (;;)
+	{
+		check_events();
+		current = boot_key_mask();
+		pressed = current & ~previous;
+		previous = current;
+
+		bootmenu_step(&state, (uint32_t)platform_ticks(), pressed, &frame);
+
+		if (frame.music_restart)
+		{
+			disc_play_track(BOOT_MUSIC_INDEX, 0);
+		}
+
+		disc_set_music_volume(frame.music_volume);
+
+		if (frame.start_game)
+		{
+			break;
+		}
+
+		boot_art_draw((int)frame.screen, (int)frame.highlight);
+		boot_art_present();
+	}
+
+	disc_stop_track();
+	disc_set_music_volume((uint8_t)BOOT_VOLUME_MAX);
+	boot_art_release();
+	boot_art_present();
+}
+#endif /* HOTA_SATURN */
+
 /*----------------------
  | main
  | Description: Entry point. Parses the command line, opens the disc, brings
@@ -1158,6 +1275,10 @@ int main(int argc, char **argv)
 	}
 
 	initialize();
+
+#ifdef HOTA_SATURN
+	boot_sequence();
+#endif
 
 	switch(test_flag)
 	{

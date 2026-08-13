@@ -35,3 +35,7 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src \
     -o run_tests_fadecalc test_fadecalc.c ../src/fadecalc.c
 ./run_tests_fadecalc
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_bootmenu test_bootmenu.c ../src/bootmenu.c ../src/discfmt.c
+./run_tests_bootmenu
