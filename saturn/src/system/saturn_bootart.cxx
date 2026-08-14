@@ -19,15 +19,17 @@
  |   4bpp pixels -- read whole through disc_read_file and handed to VDP1
  |   directly, so no decoder and no TGA-sized allocation exist on this path.
  | Author: suinevere
- | Dependencies: saturn_bootart.h, disc.h, saturn_compat.h, SRL (VDP1, VDP2,
- |   CRAM, Scene2D, Core)
- | Globals: g_texture, g_loaded
+ | Dependencies: saturn_bootart.h, disc.h, saturn_compat.h, fadecalc.h, SRL
+ |   (VDP1, VDP2, CRAM, Scene2D, Core)
+ | Globals: g_texture, g_loaded, g_bank, g_pal, g_palCount, g_artLevel,
+ |   g_titleLit, g_titleFlashOn
  ----------------------*/
 #include <srl.hpp>
 #include <stdio.h>
 #include "saturn_bootart.h"
 #include "disc.h"
 #include "saturn_compat.h"
+#include "fadecalc.h"
 
 using namespace SRL::Math::Types;
 
@@ -141,6 +143,35 @@ static int32_t g_texture[BOOT_ART_COUNT] = { -1, -1, -1, -1, -1, -1, -1 };
  | Author: suinevere
  ----------------------*/
 static bool g_loaded = false;
+
+/*----------------------
+ | g_bank / g_pal / g_palCount
+ | Description: Every screen's CRAM bank and the palette as authored, so
+ |   boot_art_fade can put back what it overwrote.
+ |
+ |   The palettes have to be copied rather than re-read on demand, because the
+ |   staging buffer they came from is freed at the end of boot_art_load. Seven
+ |   screens of sixteen HighColor is 224 bytes, which is cheaper than any scheme
+ |   that would avoid holding them.
+ |
+ |   A bank is recorded only after that screen's TryLoadTexture has succeeded,
+ |   not beside the Load that filled it. The failure path below releases the
+ |   bank, and a recorded index still pointing at it would let a later fade DMA
+ |   over whatever claimed it next -- menu_art_load's own text ramp is the
+ |   likeliest candidate, since it is the next thing to call GetFreeBank.
+ | Author: suinevere
+ ----------------------*/
+static int32_t g_bank[BOOT_ART_COUNT] = { -1, -1, -1, -1, -1, -1, -1 };
+static SRL::Types::HighColor g_pal[BOOT_ART_COUNT][16];
+static int16_t g_palCount[BOOT_ART_COUNT];
+
+/*----------------------
+ | g_artLevel
+ | Description: The fade level every bank currently holds, so a repeated call
+ |   costs nothing. Starts at normal, which is what boot_art_load leaves behind.
+ | Author: suinevere
+ ----------------------*/
+static int g_artLevel = FADECALC_LEVEL_NORMAL;
 
 /*----------------------
  | bootArtSprite
@@ -283,10 +314,30 @@ extern "C" int boot_art_load(void)
             saturn_lwram_free(stage);
             return 0;
         }
+
+        {
+            int16_t e;
+
+            g_bank[i] = bank;
+            g_palCount[i] = (int16_t)count;
+
+            for (e = 0; e < (int16_t)count && e < 16; e++)
+            {
+                g_pal[i][e] = ((SRL::Types::HighColor *)(stage + 8))[e];
+            }
+        }
     }
 
     saturn_lwram_free(stage);
     g_loaded = true;
+
+    /* Every bank on this path was just filled from the file, so the level has
+       to say undimmed whatever it said before. The already-loaded early return
+       above deliberately does not do this: it changes no bank, and a caller
+       mid-fade would have its palettes snapped back to full by a load it only
+       meant as a check. */
+    g_artLevel = FADECALC_LEVEL_NORMAL;
+
     SRL::VDP2::NBG0::ScrollDisable();
     return 1;
 }
@@ -382,4 +433,93 @@ extern "C" void boot_art_present(void)
 extern "C" void boot_art_release(void)
 {
     SRL::VDP2::NBG0::ScrollEnable();
+}
+
+/*----------------------
+ | boot_art_title_texture
+ | Description: Hands the title card's texture id to the sub-title menu, which
+ |   draws it as its own backdrop rather than loading a second copy --
+ |   VDP1::TryAllocateTexture cannot free, so a duplicate would cost 35 KB of
+ |   sprite VRAM permanently and another on every attract replay.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: g_texture
+ | Params: N/A
+ | Returns: the texture id, or -1 if the boot art never loaded
+ ----------------------*/
+extern "C" int boot_art_title_texture(void)
+{
+    return (int)g_texture[BOOT_ART_TITLE];
+}
+
+/*----------------------
+ | boot_art_fade
+ | Description: See saturn_bootart.h.
+ |
+ |   Scales through fadecalc_scale at 5 bits, which is CRAM's own depth, so the
+ |   widening stays where video_srl.cxx already does it and the two layers dim
+ |   by the same ratio at the same step of the ladder. A fade that used a
+ |   different curve here would be visible as the sprite screens and the bitmap
+ |   layer parting company mid-transition.
+ |
+ |   Scales the three channels of a copy of each entry rather than rebuilding it
+ |   through FromRGB555, so the opacity bit survives whatever it was in the file.
+ |   Entry 0 is the one that matters: VDP1 reads colour index 0 as transparent,
+ |   and an entry rebuilt opaque would paint every glyph cell's blank columns
+ |   black for the length of a fade. It also stays off the uint16_t* pun
+ |   -Wstrict-aliasing flags -- see g_titleLit's banner for why the warning being
+ |   silenced does not make the pun safe.
+ |
+ |   Banks that never loaded are skipped, so a partial load cannot write over
+ |   whatever claimed the index it did not get.
+ | Author: suinevere
+ | Dependencies: fadecalc.h
+ | Globals: g_bank, g_pal, g_palCount, g_artLevel
+ | Params: level -- 0 (black) to FADECALC_LEVEL_NORMAL
+ | Returns: N/A
+ ----------------------*/
+extern "C" void boot_art_fade(int level)
+{
+    SRL::Types::HighColor dimmed[16];
+    int i;
+
+    if (level > FADECALC_LEVEL_NORMAL)
+    {
+        level = FADECALC_LEVEL_NORMAL;
+    }
+    if (level < 0)
+    {
+        level = 0;
+    }
+
+    if (level == g_artLevel)
+    {
+        return;
+    }
+
+    g_artLevel = level;
+
+    for (i = 0; i < BOOT_ART_COUNT; i++)
+    {
+        int16_t e;
+
+        if (g_bank[i] < 0)
+        {
+            continue;
+        }
+
+        for (e = 0; e < g_palCount[i] && e < 16; e++)
+        {
+            SRL::Types::HighColor c = g_pal[i][e];
+
+            c.Red = (uint16_t)fadecalc_scale((int)c.Red, level);
+            c.Green = (uint16_t)fadecalc_scale((int)c.Green, level);
+            c.Blue = (uint16_t)fadecalc_scale((int)c.Blue, level);
+            dimmed[e] = c;
+        }
+
+        SRL::CRAM::Palette(SRL::CRAM::TextureColorMode::Paletted16,
+                           (uint16_t)g_bank[i])
+            .Load(dimmed, g_palCount[i]);
+    }
 }

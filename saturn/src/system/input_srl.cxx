@@ -108,47 +108,21 @@ void check_events(void)
 }
 
 /*----------------------
- | s_prevChord
- | Description: Last frame's chord, so a held combination fires once.
- | Author: suinevere
- ----------------------*/
-static int s_prevChord = 0;
-
-/*----------------------
- | input_debug_chord
- | Description: Reads Start plus A, Start plus B or Start plus C as an edge.
+ | input_menu_start
+ | Description: Reports Start as a level, leaving the edge to menu.c. Port 0
+ |   and the IsConnected guard for the reason check_events' banner gives: any
+ |   other port, or no guard, would read every button as held before the first
+ |   RefreshPeripherals.
  | Author: suinevere
  | Dependencies: srl.hpp
- | Globals: s_prevChord
+ | Globals: N/A
  | Params: N/A
- | Returns: 0 for nothing, 1 to save, 2 to load, 3 to toggle the target
- |          backup device
+ | Returns: 1 while Start is held, 0 otherwise
  ----------------------*/
-extern "C" int input_debug_chord(void)
+extern "C" int input_menu_start(void)
 {
 	SRL::Input::Digital pad(0);
-	int chord = 0;
 
-	if (pad.IsConnected() && pad.IsHeld(SRL::Input::Digital::Button::START))
-	{
-		if (pad.IsHeld(SRL::Input::Digital::Button::A))
-		{
-			chord = 1;
-		}
-		else if (pad.IsHeld(SRL::Input::Digital::Button::C))
-		{
-			chord = 2;
-		}
-		else if (pad.IsHeld(SRL::Input::Digital::Button::B))
-		{
-			chord = 3;
-		}
-	}
-
-	if (chord != 0 && chord == s_prevChord)
-	{
-		return 0;
-	}
-	s_prevChord = chord;
-	return chord;
+	return (pad.IsConnected()
+	        && pad.IsHeld(SRL::Input::Digital::Button::START)) ? 1 : 0;
 }

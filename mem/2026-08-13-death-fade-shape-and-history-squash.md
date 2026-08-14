@@ -49,6 +49,13 @@ rejected as too long and 600 ms as too large a gap before the splat, which is ho
 ended up bracketed rather than merely defended. The fade **in**, the button-dismissed last
 frame, and the `DEATH_LAST_FRAME_MIN_MS` floor have not been seen running.
 
+> **STALE (2026-08-14).** The button-dismissed last frame and its
+> `DEATH_LAST_FRAME_MIN_MS` floor are **deleted** — a terminal death now fades to black
+> and sets `death_played`, which routes it to the save menu. They were never seen
+> running and now never will be. The 960 in the paragraph above is also stale:
+> `DEATH_CHAINED_HOLD_MS` reads 200, so the shipped hold is 1600 ms. See that constant's
+> banner in `saturn/src/animation.c`.
+
 ## Loose ends
 
 - `saturn/tests/run_tests_fadecalc.exe` is untracked and still not in `.gitignore`

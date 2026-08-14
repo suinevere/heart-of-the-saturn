@@ -76,6 +76,10 @@ SlotState savedata_probe(unsigned long device, int slot, SlotInfo *out,
     if (sat_bup_dir(device, name, &entry) != SAT_BUP_OK || !entry.exists) {
         return SLOT_EMPTY;
     }
+    if (entry.size < (unsigned long)SAVE_HEADER_SIZE) {
+        out->state = SLOT_DAMAGED;
+        return SLOT_DAMAGED;
+    }
     if (sat_bup_read(device, name, scratch, (long)scratchCap) != SAT_BUP_OK) {
         out->state = SLOT_DAMAGED;
         return SLOT_DAMAGED;

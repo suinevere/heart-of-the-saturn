@@ -65,6 +65,51 @@ void boot_art_present(void);
  ----------------------*/
 void boot_art_release(void);
 
+/*----------------------
+ | boot_art_fade
+ | Description: Dims every boot screen's palette toward black, the way
+ |   video_set_fade dims the engine's.
+ |
+ |   It has to exist separately because the two live on different hardware. The
+ |   boot screens are VDP1 sprites drawn through their own CRAM banks;
+ |   video_set_fade reaches only the VDP2 palette the engine's bitmap layer uses,
+ |   which is switched off for the whole of boot_art_load's tenure. A fade
+ |   between the game-select menu and the intro therefore has to call both, and
+ |   the two share nothing but fadecalc's ladder and its level scale.
+ |
+ |   Applies to every screen rather than the one being shown, because the caller
+ |   would otherwise have to say which, and a screen left undimmed is invisible
+ |   until the frame it appears on. Seven banks of sixteen entries is one DMA
+ |   each and no arithmetic worth counting.
+ |
+ |   Repeating a level is free -- the last one written is remembered and a
+ |   second call at the same level returns at once -- so a caller may write it
+ |   every frame.
+ |
+ |   Nothing puts the palettes back when a fade out finishes, and nothing may:
+ |   VDP1 does not display an emptied command list until the next vblank, so the
+ |   sprites the fade dimmed are still on screen and a CRAM write lands on them
+ |   immediately -- a full brightness flash one frame before they disappear.
+ |   Whoever next draws this art sets the level for itself first.
+ | Author: suinevere
+ | Params: level -- 0 (black) to FADECALC_LEVEL_NORMAL (the palettes as
+ |         authored)
+ | Returns: N/A
+ ----------------------*/
+void boot_art_fade(int level);
+
+/*----------------------
+ | boot_art_title_texture
+ | Description: The BOOTTITL.ART texture id, so the sub-title menu can draw
+ |   the title card without loading a second copy. VDP1's allocator is a bump
+ |   allocator with no free, so a duplicate would cost 35 KB of sprite VRAM
+ |   permanently and a second one per attract replay.
+ | Author: suinevere
+ | Params: N/A
+ | Returns: the texture id, or -1 if the boot art never loaded
+ ----------------------*/
+int boot_art_title_texture(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -40,6 +40,8 @@ extern unsigned short variables[];
 extern unsigned short auxvars[];
 extern int current_room;
 extern int next_script;
+extern int ending_played;
+extern int death_played;
 /* first_sprite, last_sprite and sprite_count now come from sprites.h, where
    the compiler can check them against their definitions -- see the banner
    there for what the local `extern char` cost on a big-endian target. */
@@ -1847,6 +1849,7 @@ int decode(int current_task, int start_pc)
 					play_animation("MAKE2MB.BIN", 0x109a, 35);
 					play_animation("MID2.BIN", 0, 36);
 					disc_stop_track();
+					screen_arm_fade_restore();
 					next_script = 6;
 					leave = 1;
 				}
@@ -1858,6 +1861,8 @@ int decode(int current_task, int start_pc)
 					play_animation("END4.BIN", 0, 40);
 
 					/* return to password selection */
+					ending_played = 1;
+					screen_arm_fade_restore();
 					next_script = 7;
 					leave = 1;
 				}
@@ -1976,6 +1981,15 @@ int decode(int current_task, int start_pc)
 			   property of the script and so cannot race the drive the
 			   way every runtime signal tried here did. */
 			play_death_animation(imm8, get_byte(script_ptr + pc) == 0x21);
+			screen_arm_fade_restore();
+
+#ifdef HOTA_SATURN
+			if (death_played)
+			{
+				next_script = 7;
+				leave = 1;
+			}
+#endif
 			break;
 
 			case 0x24:

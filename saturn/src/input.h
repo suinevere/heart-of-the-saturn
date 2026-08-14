@@ -44,19 +44,27 @@ extern int key_reset_record;
 void check_events(void);
 
 /*----------------------
- | input_debug_chord
- | Description: A temporary development trigger for save and load, until the
- |   save menu exists. Start plus A means save, Start plus C means load, Start
- |   plus B means toggle the target backup device. Edge triggered, so holding
- |   the chord fires once.
+ | input_menu_start
+ | Description: Whether Start is held. The menu needs it and no key_* global
+ |   carries it: input_srl.cxx deliberately never writes key_select, which is
+ |   host input-recording state that update_keys reads for record and replay.
+ |   A ninth key global would put a Saturn-only signal into a seam both
+ |   backends share, so the question is asked directly instead.
+ |
+ |   Level, not edge -- menu.c owns edge detection for every button it reads,
+ |   and mixing the two is what let the debug chord this replaces fire a save
+ |   when the player went from Start plus B to Start plus A plus B without
+ |   releasing.
+ |
+ |   Saturn only. The host has no caller: menu_pause_poll is behind
+ |   HOTA_SATURN, which is why input_sdl.c never defined the chord either.
  | Author: suinevere
  | Dependencies: N/A
  | Globals: N/A
  | Params: N/A
- | Returns: 0 for nothing, 1 to save, 2 to load, 3 to toggle the target
- |          backup device
+ | Returns: 1 while Start is held, 0 otherwise
  ----------------------*/
-int input_debug_chord(void);
+int input_menu_start(void);
 
 #ifdef __cplusplus
 }

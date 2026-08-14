@@ -56,3 +56,17 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -o run_tests_savegame test_savegame.c stub_saturn_backup.c \
        ../src/savegame.c ../src/savedata.c ../src/saverle.c
 ./run_tests_savegame
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src -I../src/system -I../src/menus \
+    -o run_tests_menustate test_menu_state.c ../src/menus/menu_state.c
+./run_tests_menustate
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src -I../src/system -I../src/menus \
+    -o run_tests_menulayout test_menu_layout.c stub_saturn_backup.c \
+       ../src/menus/menu_layout.c ../src/menus/menu_state.c ../src/savedata.c
+./run_tests_menulayout
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src -I../src/menus \
+    -o run_tests_menuclock test_menu_clock.c ../src/menus/menu_clock.c \
+       ../src/discfmt.c
+./run_tests_menuclock

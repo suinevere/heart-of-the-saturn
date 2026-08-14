@@ -137,7 +137,9 @@ int savedata_read_header(const unsigned char *buf, unsigned short *ver,
  | Description: Reads a whole slot into the caller's scratch buffer and
  |   classifies it. The buffer is the caller's because the only one this port
  |   can afford lives in LWRAM; owning a SAVE_MAX_BYTES static here would put
- |   6 KB in HWRAM BSS.
+ |   6 KB in HWRAM BSS. A file too short to hold a header is rejected as
+ |   damaged before reading, so a four-byte file that happens to start with
+ |   the magic does not probe as loadable with garbage room and date.
  | Author: suinevere
  | Dependencies: saturn_backup.h
  | Globals: N/A

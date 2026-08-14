@@ -17,7 +17,13 @@
 HOTA_AUDIO ?= full
 
 # Configuration
-SRL_MAX_TEXTURES = 100          # Number of VDP1 texture slots
+#
+# SRL_MAX_TEXTURES was 100 until the menu layer landed. The boot art holds 7
+# slots permanently (saturn_bootart.cxx) and saturn_menuart.cxx holds 67 more
+# -- 64 font glyphs plus three panels -- for 74 in total. 100 would still fit,
+# but it leaves no room for another screen and the table costs only one
+# descriptor per slot, so the ceiling goes up rather than being spent.
+SRL_MAX_TEXTURES = 128          # Number of VDP1 texture slots
 SRL_MODE = NTSC                 # Valid options are PAL or NTSC
 SRL_HIGH_RES = 0                # 480i mode
 SRL_FRAMERATE = 1               # Framerate control (0=dynamic, 1=< 60/value)
@@ -43,10 +49,20 @@ SRL_ENABLE_FREQ_ANALYSIS = 0    # Set to 1 if you want to enable frequency analy
 # copies the sound driver out of the boot ROM at address 0 and takes an address
 # error. The symptom is a black screen before any of this port's code runs.
 #
-# 256/256 gives a 168,704-byte heap. The ceiling is still 128x what the port
-# asks for: the game renders entirely into VDP2 NBG0 bitmap memory by slDMACopy,
-# and the only VDP1 sprites in the tree are saturn_bootart.cxx's two. Raise them
-# again if something starts drawing real sprite counts, but check the heap
+# 256/256 gives a 168,704-byte heap. The game itself still draws no sprites at
+# all -- it renders entirely into VDP2 NBG0 bitmap memory by slDMACopy -- but
+# the menu layer does, and SGL_MAX_POLYGONS is what bounds it.
+#
+# workarea.c sizes SortList[12 * (SGL_MAX_POLYGONS + 6)] and
+# SpriteBuf[36 * ((SGL_MAX_POLYGONS + 6) * 2)] from this value, which at 256
+# gives 262 sorted primitives per frame. saturn_menuart.cxx queues at most one
+# backdrop plus MENU_LAYOUT_MAX_ITEMS (menu_layout.h, 200) = 201 of them, so it
+# fits by construction; the measured worst case is nearer 130.
+#
+# That coupling is the thing to remember: MENU_LAYOUT_MAX_ITEMS is what has to
+# stay under this ceiling, not any count in the engine. SGL does not report an
+# overflow -- it drops or corrupts primitives silently -- so raise
+# SGL_MAX_POLYGONS before raising MENU_LAYOUT_MAX_ITEMS, and check the heap
 # against SDDRVS.TSK in the map when you do.
 SGL_MAX_VERTICES = 256          # Number of vertices that can be used
 SGL_MAX_POLYGONS = 256          # Number of polygons that can be used

@@ -47,6 +47,7 @@
 #include "system/saturn_bootart.h"
 #include "system/saturn_backup.h"
 #include "system/saturn_saveslot.h"
+#include "menus/menu.h"
 #endif
 
 static char *VERSION = "1.2.4";
@@ -79,6 +80,84 @@ static anm_file_t anm_files[] =
 extern int script_ptr;
 
 int next_script;
+
+/*----------------------
+ | ending_played
+ | Description: Set by decode.c when the four ending animations have played and
+ |   it is about to ask for room 7. It is the one arrival at the password screen
+ |   the menu driver cannot infer for itself -- a death and an ending reach that
+ |   room by the same route and look identical from there -- and it exists so a
+ |   player who has just watched the credits gets the sub-title menu rather than
+ |   a list of saves to reload.
+ |
+ |   Consumed by menu_gate, which clears it as it acts on it, so it means "this
+ |   arrival" and not "this playthrough".
+ |
+ |   An int beside next_script rather than a call into menus/, because that
+ |   would put a Saturn header and an #ifdef into decode.c for one bit.
+ | Author: suinevere
+ ----------------------*/
+int ending_played;
+
+/*----------------------
+ | death_played
+ | Description: Set by animation.c when a terminal death sequence has faded to
+ |   black, and consumed by menu_gate, which clears it and opens the load screen
+ |   rather than the sub-title menu -- a player who has just died wants their
+ |   saves, not a fresh start.
+ |
+ |   It exists because a death is invisible to every other signal the menu layer
+ |   has. An ending changes rooms and can be spotted by the gate's next_script
+ |   test; a death changes no room at all. Its script is one or two 0x21 opcodes
+ |   and then DESTROY_TASKS, and destroy_tasks kills only a range of tasks, so a
+ |   task that survives goes on to draw the original password screen inside the
+ |   room the player died in. Nothing in that sequence asks for room 7, so the
+ |   gate never sees it and the screen this branch exists to replace comes up
+ |   anyway. This flag is what decode.c tests to route the death to the gate
+ |   instead: on the opcode after a death it sets next_script to 7 and ends the
+ |   script. Ending it is what stops the surviving task ever drawing; next_script
+ |   is what breaks run()'s task loop and reaches the top of the frame, the one
+ |   place where quickload's "no active thread" precondition holds and so the one
+ |   place a load may run.
+ |
+ |   That test in decode.c is the one thing here inside #ifdef HOTA_SATURN, and
+ |   it is guarded where ending_played's store is not because it is not inert
+ |   without a menu. ending_played writes an int the host build never reads; this
+ |   ends the script and asks for another room, so on a host build -- which has
+ |   no menu_gate -- it would load ROOMS7.BIN where the original draws the
+ |   password display in place. video.h calls the SDL backend the reference a
+ |   wrong Saturn frame is compared against, and a reference whose death path
+ |   diverges is worth less. HOTA_SATURN is a bare define from saturn/makefile,
+ |   so the guard costs no include and does not reopen the rule it looks like it
+ |   breaks.
+ |
+ |   The screen_arm_fade_restore beside that guard is deliberately outside it.
+ |   The two statements answer different questions. Whether a death ends the
+ |   script is a menu question and belongs to builds that have a menu; whether
+ |   the screen comes back is not optional anywhere, because the fades on this
+ |   path run on every build. Guarding the arm with the routing was the mistake
+ |   that took the host build's intro, ending and every death to a permanently
+ |   black screen -- the fade compiled, the thing that undoes it did not.
+ |   Anything that fades and then hands control to the game arms
+ |   unconditionally; see screen.h. A terminal death now ends lit rather than
+ |   black, so on that path the arm has nothing left to undo, and it stays for
+ |   the aborted and chained ones and because the rule has no exceptions.
+ |
+ |   This definition and animation.c's store are unguarded too: an int nobody
+ |   reads costs the host nothing, and keeping the guard to the single place
+ |   that changes control flow is what makes it obvious why it is there.
+ |
+ |   Cleared by animation.c on entry to every death as well as by the gate, so
+ |   it always means "the death that just finished" and can never be left set
+ |   from a previous one to end a two-segment death between its halves.
+ |
+ |   An int beside ending_played rather than a call into menus/, for the same
+ |   reason: that would put a Saturn header and an #ifdef into decode.c for one
+ |   bit.
+ | Author: suinevere
+ ----------------------*/
+int death_played;
+
 int current_backdrop;
 int current_room;
 
@@ -518,31 +597,6 @@ void rest(int fps)
 #define FADE_HOLD_MS 60
 
 /*----------------------
- | fade_walk
- | Description: Walks the fade ladder from one step to another inclusive,
- |   holding each for FADE_HOLD_MS and presenting frames the whole way, then
- |   resets rest()'s baseline.
- |
- |   That reset is not housekeeping. rest() paces the game by comparing
- |   platform_ticks() against last_tick, and a fade returns two seconds after
- |   last_tick was current, so without rest(0) the loop reads itself as two
- |   seconds behind and sprints to catch up -- the same speed wobble that
- |   kept cdda_wait_for_sound out of disc_play_track. rest(0) sets last_tick
- |   to now and clears the fractional carry, which is exactly the baseline a
- |   long block needs on the way out.
- |
- |   The inner wait calls platform_frame() rather than only platform_delay(),
- |   so the VDP2 layer is presented and peripherals refreshed while the fade
- |   runs. A fade that froze the display would be a black screen either way
- |   on the last step, and a locked-up one on the first.
- | Author: suinevere
- | Dependencies: video.h, fadecalc.h, platform.h
- | Globals: N/A
- | Params: from -- first step to show; to -- last step to show; both 0
- |   (normal) to FADECALC_SEGA_CD_STEPS (black)
- | Returns: N/A
- ----------------------*/
-/*----------------------
  | g_fadeStart / g_fadeActive / g_fadeStep / g_fadeHold
  | Description: State for a fade that is running underneath disc work rather
  |   than in front of it. g_fadeStart is when it began, g_fadeStep the last
@@ -560,6 +614,38 @@ static unsigned int g_fadeStart = 0;
 static int g_fadeActive = 0;
 static int g_fadeStep = 0;
 static unsigned int g_fadeHold = FADE_HOLD_MS;
+
+/*----------------------
+ | g_fadeSilent
+ | Description: Set when the screen was already black as this fade was armed,
+ |   which makes every level the ladder would write a level brighter than what
+ |   is on screen. A fade out must only ever darken, so a silent fade keeps its
+ |   schedule and writes nothing.
+ |
+ |   Without it a fade begun on black lights the screen back up: fade_pump's
+ |   first write is step 1, seven eighths of full brightness, so the outgoing
+ |   frame the last fade just hid would flash back into view and then walk down
+ |   the ladder again. That is the same stale-frame flash the deferred restores
+ |   exist to prevent, arriving from the other direction.
+ | Author: suinevere
+ ----------------------*/
+static int g_fadeSilent = 0;
+
+/*----------------------
+ | g_fadeCeiling
+ | Description: The level on screen when this fade was armed. fade_pump writes
+ |   nothing brighter, so the ladder's opening steps are skipped rather than
+ |   played on a screen that is already darker than they are.
+ |
+ |   g_fadeSilent is the special case of this where the ceiling is 0, and it
+ |   stays a flag of its own because it also decides whether the fade may finish
+ |   early. The general case arrived with the cutscene fade in: a sequence
+ |   skipped inside its first half second is still part-way up the ramp, and a
+ |   fade out that started from step 1 would brighten it back toward full before
+ |   taking it down again.
+ | Author: suinevere
+ ----------------------*/
+static int g_fadeCeiling = FADECALC_LEVEL_NORMAL;
 
 /*----------------------
  | fade_pump
@@ -602,23 +688,57 @@ static void fade_pump(void)
 
 	if (step != g_fadeStep)
 	{
+		int level = fadecalc_step_level(step, FADECALC_SEGA_CD_STEPS);
+
 		g_fadeStep = step;
-		video_set_fade(fadecalc_step_level(step, FADECALC_SEGA_CD_STEPS));
+
+		if (!g_fadeSilent && level < g_fadeCeiling)
+		{
+			video_set_fade(level);
+		}
 	}
 }
 
-void fade_out_begin(void)
-{
-	fade_out_begin_hold(FADE_HOLD_MS);
-}
-
-void fade_out_begin_hold(unsigned int hold_ms)
+/*----------------------
+ | fade_out_arm
+ | Description: The body both fade_out_begin forms share: install the tick,
+ |   start the clock, and decide what an already-black screen means for this
+ |   particular fade.
+ |
+ |   It always means "write nothing" -- see g_fadeSilent. Whether it also means
+ |   "take no time" is the caller's to say, and it is the whole difference
+ |   between the two entry points. A plain fade out is a transition, so on a
+ |   screen that is already black it has nothing to transition and may finish
+ |   at once. An explicit hold is a duration someone measured, and the one
+ |   caller that asks for one is the two-segment death, whose 960 ms is holding
+ |   the splat in place; short-circuiting that would silently retune the one
+ |   number in this port that was settled by eye over six rounds. So the hold
+ |   form spends its time whatever is on screen, and merely does it quietly.
+ |
+ |   The tick is installed on both paths, including the one that has already
+ |   finished, so fade_out_finish uninstalls exactly what was installed no
+ |   matter which way the fade went.
+ |
+ |   Any deferred fade in screen.c is holding is cancelled first. A fade out is
+ |   a statement about the same palette a pending ramp is walking, and the two
+ |   would otherwise write alternating levels for as long as both ran.
+ | Author: suinevere
+ | Dependencies: video.h, fadecalc.h, platform.h, disc.h, screen.h
+ | Globals: g_fadeHold, g_fadeStart, g_fadeActive, g_fadeStep, g_fadeSilent,
+ |   g_fadeCeiling
+ | Params: hold_ms -- milliseconds per step, clamped to at least 1;
+ |   free_when_black -- non-zero to also skip the wait on an already-black
+ |   screen, zero to spend the full duration regardless
+ | Returns: N/A
+ ----------------------*/
+static void fade_out_arm(unsigned int hold_ms, int free_when_black)
 {
 	if (hold_ms < 1)
 	{
 		hold_ms = 1;
 	}
 
+	screen_fade_cancel();
 	g_fadeHold = hold_ms;
 
 	/* Starts at step 1, not 0: step 0 is the undimmed picture already on
@@ -627,9 +747,27 @@ void fade_out_begin_hold(unsigned int hold_ms)
 	g_fadeStart = platform_ticks();
 	g_fadeActive = 1;
 	g_fadeStep = 0;
+	g_fadeCeiling = video_get_fade();
+	g_fadeSilent = (g_fadeCeiling <= 0);
+
+	if (g_fadeSilent && free_when_black)
+	{
+		g_fadeStep = FADECALC_SEGA_CD_STEPS;
+		g_fadeActive = 0;
+	}
 
 	disc_set_tick(fade_pump);
 	fade_pump();
+}
+
+void fade_out_begin(void)
+{
+	fade_out_arm(FADE_HOLD_MS, 1);
+}
+
+void fade_out_begin_hold(unsigned int hold_ms)
+{
+	fade_out_arm(hold_ms, 0);
 }
 
 void fade_out_finish(void)
@@ -710,62 +848,42 @@ int play_anm(anm_file_t *anm, int n, int skippable)
 	return ret;
 }
 
-/** Plays the introduction to the game
-
-    Introduction is split into 4 files, since sega-cd was limited with
-    512 KB of ram, and video is loaded into memory before it can be
-    played. also, each such sequence comes with it's own audio track
-*/
-static void play_intro()
+void play_intro(void)
 {
 	play_anm(anm_files, 4, 0);
 }
 
 /*----------------------
- | s_saveDevice
- | Description: The backup device the debug chord targets, throwaway state the
- |   menu spec deletes along with the chord itself.
- | Author: suinevere
- ----------------------*/
-#ifdef HOTA_SATURN
-static unsigned long s_saveDevice = SAT_BUP_INTERNAL;
-#endif
-
-/*----------------------
  | saturn_save_poll
- | Description: Runs the development save chord, at the top of a frame and
- |   outside the task loop. Both quicksave and quickload require no active
- |   thread, which is only true here.
+ | Description: Runs the pause menu, at the top of a frame and outside the task
+ |   loop. This position -- between check_events() and the task loop's first
+ |   toggle_aux(0) -- is the only place in the program where quicksave's and
+ |   quickload's "no active thread" precondition holds, and it is the save
+ |   point already verified on real hardware. That is why the function survives
+ |   the menu layer replacing its body rather than the call moving into menus/.
  | Author: suinevere
- | Dependencies: input.h, system/saturn_saveslot.h, system/saturn_backup.h
- | Globals: s_saveDevice
+ | Dependencies: menus/menu.h
+ | Globals: N/A
  | Params: N/A
  | Returns: N/A
  ----------------------*/
 #ifdef HOTA_SATURN
 static void saturn_save_poll(void)
 {
-	int chord = input_debug_chord();
-
-	if (chord == 1)
-	{
-		printf("save slot 0: %d\n", saturn_saveslot_save(s_saveDevice, 0));
-	}
-	else if (chord == 2)
-	{
-		printf("load slot 0: %d\n", saturn_saveslot_load(s_saveDevice, 0));
-	}
-	else if (chord == 3)
-	{
-		s_saveDevice = (s_saveDevice == SAT_BUP_INTERNAL) ? SAT_BUP_CART : SAT_BUP_INTERNAL;
-		printf("save device: %s\n", (s_saveDevice == SAT_BUP_CART) ? "cart" : "internal");
-	}
+	menu_pause_poll();
 }
 #endif
 
 /** Main game loop
 
     This is where all the magic happens!
+
+    The screen_arm_fade_restore after play_intro is unguarded on purpose. The
+    cinematic fades to black on every build, so the thing that lifts that black
+    has to exist on every build too. On Saturn the gate arms again a moment
+    later and the second arm is a no-op; without a gate this is the only arm on
+    the path, and the alternative is a game running behind a screen that never
+    comes back. See screen.h.
 */
 static void run()
 {
@@ -778,6 +896,7 @@ static void run()
 		 * first play intro, then jump to code entry script.
 		 */
 		play_intro();
+		screen_arm_fade_restore();
 		next_script = 7;
 	}
 
@@ -786,6 +905,13 @@ static void run()
 	while (cls.quit == 0)
 	{
 		int i;
+
+#ifdef HOTA_SATURN
+		if (next_script == MENU_PASSWORD_ROOM)
+		{
+			next_script = menu_gate();
+		}
+#endif
 
 		if (next_script != 0)
 		{
@@ -1100,6 +1226,60 @@ static uint32_t boot_key_mask(void)
 }
 
 /*----------------------
+ | boot_fade_out
+ | Description: Walks the boot artwork down to black, holding each step for
+ |   FADE_HOLD_MS and redrawing the same screen the whole way.
+ |
+ |   It has to be its own ladder rather than the fade_out_begin pair, because
+ |   the two fades act on different hardware. The boot screens are VDP1 sprites
+ |   with their own CRAM banks; video_set_fade only reaches the VDP2 palette the
+ |   engine's bitmap layer draws through, which is switched off for the whole of
+ |   boot_art_load's tenure. A fade out here that only called video_set_fade
+ |   would leave the menu on screen at full brightness and dim nothing at all.
+ |
+ |   The redraw inside the wait is not optional. VDP1's command list is rebuilt
+ |   from scratch every present, so a frame that queues nothing shows nothing --
+ |   skipping the draw would make the fade a flicker rather than a dim.
+ |
+ |   The CD-DA level walks down with the picture. SND_SetCdDaLev takes 0..7, so
+ |   the eight fade steps are exactly the eight the volume has -- the track is
+ |   silent on the same step the screen reaches black, and the disc_stop_track
+ |   the caller does next has nothing audible left to cut.
+ |
+ |   rest(0) on the way out for the reason every long block in this file owes
+ |   it: the frame pacer measures from last_tick, and half a second spent here
+ |   would otherwise be sprinted through afterwards.
+ | Author: suinevere
+ | Dependencies: saturn_bootart.h, fadecalc.h, platform.h, disc.h
+ | Globals: N/A
+ | Params: screen -- the boot_screen to keep drawing; highlight -- the
+ |   boot_entry to keep drawing
+ | Returns: N/A
+ ----------------------*/
+static void boot_fade_out(int screen, int highlight)
+{
+	int step;
+
+	for (step = 1; step <= FADECALC_SEGA_CD_STEPS; step++)
+	{
+		unsigned int start = platform_ticks();
+
+		boot_art_fade(fadecalc_step_level(step, FADECALC_SEGA_CD_STEPS));
+		disc_set_music_volume((uint8_t)(BOOT_VOLUME_MAX
+			- (step * BOOT_VOLUME_MAX) / FADECALC_SEGA_CD_STEPS));
+
+		do
+		{
+			boot_art_draw(screen, highlight);
+			boot_art_present();
+		}
+		while (platform_ticks() - start < FADE_HOLD_MS);
+	}
+
+	rest(0);
+}
+
+/*----------------------
  | boot_sequence
  | Description: Runs the opening stills and the game-select menu, returning
  |   when the player starts Heart of the Alien. Sits between initialize() and
@@ -1171,6 +1351,7 @@ static void boot_sequence(void)
 
 		if (frame.start_game)
 		{
+			boot_fade_out((int)frame.screen, (int)frame.highlight);
 			break;
 		}
 
@@ -1180,8 +1361,23 @@ static void boot_sequence(void)
 
 	disc_stop_track();
 	disc_set_music_volume((uint8_t)BOOT_VOLUME_MAX);
+
+	/* NBG0 comes back holding whatever initialize() left in it, and comes
+	   back on the frame boot_art_release runs rather than the frame the game
+	   first draws. Blacking it here is what stops that appearing between the
+	   menu that just faded out and the intro that has not started; it also
+	   makes play_animation's opening fade free, since a fade out on an
+	   already-black screen writes nothing and takes no time. */
+	video_set_fade(0);
 	boot_art_release();
 	boot_art_present();
+
+	/* The palettes are deliberately left black. Restoring them here lit the
+	   menu back up for one frame on the way out: boot_art_present submits the
+	   empty command list but VDP1 does not display it until the next vblank, so
+	   the dimmed sprites are still on screen when this returns, and a CRAM
+	   write lands on them immediately. Nothing draws boot art again until a
+	   menu opens, and menu_run sets the level itself before its first frame. */
 }
 #endif /* HOTA_SATURN */
 

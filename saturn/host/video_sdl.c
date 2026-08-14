@@ -384,6 +384,21 @@ void video_set_fade(int level)
 	palette_rebuild();
 }
 
+/*----------------------
+ | video_get_fade
+ | Description: Hands back the level the palette is currently displayed at.
+ |   See video.h for why the backend owns this rather than the callers that
+ |   set it.
+ | Author: suinevere
+ | Globals: fade_level
+ | Params: N/A
+ | Returns: the level last passed to video_set_fade
+ ----------------------*/
+int video_get_fade(void)
+{
+	return fade_level;
+}
+
 void video_set_palette(int which)
 {
 	unsigned char rgb12[16*2];

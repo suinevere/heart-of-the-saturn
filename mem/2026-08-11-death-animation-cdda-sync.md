@@ -96,6 +96,19 @@ death with no fade and no music wait.
 
 ## 960 ms, confirmed from both sides
 
+> **STALE (2026-08-14).** Two things below no longer describe the tree.
+> `DEATH_CHAINED_HOLD_MS` reads **200**, not 120 — 1600 ms over eight steps, not 960 —
+> and has since `3b10479`, so the bracketing recorded here was against a value that was
+> never committed. And `DEATH_LAST_FRAME_MIN_MS`, `hold_last_frame` and
+> `death_button_down` are **deleted**: a terminal death now fades to black and sets
+> `death_played` instead of holding its last frame for a button press. The floor existed
+> because a button held from the death itself would dismiss the shot instantly, and a
+> fade listens for no button. See `DEATH_CHAINED_HOLD_MS`'s banner in
+> `saturn/src/animation.c` and the fix report under
+> `.superpowers/sdd/2026-08-14-hota-saturn-subtitle-and-save-menus/`. Everything else in
+> this file — the delay being unconditional, the four failed attempts to make it
+> conditional, the fade in — still stands.
+
 The front delay is **960 ms** (`DEATH_CHAINED_HOLD_MS` 120 × 8 steps) — the same total the
 two separate fades used to add up to, and the number this file has protected throughout.
 It has now been bracketed by eye rather than only defended:
@@ -110,6 +123,15 @@ It has now been bracketed by eye rather than only defended:
 So the tuning range around 960 is narrow in both directions. Treat it as measured.
 
 Knobs, all in `saturn/src/animation.c`:
+
+> **STALE (2026-08-14).** Two of the three entries below no longer describe the tree.
+> `DEATH_CHAINED_HOLD_MS` has only ever been **200** — `git log -S` finds one commit
+> touching it, `3b10479`, and it reads 200 there — so the shipped hold is **1600 ms**, not
+> 960, and the 120/960 figures below were never true of any shipped revision. That puts the
+> real value above the 1200 ms this file records as already too long, which is unresolved
+> and wants an eye on a two-segment death. `DEATH_LAST_FRAME_MIN_MS` is **deleted**: a
+> terminal death now fades to black and opens the load screen instead of holding for a
+> press, so a floor against a held button has nothing left to protect.
 
 - `DEATH_CHAINED_HOLD_MS` (120, ×8 = 960 ms) — the single fade in front of a chained
   death. Also the delay. Bracketed above; do not wander from it without a reason.

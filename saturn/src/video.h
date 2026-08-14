@@ -116,6 +116,20 @@ void video_set_palette_rgb12(unsigned char *rgb12);
 void video_set_fade(int level);
 
 /*----------------------
+ | video_get_fade
+ | Description: Returns the level video_set_fade was last called with, or
+ |   FADECALC_LEVEL_NORMAL if it never was.
+ |
+ |   Exists so a caller can ask whether the screen is already black before
+ |   spending a fade on it. Every write of the level goes through
+ |   video_set_fade, so the backend is the only place the answer is actually
+ |   known -- three modules now black the screen and any shadow copy kept
+ |   above this line would go stale the first time one of the others wrote.
+ | Author: suinevere
+ ----------------------*/
+int  video_get_fade(void);
+
+/*----------------------
  | video_get_current_palette
  | Description: Returns the index last passed to video_set_palette, so
  |   callers that only track palette state (not raw RGB12) can query it

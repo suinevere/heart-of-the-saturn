@@ -23,9 +23,48 @@
 #include "vm.h"
 #include "debug.h"
 #include "video.h"
+#include "fadecalc.h"
+#include "platform.h"
 #include "screen.h"
 
 #define VAR_VSCROLL 249
+
+/*----------------------
+ | SCREEN_FADE_IN_HOLD_MS
+ | Description: Per-step hold for the deferred fade in. Eight steps at 60 ms is
+ |   just under half a second, the same speed main.c's FADE_HOLD_MS gives a fade
+ |   out, so the game fades down and back up at one rate.
+ | Author: suinevere
+ ----------------------*/
+#define SCREEN_FADE_IN_HOLD_MS 60
+
+/*----------------------
+ | s_fadeRestorePending
+ | Description: Whether a caller has left the screen black and is waiting on
+ |   the game to draw before brightness comes back. Set by
+ |   screen_arm_fade_restore, cleared by the first update_screen that renders
+ |   after it. See screen.h for why the restore is deferred at all.
+ | Author: suinevere
+ ----------------------*/
+static int s_fadeRestorePending = 0;
+
+/*----------------------
+ | s_fadeInPending / s_fadeInStep / s_fadeInStart
+ | Description: The ramped arm and the ramp it starts. s_fadeInPending is the
+ |   deferral, spent by the first update_screen that renders; s_fadeInStep is
+ |   where the ramp has got to, FADECALC_SEGA_CD_STEPS being black and 0 both
+ |   "normal" and "not running", which is the same state and so needs no
+ |   separate flag.
+ |
+ |   Same shape as animation.c's g_fadeInStep, and for the same reason: the two
+ |   sit on opposite sides of the draw seam -- that one pumps from
+ |   copy_to_screen, this one from update_screen -- and neither can see the
+ |   other's frames.
+ | Author: suinevere
+ ----------------------*/
+static int s_fadeInPending = 0;
+static int s_fadeInStep = 0;
+static unsigned int s_fadeInStart = 0;
 
 /* instead of allocations. makes porting to consoles easier. */
 static char huge_buf[304*192*3];
@@ -171,6 +210,88 @@ void select_screen(int which)
 	selected_screen_ptr = get_screen_ptr(which);
 }
 
+/*----------------------
+ | screen_arm_fade_restore
+ | Description: See screen.h.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: s_fadeRestorePending
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void screen_arm_fade_restore(void)
+{
+	s_fadeRestorePending = 1;
+	s_fadeInPending = 0;
+	s_fadeInStep = 0;
+}
+
+/*----------------------
+ | screen_arm_fade_in
+ | Description: See screen.h.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: s_fadeInPending, s_fadeRestorePending
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void screen_arm_fade_in(void)
+{
+	s_fadeInPending = 1;
+	s_fadeRestorePending = 0;
+}
+
+/*----------------------
+ | screen_fade_cancel
+ | Description: See screen.h.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: s_fadeRestorePending, s_fadeInPending, s_fadeInStep
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void screen_fade_cancel(void)
+{
+	s_fadeRestorePending = 0;
+	s_fadeInPending = 0;
+	s_fadeInStep = 0;
+}
+
+/*----------------------
+ | screen_fade_in_pump
+ | Description: Walks the deferred ramp down to normal on the clock, one write
+ |   per step it has actually reached.
+ | Author: suinevere
+ | Dependencies: video.h, fadecalc.h, platform.h
+ | Globals: s_fadeInStep, s_fadeInStart
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void screen_fade_in_pump(void)
+{
+	unsigned int elapsed;
+	int step;
+
+	if (s_fadeInStep <= 0)
+	{
+		return;
+	}
+
+	elapsed = platform_ticks() - s_fadeInStart;
+	step = FADECALC_SEGA_CD_STEPS - (int)(elapsed / SCREEN_FADE_IN_HOLD_MS);
+
+	if (step < 0)
+	{
+		step = 0;
+	}
+
+	if (step != s_fadeInStep)
+	{
+		s_fadeInStep = step;
+		video_set_fade(fadecalc_step_level(step, FADECALC_SEGA_CD_STEPS));
+	}
+}
+
 /** Renders (rasters) the requested screen
     @param which   screen identifier (see comment above)
 
@@ -179,6 +300,9 @@ void select_screen(int which)
     convert the 4-bit framebuffer to the native video output format. it
     is also possible to flip between visible and invisible buffers using
     which == 0xff
+
+    This is also the game's draw choke point, and so the place a deferred
+    brightness restore is spent: see screen_arm_fade_restore in screen.h.
 */
 void update_screen(int which)
 {
@@ -207,6 +331,30 @@ void update_screen(int which)
 	}
 
 	video_render(src);
+
+	/* Both arms are spent here, after the pixels, and neither when it was
+	   armed. A fade blacks the screen by darkening the palette while the
+	   framebuffer still holds the outgoing scene, so lifting it before
+	   anything new is drawn shows that old scene at full brightness for the
+	   gap before the first frame lands. */
+	if (s_fadeInPending)
+	{
+		s_fadeInPending = 0;
+
+		if (video_get_fade() < FADECALC_LEVEL_NORMAL)
+		{
+			s_fadeInStep = FADECALC_SEGA_CD_STEPS;
+			s_fadeInStart = platform_ticks();
+		}
+	}
+
+	screen_fade_in_pump();
+
+	if (s_fadeRestorePending)
+	{
+		s_fadeRestorePending = 0;
+		video_set_fade(FADECALC_LEVEL_NORMAL);
+	}
 }
 
 /** Returns the identifier of the working-screen

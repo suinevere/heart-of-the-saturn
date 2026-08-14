@@ -215,6 +215,25 @@ static void test_date_split(void)
     expect_int("null outputs tolerated", hour, 1);
 }
 
+static void test_probe_rejects_undersized_file(void)
+{
+    unsigned char scratch[SAVE_MAX_BYTES];
+    unsigned char file[4];
+    SlotInfo info;
+
+    stub_bup_reset();
+    file[0] = 'H';
+    file[1] = 'O';
+    file[2] = 'T';
+    file[3] = 'A';
+    stub_bup_place(SAT_BUP_INTERNAL, "HOTASAVE1", file, (int)sizeof(file));
+
+    expect_int("a 4-byte file starting with HOTA is damaged, not OK",
+               (int)savedata_probe(SAT_BUP_INTERNAL, 0, &info, scratch,
+                                   SAVE_MAX_BYTES),
+               (int)SLOT_DAMAGED);
+}
+
 int main(void)
 {
     test_slot_names();
@@ -227,6 +246,7 @@ int main(void)
     test_probe_read_failure_is_damaged();
     test_device_defaulting();
     test_date_split();
+    test_probe_rejects_undersized_file();
 
     if (g_fail != 0) {
         printf("%d failure(s)\n", g_fail);

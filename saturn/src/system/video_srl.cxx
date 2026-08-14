@@ -417,6 +417,21 @@ void video_set_fade(int level)
 }
 
 /*----------------------
+ | video_get_fade
+ | Description: Hands back the level the palette is currently displayed at.
+ |   See video.h for why the backend owns this rather than the callers that
+ |   set it.
+ | Author: suinevere
+ | Globals: g_fadeLevel
+ | Params: N/A
+ | Returns: the level last passed to video_set_fade
+ ----------------------*/
+int video_get_fade(void)
+{
+	return g_fadeLevel;
+}
+
+/*----------------------
  | video_get_current_palette
  | Description: Hands back the index last passed to video_set_palette, for
  |   callers that track palette state without holding the raw RGB12.
