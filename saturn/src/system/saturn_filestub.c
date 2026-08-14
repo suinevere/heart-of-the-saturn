@@ -138,7 +138,11 @@ FILE *fopen(const char *path, const char *mode)
     if (writing) {
         savebuf_open_write(&s_saveStream.buf, s_saveStorage, s_saveStorageCap);
     } else {
-        savebuf_open_read(&s_saveStream.buf, s_saveStorage, s_saveReadLen);
+        int len = s_saveReadLen;
+        if (len > s_saveStorageCap) {
+            len = s_saveStorageCap;
+        }
+        savebuf_open_read(&s_saveStream.buf, s_saveStorage, len);
     }
     s_saveStream.open = 1;
     return &s_saveStream;

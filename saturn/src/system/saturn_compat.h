@@ -225,7 +225,9 @@ savebuf *saturn_savebuf_stream(void);
  | saturn_savebuf_set_length
  | Description: Declares the readable length for the next stream opened for
  |   reading. quickload opens for reading, and the readable length is the
- |   decompressed payload's, which only the caller knows.
+ |   decompressed payload's, which only the caller knows. fopen clamps this to
+ |   the bound storage's capacity, so a length longer than the buffer cannot
+ |   make fgetc read past its end.
  | Author: suinevere
  | Dependencies: savebuf.h
  | Globals: N/A
