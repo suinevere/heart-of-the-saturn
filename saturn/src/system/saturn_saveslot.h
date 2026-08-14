@@ -42,9 +42,11 @@ int saturn_saveslot_save(unsigned long device, int slot);
 
 /*----------------------
  | saturn_saveslot_load
- | Description: Restores a slot into the running game and restarts its music.
- |   Same frame-boundary requirement as saturn_saveslot_save, and additionally
- |   reads from the disc, so the drive must be idle.
+ | Description: Restores a slot into the running game and restores whatever
+ |   the save recorded -- the saved track playing again, or silence if none
+ |   was playing when the save was made. Same frame-boundary requirement as
+ |   saturn_saveslot_save, and additionally reads from the disc, so the drive
+ |   must be idle.
  | Author: suinevere
  | Dependencies: savegame.h, disc.h
  | Globals: N/A

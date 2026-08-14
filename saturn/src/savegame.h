@@ -22,13 +22,18 @@ extern "C" {
 /*----------------------
  | SAVE_ERR_*
  | Description: Failures this layer detects itself, numbered clear of the
- |   SAT_BUP_* codes so one return value can carry either.
+ |   SAT_BUP_* codes so one return value can carry either. SAVE_ERR_NO_BUFFERS
+ |   is a staging buffer allocation failure, distinct from a payload that is
+ |   genuinely too large; SAVE_ERR_BAD_SLOT is a slot index outside
+ |   [0, SAVE_NUM_SLOTS).
  | Author: suinevere
  ----------------------*/
 #define SAVE_ERR_BAD_MAGIC   32
 #define SAVE_ERR_BAD_VERSION 33
 #define SAVE_ERR_BAD_PAYLOAD 34
 #define SAVE_ERR_TOO_LARGE   35
+#define SAVE_ERR_NO_BUFFERS  36
+#define SAVE_ERR_BAD_SLOT    37
 
 /*----------------------
  | savegame_pack_trailer
@@ -67,7 +72,8 @@ void savegame_unpack_trailer(const unsigned char *in, int *track, int *loop);
  |         its length, at most SAVE_PAYLOAD_MAX; roomId -- the room the save
  |         was made in; work -- staging buffer; workCap -- its capacity, which
  |         must be at least SAVE_MAX_BYTES
- | Returns: SAT_BUP_OK, a SAT_BUP_ERR_* code, or SAVE_ERR_TOO_LARGE
+ | Returns: SAT_BUP_OK, a SAT_BUP_ERR_* code, SAVE_ERR_TOO_LARGE, or
+ |          SAVE_ERR_BAD_SLOT if slot is outside [0, SAVE_NUM_SLOTS)
  ----------------------*/
 int savegame_write(unsigned long device, int slot,
                    const unsigned char *payload, int payloadLen,
@@ -90,7 +96,8 @@ int savegame_write(unsigned long device, int slot,
  |         roomId -- receives the room; work -- staging buffer; workCap -- its
  |         capacity, at least SAVE_MAX_BYTES
  | Returns: SAT_BUP_OK, a SAT_BUP_ERR_* code, or SAVE_ERR_BAD_MAGIC /
- |          _BAD_VERSION / _BAD_PAYLOAD / _TOO_LARGE
+ |          _BAD_VERSION / _BAD_PAYLOAD / _TOO_LARGE / _BAD_SLOT if slot is
+ |          outside [0, SAVE_NUM_SLOTS)
  ----------------------*/
 int savegame_read(unsigned long device, int slot,
                   unsigned char *payload, int payloadCap, int *payloadLen,

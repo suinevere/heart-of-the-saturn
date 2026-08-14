@@ -46,13 +46,15 @@ void check_events(void);
 /*----------------------
  | input_debug_chord
  | Description: A temporary development trigger for save and load, until the
- |   save menu exists. Start plus A means save, Start plus C means load. Edge
- |   triggered, so holding the chord fires once.
+ |   save menu exists. Start plus A means save, Start plus C means load, Start
+ |   plus B means toggle the target backup device. Edge triggered, so holding
+ |   the chord fires once.
  | Author: suinevere
  | Dependencies: N/A
  | Globals: N/A
  | Params: N/A
- | Returns: 0 for nothing, 1 to save, 2 to load
+ | Returns: 0 for nothing, 1 to save, 2 to load, 3 to toggle the target
+ |          backup device
  ----------------------*/
 int input_debug_chord(void);
 

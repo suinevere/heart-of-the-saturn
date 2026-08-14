@@ -116,12 +116,13 @@ static int s_prevChord = 0;
 
 /*----------------------
  | input_debug_chord
- | Description: Reads Start plus A or Start plus C as an edge.
+ | Description: Reads Start plus A, Start plus B or Start plus C as an edge.
  | Author: suinevere
  | Dependencies: srl.hpp
  | Globals: s_prevChord
  | Params: N/A
- | Returns: 0 for nothing, 1 to save, 2 to load
+ | Returns: 0 for nothing, 1 to save, 2 to load, 3 to toggle the target
+ |          backup device
  ----------------------*/
 extern "C" int input_debug_chord(void)
 {
@@ -137,6 +138,10 @@ extern "C" int input_debug_chord(void)
 		else if (pad.IsHeld(SRL::Input::Digital::Button::C))
 		{
 			chord = 2;
+		}
+		else if (pad.IsHeld(SRL::Input::Digital::Button::B))
+		{
+			chord = 3;
 		}
 	}
 

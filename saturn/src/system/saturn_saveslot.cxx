@@ -44,6 +44,14 @@ extern "C" int saturn_saveslot_init(void)
     s_payload = (unsigned char *)saturn_lwram_alloc(SAVE_MAX_BYTES);
     s_work = (unsigned char *)saturn_lwram_alloc(SAVE_MAX_BYTES);
     if (s_payload == (unsigned char *)0 || s_work == (unsigned char *)0) {
+        if (s_payload != (unsigned char *)0) {
+            saturn_lwram_free(s_payload);
+            s_payload = (unsigned char *)0;
+        }
+        if (s_work != (unsigned char *)0) {
+            saturn_lwram_free(s_work);
+            s_work = (unsigned char *)0;
+        }
         s_ready = 0;
         return 0;
     }
@@ -60,10 +68,11 @@ extern "C" int saturn_saveslot_save(unsigned long device, int slot)
     int loop = 0;
 
     if (!s_ready) {
-        s_lastError = SAVE_ERR_TOO_LARGE;
+        s_lastError = SAVE_ERR_NO_BUFFERS;
         return s_lastError;
     }
 
+    saturn_savebuf_reset();
     quicksave();
 
     stream = saturn_savebuf_stream();
@@ -92,7 +101,7 @@ extern "C" int saturn_saveslot_load(unsigned long device, int slot)
     int rc;
 
     if (!s_ready) {
-        s_lastError = SAVE_ERR_TOO_LARGE;
+        s_lastError = SAVE_ERR_NO_BUFFERS;
         return s_lastError;
     }
 
@@ -114,6 +123,8 @@ extern "C" int saturn_saveslot_load(unsigned long device, int slot)
 
     if (track >= 0) {
         disc_play_track(track, loop);
+    } else {
+        disc_stop_track();
     }
 
     s_lastError = SAT_BUP_OK;

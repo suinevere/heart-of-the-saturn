@@ -87,6 +87,23 @@ savebuf *saturn_savebuf_stream(void)
 }
 
 /*----------------------
+ | saturn_savebuf_reset
+ | Description: Zeroes the write stream's length, position and error, so a
+ |   stale length from a previous save cannot survive a failed fopen.
+ | Author: suinevere
+ | Dependencies: savebuf.h
+ | Globals: s_saveStream
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void saturn_savebuf_reset(void)
+{
+    s_saveStream.buf.len = 0;
+    s_saveStream.buf.pos = 0;
+    s_saveStream.buf.err = 0;
+}
+
+/*----------------------
  | s_saveReadLen
  | Description: How many bytes a read stream may hand out. quickload opens for
  |   reading, and the readable length is the decompressed payload's, which only

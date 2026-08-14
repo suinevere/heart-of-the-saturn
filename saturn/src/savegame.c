@@ -44,6 +44,9 @@ int savegame_write(unsigned long device, int slot,
     int storedLen;
     unsigned char flags;
 
+    if (slot < 0 || slot >= SAVE_NUM_SLOTS) {
+        return SAVE_ERR_BAD_SLOT;
+    }
     if (payloadLen <= 0 || payloadLen > SAVE_PAYLOAD_MAX ||
         workCap < SAVE_MAX_BYTES) {
         return SAVE_ERR_TOO_LARGE;
@@ -82,6 +85,9 @@ int savegame_read(unsigned long device, int slot,
     int rc;
     int fileLen;
 
+    if (slot < 0 || slot >= SAVE_NUM_SLOTS) {
+        return SAVE_ERR_BAD_SLOT;
+    }
     if (workCap < SAVE_MAX_BYTES || payloadCap < SAVE_PAYLOAD_MAX) {
         return SAVE_ERR_TOO_LARGE;
     }

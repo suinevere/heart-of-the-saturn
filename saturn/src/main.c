@@ -722,13 +722,23 @@ static void play_intro()
 }
 
 /*----------------------
+ | s_saveDevice
+ | Description: The backup device the debug chord targets, throwaway state the
+ |   menu spec deletes along with the chord itself.
+ | Author: suinevere
+ ----------------------*/
+#ifdef HOTA_SATURN
+static unsigned long s_saveDevice = SAT_BUP_INTERNAL;
+#endif
+
+/*----------------------
  | saturn_save_poll
  | Description: Runs the development save chord, at the top of a frame and
  |   outside the task loop. Both quicksave and quickload require no active
  |   thread, which is only true here.
  | Author: suinevere
  | Dependencies: input.h, system/saturn_saveslot.h, system/saturn_backup.h
- | Globals: N/A
+ | Globals: s_saveDevice
  | Params: N/A
  | Returns: N/A
  ----------------------*/
@@ -739,11 +749,16 @@ static void saturn_save_poll(void)
 
 	if (chord == 1)
 	{
-		printf("save slot 0: %d\n", saturn_saveslot_save(SAT_BUP_INTERNAL, 0));
+		printf("save slot 0: %d\n", saturn_saveslot_save(s_saveDevice, 0));
 	}
 	else if (chord == 2)
 	{
-		printf("load slot 0: %d\n", saturn_saveslot_load(SAT_BUP_INTERNAL, 0));
+		printf("load slot 0: %d\n", saturn_saveslot_load(s_saveDevice, 0));
+	}
+	else if (chord == 3)
+	{
+		s_saveDevice = (s_saveDevice == SAT_BUP_INTERNAL) ? SAT_BUP_CART : SAT_BUP_INTERNAL;
+		printf("save device: %s\n", (s_saveDevice == SAT_BUP_CART) ? "cart" : "internal");
 	}
 }
 #endif

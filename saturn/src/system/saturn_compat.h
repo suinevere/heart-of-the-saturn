@@ -237,6 +237,18 @@ savebuf *saturn_savebuf_stream(void);
 void saturn_savebuf_set_length(int len);
 
 /*----------------------
+ | saturn_savebuf_reset
+ | Description: Zeroes the write stream's length, position and error, so a
+ |   stale length from a previous save cannot survive a failed fopen.
+ | Author: suinevere
+ | Dependencies: savebuf.h
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void saturn_savebuf_reset(void);
+
+/*----------------------
  | exit
  | Description: Halts. There is no OS to return an exit status to, so the
  |   Saturn implementation parks in a Synchronize() loop forever rather than
