@@ -10,7 +10,7 @@
 #include "stub_saturn_backup.h"
 #include "savedata.h"
 
-#define STUB_FILES 4
+#define STUB_FILES 8
 
 static struct {
     int used;
@@ -37,6 +37,15 @@ void stub_bup_reset(void)
     s_now = 0;
 }
 
+/*----------------------
+ | find
+ | Description: Locates a placed file by device and name.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: s_files
+ | Params: device -- device id; name -- BUP filename
+ | Returns: the index into s_files, or -1 when no such file is placed
+ ----------------------*/
 static int find(unsigned long device, const char *name)
 {
     int i;
@@ -53,11 +62,15 @@ void stub_bup_place(unsigned long device, const char *name,
                     const unsigned char *data, int len)
 {
     int i = find(device, name);
+
     if (i < 0) {
         for (i = 0; i < STUB_FILES; i++) {
             if (!s_files[i].used) {
                 break;
             }
+        }
+        if (i == STUB_FILES) {
+            return;
         }
     }
     s_files[i].used = 1;
