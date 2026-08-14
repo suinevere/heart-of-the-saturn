@@ -51,6 +51,27 @@ static void roundtrip(const char *what, const unsigned char *src, int srcLen)
     }
 }
 
+static void roundtrip_must_compress(const char *what, const unsigned char *src,
+                                    int srcLen)
+{
+    unsigned char enc[8192];
+    unsigned char dec[8192];
+    int encLen = saverle_encode(src, srcLen, enc, (int)sizeof(enc));
+    int decLen;
+
+    if (encLen <= 0) {
+        g_fail++;
+        printf("FAIL %s\n  actual   = encode declined (%d)\n"
+               "  expected = a compressed length\n", what, encLen);
+        return;
+    }
+    decLen = saverle_decode(enc, encLen, dec, (int)sizeof(dec));
+    expect_int(what, decLen, srcLen);
+    if (decLen == srcLen) {
+        expect_bytes(what, dec, src, srcLen);
+    }
+}
+
 static void test_all_zeros(void)
 {
     unsigned char src[4096];
@@ -85,6 +106,22 @@ static void test_alternating(void)
         src[i] = (unsigned char)(i & 1 ? 0xAA : 0x55);
     }
     roundtrip("alternating roundtrip", src, (int)sizeof(src));
+}
+
+static void test_mixed_runs_and_literals(void)
+{
+    unsigned char src[300];
+    int i;
+
+    memset(src, 0x00, sizeof(src));
+    for (i = 100; i < 110; i++) {
+        src[i] = (unsigned char)(0x40 + i);
+    }
+    for (i = 200; i < 205; i++) {
+        src[i] = (unsigned char)(0x90 + i);
+    }
+    roundtrip_must_compress("mixed runs and literals roundtrip", src,
+                            (int)sizeof(src));
 }
 
 static void test_boundary_lengths(void)
@@ -165,6 +202,7 @@ int main(void)
     test_all_zeros();
     test_no_runs();
     test_alternating();
+    test_mixed_runs_and_literals();
     test_boundary_lengths();
     test_encode_declines_on_expansion();
     test_encode_declines_on_small_dst();
