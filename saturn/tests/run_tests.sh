@@ -51,3 +51,8 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src -I../src/system \
     -o run_tests_savedata test_savedata.c stub_saturn_backup.c ../src/savedata.c
 ./run_tests_savedata
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src -I../src/system \
+    -o run_tests_savegame test_savegame.c stub_saturn_backup.c \
+       ../src/savegame.c ../src/savedata.c ../src/saverle.c
+./run_tests_savegame
