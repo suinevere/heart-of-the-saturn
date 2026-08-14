@@ -8,7 +8,7 @@ OBJS=\
 	client.o common.o vm.o      sprites.o decode.o   animation.o   \
 	rooms.o  video_sdl.o main.o debug.o    lzss.o                  \
 	sound.o  screen.o scale2x.o scale3x.o game2bin.o discfmt.o     \
-	disc_cue.o input_sdl.o platform_sdl.o
+	disc_cue.o input_sdl.o platform_sdl.o fadecalc.o
 
 LIBS=$(SDL_LIBS) -lSDL2_mixer
 
