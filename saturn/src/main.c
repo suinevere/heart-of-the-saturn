@@ -45,6 +45,8 @@
 #include "bootmenu.h"
 #ifdef HOTA_SATURN
 #include "system/saturn_bootart.h"
+#include "system/saturn_backup.h"
+#include "system/saturn_saveslot.h"
 #endif
 
 static char *VERSION = "1.2.4";
@@ -1268,6 +1270,14 @@ int main(int argc, char **argv)
 		panic("platform_init failed\n");
 	}
 	atexit(atexit_callback);
+
+#ifdef HOTA_SATURN
+	sat_bup_init();
+	if (!saturn_saveslot_init())
+	{
+		printf("saveslot: LWRAM allocation failed, saves disabled\n");
+	}
+#endif
 
 	if (!disc_open(cue_path))
 	{
