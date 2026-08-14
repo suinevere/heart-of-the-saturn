@@ -123,7 +123,7 @@ static void test_encode_declines_on_expansion(void)
 static void test_encode_declines_on_small_dst(void)
 {
     unsigned char src[256];
-    unsigned char enc[4];
+    unsigned char enc[3];
     memset(src, 0, sizeof(src));
     expect_int("dst too small declines",
                saverle_encode(src, (int)sizeof(src), enc, (int)sizeof(enc)), -1);
