@@ -120,6 +120,27 @@ static void roundtrip(const char *what, const unsigned char *src, int srcLen)
     }
 }
 
+static void roundtrip_must_compress(const char *what, const unsigned char *src,
+                                    int srcLen)
+{
+    unsigned char enc[8192];
+    unsigned char dec[8192];
+    int encLen = saverle_encode(src, srcLen, enc, (int)sizeof(enc));
+    int decLen;
+
+    if (encLen <= 0) {
+        g_fail++;
+        printf("FAIL %s\n  actual   = encode declined (%d)\n"
+               "  expected = a compressed length\n", what, encLen);
+        return;
+    }
+    decLen = saverle_decode(enc, encLen, dec, (int)sizeof(dec));
+    expect_int(what, decLen, srcLen);
+    if (decLen == srcLen) {
+        expect_bytes(what, dec, src, srcLen);
+    }
+}
+
 static void test_all_zeros(void)
 {
     unsigned char src[4096];
@@ -154,6 +175,22 @@ static void test_alternating(void)
         src[i] = (unsigned char)(i & 1 ? 0xAA : 0x55);
     }
     roundtrip("alternating roundtrip", src, (int)sizeof(src));
+}
+
+static void test_mixed_runs_and_literals(void)
+{
+    unsigned char src[300];
+    int i;
+
+    memset(src, 0x00, sizeof(src));
+    for (i = 100; i < 110; i++) {
+        src[i] = (unsigned char)(0x40 + i);
+    }
+    for (i = 200; i < 205; i++) {
+        src[i] = (unsigned char)(0x90 + i);
+    }
+    roundtrip_must_compress("mixed runs and literals roundtrip", src,
+                            (int)sizeof(src));
 }
 
 static void test_boundary_lengths(void)
@@ -192,7 +229,7 @@ static void test_encode_declines_on_expansion(void)
 static void test_encode_declines_on_small_dst(void)
 {
     unsigned char src[256];
-    unsigned char enc[4];
+    unsigned char enc[3];
     memset(src, 0, sizeof(src));
     expect_int("dst too small declines",
                saverle_encode(src, (int)sizeof(src), enc, (int)sizeof(enc)), -1);
@@ -234,6 +271,7 @@ int main(void)
     test_all_zeros();
     test_no_runs();
     test_alternating();
+    test_mixed_runs_and_literals();
     test_boundary_lengths();
     test_encode_declines_on_expansion();
     test_encode_declines_on_small_dst();
@@ -1675,7 +1713,7 @@ Create `saturn/tests/stub_saturn_backup.c`:
 #include "stub_saturn_backup.h"
 #include "savedata.h"
 
-#define STUB_FILES 4
+#define STUB_FILES 8
 
 static struct {
     int used;
@@ -1702,6 +1740,15 @@ void stub_bup_reset(void)
     s_now = 0;
 }
 
+/*----------------------
+ | find
+ | Description: Locates a placed file by device and name.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: s_files
+ | Params: device -- device id; name -- BUP filename
+ | Returns: the index into s_files, or -1 when no such file is placed
+ ----------------------*/
 static int find(unsigned long device, const char *name)
 {
     int i;
@@ -1723,6 +1770,9 @@ void stub_bup_place(unsigned long device, const char *name,
             if (!s_files[i].used) {
                 break;
             }
+        }
+        if (i == STUB_FILES) {
+            return;
         }
     }
     s_files[i].used = 1;
