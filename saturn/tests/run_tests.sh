@@ -43,3 +43,7 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src \
     -o run_tests_saverle test_saverle.c ../src/saverle.c
 ./run_tests_saverle
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_savebuf test_savebuf.c ../src/savebuf.c
+./run_tests_savebuf
