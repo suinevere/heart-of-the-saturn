@@ -39,3 +39,20 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src \
     -o run_tests_bootmenu test_bootmenu.c ../src/bootmenu.c ../src/discfmt.c
 ./run_tests_bootmenu
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_saverle test_saverle.c ../src/saverle.c
+./run_tests_saverle
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_savebuf test_savebuf.c ../src/savebuf.c
+./run_tests_savebuf
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src -I../src/system \
+    -o run_tests_savedata test_savedata.c stub_saturn_backup.c ../src/savedata.c
+./run_tests_savedata
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src -I../src/system \
+    -o run_tests_savegame test_savegame.c stub_saturn_backup.c \
+       ../src/savegame.c ../src/savedata.c ../src/saverle.c
+./run_tests_savegame

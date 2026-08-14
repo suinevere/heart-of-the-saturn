@@ -45,6 +45,8 @@
 #include "bootmenu.h"
 #ifdef HOTA_SATURN
 #include "system/saturn_bootart.h"
+#include "system/saturn_backup.h"
+#include "system/saturn_saveslot.h"
 #endif
 
 static char *VERSION = "1.2.4";
@@ -719,6 +721,48 @@ static void play_intro()
 	play_anm(anm_files, 4, 0);
 }
 
+/*----------------------
+ | s_saveDevice
+ | Description: The backup device the debug chord targets, throwaway state the
+ |   menu spec deletes along with the chord itself.
+ | Author: suinevere
+ ----------------------*/
+#ifdef HOTA_SATURN
+static unsigned long s_saveDevice = SAT_BUP_INTERNAL;
+#endif
+
+/*----------------------
+ | saturn_save_poll
+ | Description: Runs the development save chord, at the top of a frame and
+ |   outside the task loop. Both quicksave and quickload require no active
+ |   thread, which is only true here.
+ | Author: suinevere
+ | Dependencies: input.h, system/saturn_saveslot.h, system/saturn_backup.h
+ | Globals: s_saveDevice
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#ifdef HOTA_SATURN
+static void saturn_save_poll(void)
+{
+	int chord = input_debug_chord();
+
+	if (chord == 1)
+	{
+		printf("save slot 0: %d\n", saturn_saveslot_save(s_saveDevice, 0));
+	}
+	else if (chord == 2)
+	{
+		printf("load slot 0: %d\n", saturn_saveslot_load(s_saveDevice, 0));
+	}
+	else if (chord == 3)
+	{
+		s_saveDevice = (s_saveDevice == SAT_BUP_INTERNAL) ? SAT_BUP_CART : SAT_BUP_INTERNAL;
+		printf("save device: %s\n", (s_saveDevice == SAT_BUP_CART) ? "cart" : "internal");
+	}
+}
+#endif
+
 /** Main game loop
 
     This is where all the magic happens!
@@ -754,6 +798,10 @@ static void run()
 		}
 
 		check_events();
+
+#ifdef HOTA_SATURN
+		saturn_save_poll();
+#endif
 
 		if (replay_flag)
 		{
@@ -1268,6 +1316,14 @@ int main(int argc, char **argv)
 		panic("platform_init failed\n");
 	}
 	atexit(atexit_callback);
+
+#ifdef HOTA_SATURN
+	sat_bup_init();
+	if (!saturn_saveslot_init())
+	{
+		printf("saveslot: LWRAM allocation failed, saves disabled\n");
+	}
+#endif
 
 	if (!disc_open(cue_path))
 	{

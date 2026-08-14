@@ -20,13 +20,14 @@
  |   saturn_compat.cxx onto SRL; the file and directory stubs in
  |   saturn_filestub.c.
  | Author: suinevere
- | Dependencies: stddef.h, stdarg.h, string.h, stdlib.h
+ | Dependencies: stddef.h, stdarg.h, string.h, stdlib.h, savebuf.h
  ----------------------*/
 #ifndef SATURN_COMPAT_H
 #define SATURN_COMPAT_H
 
 #include <stddef.h>
 #include <stdarg.h>
+#include "savebuf.h"
 
 /*----------------------
  | <string.h> / <stdlib.h> pull-in
@@ -195,6 +196,57 @@ void  *realloc(void *ptr, size_t size);
  ----------------------*/
 void *saturn_lwram_alloc(unsigned long size);
 void  saturn_lwram_free(void *p);
+
+/*----------------------
+ | saturn_savebuf_bind
+ | Description: Installs the storage fopen will wrap, and whether the next
+ |   open is for writing.
+ | Author: suinevere
+ | Dependencies: savebuf.h
+ | Globals: N/A
+ | Params: data -- storage, in LWRAM; cap -- its capacity
+ | Returns: N/A
+ ----------------------*/
+void saturn_savebuf_bind(unsigned char *data, int cap);
+
+/*----------------------
+ | saturn_savebuf_stream
+ | Description: The buffer behind the last stream, so a caller can read back
+ |   how many bytes quicksave wrote, or whether an overflow was refused.
+ | Author: suinevere
+ | Dependencies: savebuf.h
+ | Globals: N/A
+ | Params: N/A
+ | Returns: the buffer, always non-NULL
+ ----------------------*/
+savebuf *saturn_savebuf_stream(void);
+
+/*----------------------
+ | saturn_savebuf_set_length
+ | Description: Declares the readable length for the next stream opened for
+ |   reading. quickload opens for reading, and the readable length is the
+ |   decompressed payload's, which only the caller knows. fopen clamps this to
+ |   the bound storage's capacity, so a length longer than the buffer cannot
+ |   make fgetc read past its end.
+ | Author: suinevere
+ | Dependencies: savebuf.h
+ | Globals: N/A
+ | Params: len -- readable length
+ | Returns: N/A
+ ----------------------*/
+void saturn_savebuf_set_length(int len);
+
+/*----------------------
+ | saturn_savebuf_reset
+ | Description: Zeroes the write stream's length, position and error, so a
+ |   stale length from a previous save cannot survive a failed fopen.
+ | Author: suinevere
+ | Dependencies: savebuf.h
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void saturn_savebuf_reset(void);
 
 /*----------------------
  | exit

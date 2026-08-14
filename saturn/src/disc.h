@@ -141,6 +141,20 @@ void disc_play_track(int engine_index, int loop);
 void disc_stop_track(void);
 
 /*----------------------
+ | disc_current_track
+ | Description: Which music track is playing, for a save's Saturn trailer. Not
+ |   a playback query: it reports what disc_play_track was last asked for and
+ |   disc_stop_track last cleared, which is the state a load must restore, not
+ |   whatever the drive is doing this instant.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: loop -- receives the loop flag, or NULL if the caller does not want it
+ | Returns: the engine music index, or -1 when nothing is playing
+ ----------------------*/
+int disc_current_track(int *loop);
+
+/*----------------------
  | disc_set_music_volume
  | Description: Sets CD-DA output level, 0 for silence up to 7 for full.
  |   Exists so the boot sequence can fade the title music out before the
