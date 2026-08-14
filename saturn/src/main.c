@@ -721,6 +721,33 @@ static void play_intro()
 	play_anm(anm_files, 4, 0);
 }
 
+/*----------------------
+ | saturn_save_poll
+ | Description: Runs the development save chord, at the top of a frame and
+ |   outside the task loop. Both quicksave and quickload require no active
+ |   thread, which is only true here.
+ | Author: suinevere
+ | Dependencies: input.h, system/saturn_saveslot.h, system/saturn_backup.h
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#ifdef HOTA_SATURN
+static void saturn_save_poll(void)
+{
+	int chord = input_debug_chord();
+
+	if (chord == 1)
+	{
+		printf("save slot 0: %d\n", saturn_saveslot_save(SAT_BUP_INTERNAL, 0));
+	}
+	else if (chord == 2)
+	{
+		printf("load slot 0: %d\n", saturn_saveslot_load(SAT_BUP_INTERNAL, 0));
+	}
+}
+#endif
+
 /** Main game loop
 
     This is where all the magic happens!
@@ -756,6 +783,10 @@ static void run()
 		}
 
 		check_events();
+
+#ifdef HOTA_SATURN
+		saturn_save_poll();
+#endif
 
 		if (replay_flag)
 		{

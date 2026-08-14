@@ -43,6 +43,19 @@ extern int key_reset_record;
  ----------------------*/
 void check_events(void);
 
+/*----------------------
+ | input_debug_chord
+ | Description: A temporary development trigger for save and load, until the
+ |   save menu exists. Start plus A means save, Start plus C means load. Edge
+ |   triggered, so holding the chord fires once.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: 0 for nothing, 1 to save, 2 to load
+ ----------------------*/
+int input_debug_chord(void);
+
 #ifdef __cplusplus
 }
 #endif
