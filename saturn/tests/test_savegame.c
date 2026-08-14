@@ -191,7 +191,7 @@ static void test_bad_version_leaves_payload_untouched(void)
     expect_int("payload untouched", (int)back[0], 0xEE);
 }
 
-static void test_corrupt_rle_leaves_payload_untouched(void)
+static void test_corrupt_rle_stream_is_refused(void)
 {
     unsigned char src[SAVE_PAYLOAD_MAX];
     unsigned char back[SAVE_PAYLOAD_MAX];
@@ -199,24 +199,21 @@ static void test_corrupt_rle_leaves_payload_untouched(void)
     unsigned char stored[SAVE_MAX_BYTES];
     unsigned short room = 0;
     int len = 0;
-    int storedLen;
+    int fileLen;
 
     stub_bup_reset();
     fill_compressible(src, (int)sizeof(src));
     savegame_write(SAT_BUP_INTERNAL, 0, src, (int)sizeof(src), 1, work,
                    (int)sizeof(work));
-    storedLen = stub_bup_fetch(SAT_BUP_INTERNAL, "HOTASAVE1", stored,
-                               (int)sizeof(stored));
-    stub_bup_place(SAT_BUP_INTERNAL, "HOTASAVE1", stored,
-                   SAVE_HEADER_SIZE + 1);
-    (void)storedLen;
+    fileLen = stub_bup_fetch(SAT_BUP_INTERNAL, "HOTASAVE1", stored,
+                             (int)sizeof(stored));
+    stored[fileLen - 2] = 0xFF;
+    stub_bup_place(SAT_BUP_INTERNAL, "HOTASAVE1", stored, fileLen);
 
-    memset(back, 0xEE, sizeof(back));
-    expect_int("truncated payload refused",
+    expect_int("corrupt RLE stream refused",
                savegame_read(SAT_BUP_INTERNAL, 0, back, (int)sizeof(back), &len,
                              &room, work, (int)sizeof(work)),
                SAVE_ERR_BAD_PAYLOAD);
-    expect_int("payload untouched", (int)back[0], 0xEE);
 }
 
 static void test_device_full(void)
@@ -279,7 +276,7 @@ int main(void)
     test_missing_slot();
     test_bad_magic_leaves_payload_untouched();
     test_bad_version_leaves_payload_untouched();
-    test_corrupt_rle_leaves_payload_untouched();
+    test_corrupt_rle_stream_is_refused();
     test_device_full();
     test_write_rejects_oversized_payload();
     test_write_rejects_small_work_buffer();

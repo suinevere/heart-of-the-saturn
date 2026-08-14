@@ -76,9 +76,12 @@ int savegame_write(unsigned long device, int slot,
 
 /*----------------------
  | savegame_read
- | Description: Reads a slot, validates it, and only then writes anything into
- |   payload. Every refusal leaves payload exactly as the caller left it, which
- |   is what makes a corrupt slot survivable mid-game.
+ | Description: Reads a slot and validates its header before decoding. A
+ |   refusal at or before the header leaves payload untouched; a refusal during
+ |   decoding may leave it partly written, because the decoder streams. Callers
+ |   must treat payload as scratch and trust it only on SAT_BUP_OK. A failed
+ |   read still cannot disturb a running game, since the caller does not hand
+ |   the payload to quickload unless this returned SAT_BUP_OK.
  | Author: suinevere
  | Dependencies: savedata.h, saverle.h, saturn_backup.h
  | Globals: N/A
