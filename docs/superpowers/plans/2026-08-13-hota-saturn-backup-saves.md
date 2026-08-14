@@ -21,6 +21,18 @@
 - **New bulk buffers go in LWRAM** via `saturn_lwram_alloc` (`saturn_compat.h:196`), never HWRAM BSS. HWRAM is 770,048 bytes against 1,882,592 of measured `.bss`; the boot sequence already missed SDDRVS.TSK by 366 bytes, silently.
 - **`SAVE_MAX_BYTES` is defined exactly once**, in `savedata.h`. The reference repo declared it twice with different values; do not repeat that.
 
+## Task order
+
+**Execute in the order 1, 2, 3, 4, 6, 5, 7, 8.** Tasks 5 and 6 are deliberately
+swapped relative to their numbering. The Saturn makefile globs `src/**/*.c`, so
+`savedata.c` is compiled from Task 3 onward and its calls to `sat_bup_dir` and
+`sat_bup_read` are unresolved until Task 6 supplies `saturn_backup.cxx`. Between
+Task 3 and Task 6 the Saturn build compiles but cannot link, so Task 6 must run
+before any build gate is meaningful. Task 6 consumes only `savedata.h` (Task 3)
+and `savebuf` (Task 2), so running it early blocks nothing.
+
+Task 4's build check is therefore deferred to Task 6.
+
 ## File Structure
 
 | File | Responsibility | Reached by tests |
