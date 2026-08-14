@@ -129,7 +129,7 @@ extern "C" int input_debug_chord(void)
 	SRL::Input::Digital pad(0);
 	int chord = 0;
 
-	if (pad.IsConnected() && pad.IsHeld(SRL::Input::Digital::Button::Start))
+	if (pad.IsConnected() && pad.IsHeld(SRL::Input::Digital::Button::START))
 	{
 		if (pad.IsHeld(SRL::Input::Digital::Button::A))
 		{
