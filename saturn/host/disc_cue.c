@@ -91,6 +91,15 @@ static long disc_music_start = 0;
 static int disc_music_eof = 0;
 
 /*----------------------
+ | disc_music_track
+ | Description: The engine music index behind the currently hooked track, so
+ |   disc_current_track can report what a save must restart. -1 whenever
+ |   nothing is hooked, matching disc_music_fp being NULL.
+ | Author: suinevere
+ ----------------------*/
+static int disc_music_track = -1;
+
+/*----------------------
  | disc_manifest_entry_t / disc_manifest
  | Description: The 19 blobs the engine reads, demoted from the old deleted
  |   iso-loader's lookup table to an integrity check. Every {name, lba,
@@ -633,6 +642,7 @@ void disc_play_track(int engine_index, int loop)
 
     disc_music_fp = fp;
     disc_music_loop = loop;
+    disc_music_track = engine_index;
     disc_music_start = pregap;
     disc_music_eof = 0;
     Mix_HookMusic(disc_music_callback, NULL);
@@ -688,9 +698,28 @@ void disc_stop_track(void)
     {
         fclose(disc_music_fp);
         disc_music_fp = NULL;
+        disc_music_track = -1;
     }
 
     disc_music_eof = 0;
+}
+
+/*----------------------
+ | disc_current_track
+ | Description: Reads back the track disc_play_track last hooked.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: disc_music_track, disc_music_loop
+ | Params: loop -- receives the loop flag, or NULL
+ | Returns: the engine music index, or -1 when nothing is playing
+ ----------------------*/
+int disc_current_track(int *loop)
+{
+    if (loop != NULL)
+    {
+        *loop = disc_music_loop;
+    }
+    return disc_music_track;
 }
 
 /*----------------------

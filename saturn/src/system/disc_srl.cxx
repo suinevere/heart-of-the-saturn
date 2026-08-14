@@ -1072,6 +1072,24 @@ void disc_stop_track(void)
 }
 
 /*----------------------
+ | disc_current_track
+ | Description: Reads back the track disc_play_track last accepted.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: g_musicTrack, g_musicLoop
+ | Params: loop -- receives the loop flag, or NULL
+ | Returns: the engine music index, or -1 when nothing is playing
+ ----------------------*/
+int disc_current_track(int *loop)
+{
+	if (loop != NULL)
+	{
+		*loop = g_musicLoop;
+	}
+	return g_musicTrack;
+}
+
+/*----------------------
  | disc_set_music_volume
  | Description: Forwards to the SCSP's CD-DA level register through SRL.
  |   Clamped rather than asserted: a caller computing a fade has no business
