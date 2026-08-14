@@ -1,0 +1,234 @@
+/*----------------------
+ | saturn_backup.cxx
+ | Description: The Saturn side of saturn_backup.h, over SGL's BUP vector
+ |   table and SRL's RTC. The only file in the port that includes sega_bup.h.
+ | Author: suinevere
+ | Dependencies: srl.hpp, sega_bup.h, saturn_backup.h, savedata.h
+ | Globals: s_bupWork, s_bupCfg
+ ----------------------*/
+#include <srl.hpp>
+#include "sega_bup.h"
+#include "saturn_backup.h"
+#include "savedata.h"
+
+extern "C" {
+#include <string.h>
+}
+
+/*----------------------
+ | s_bupWork
+ | Description: Work area the BIOS backup library needs. A plain static, which
+ |   SH-2 GCC places in High Work RAM's BSS -- the right side of the bus for
+ |   memory the BIOS writes through on its own schedule, unlike the save
+ |   staging buffers, which are bulk blobs and live in LWRAM. Sized as the
+ |   reference port ships it; shrink only against the link map.
+ | Author: suinevere
+ ----------------------*/
+static uint32_t s_bupWork[0x1000];
+
+/*----------------------
+ | s_bupCfg
+ | Description: BUP_Init fills one config per device. Kept alive for the
+ |   lifetime of the program because the library retains the pointer.
+ | Author: suinevere
+ ----------------------*/
+static BupConfig s_bupCfg[3];
+
+/*----------------------
+ | sat_bup_map_error
+ | Description: Translates a raw BUP return code into this file's
+ |   device-agnostic codes. sega_bup.h defines no BUP_OK constant -- success is
+ |   the literal 0 -- so 0 is the only value that may map to SAT_BUP_OK.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: rc -- BUP_* return code, or 0 for success
+ | Returns: a SAT_BUP_* code
+ ----------------------*/
+static int sat_bup_map_error(int32_t rc)
+{
+    switch (rc) {
+    case 0:                     return SAT_BUP_OK;
+    case BUP_NON:               return SAT_BUP_ERR_NONE;
+    case BUP_UNFORMAT:          return SAT_BUP_ERR_UNFORMAT;
+    case BUP_WRITE_PROTECT:     return SAT_BUP_ERR_PROTECTED;
+    case BUP_NOT_ENOUGH_MEMORY: return SAT_BUP_ERR_NO_SPACE;
+    case BUP_NOT_FOUND:         return SAT_BUP_ERR_NOT_FOUND;
+    case BUP_FOUND:             return SAT_BUP_ERR_EXISTS;
+    case BUP_NO_MATCH:          return SAT_BUP_ERR_BROKEN;
+    case BUP_BROKEN:            return SAT_BUP_ERR_BROKEN;
+    default:                    return SAT_BUP_ERR_BROKEN;
+    }
+}
+
+/*----------------------
+ | sat_bup_init
+ | Description: Brings up the BIOS backup library.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: s_bupWork, s_bupCfg
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+extern "C" void sat_bup_init(void)
+{
+    BUP_Init((uint32_t *)BUP_LIB_ADDRESS, s_bupWork, s_bupCfg);
+}
+
+/*----------------------
+ | sat_bup_probe
+ | Description: Reports whether a device is present, formatted, writable, and
+ |   how much room it has left.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: device -- SAT_BUP_INTERNAL or SAT_BUP_CART; out -- filled in
+ | Returns: SAT_BUP_OK, or an error code with out zeroed
+ ----------------------*/
+extern "C" int sat_bup_probe(unsigned long device, SatBupDev *out)
+{
+    BupStat st;
+    memset(out, 0, sizeof(*out));
+
+    int32_t rc = BUP_Stat((uint32_t)device, SAVE_MAX_BYTES, &st);
+    if (rc == BUP_NON) {
+        return SAT_BUP_ERR_NONE;
+    }
+    out->present = 1;
+    if (rc == BUP_UNFORMAT) {
+        return SAT_BUP_ERR_UNFORMAT;
+    }
+    out->formatted = 1;
+    if (rc == BUP_WRITE_PROTECT) {
+        out->writeProtected = 1;
+        return SAT_BUP_ERR_PROTECTED;
+    }
+    out->freeBytes = st.freesize;
+    return SAT_BUP_OK;
+}
+
+/*----------------------
+ | sat_bup_dir
+ | Description: Looks a save up by name without reading its contents.
+ |   BUP_Dir is the one call in this file that returns a match count rather
+ |   than a status: negative is a real error, 0 is a clean not-found, and any
+ |   positive count means out was filled in.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: device -- device id; name -- BUP filename; out -- filled in
+ | Returns: SAT_BUP_OK whether or not the file exists; check out->exists. An
+ |   error code means the lookup itself failed, and out is left zeroed.
+ ----------------------*/
+extern "C" int sat_bup_dir(unsigned long device, const char *name, SatBupEntry *out)
+{
+    BupDir dir;
+    memset(out, 0, sizeof(*out));
+    memset(&dir, 0, sizeof(dir));
+
+    int32_t rc = BUP_Dir((uint32_t)device, (uint8_t *)name, 1, &dir);
+    if (rc < 0) {
+        return sat_bup_map_error(rc);
+    }
+    if (rc == 0) {
+        return SAT_BUP_OK;
+    }
+    out->exists = 1;
+    out->size = dir.datasize;
+    out->date = dir.date;
+    return SAT_BUP_OK;
+}
+
+/*----------------------
+ | sat_bup_read
+ | Description: Reads a whole save into dst. BUP_Read itself has no
+ |   destination-capacity argument, so the size check happens up front via a
+ |   BUP_Dir lookup: if the stored file is bigger than dst, the read is
+ |   refused before BUP_Read ever runs.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: device -- device id; name -- BUP filename; dst -- destination;
+ |   size -- capacity of dst
+ | Returns: SAT_BUP_OK, or a mapped error, or SAT_BUP_ERR_BROKEN if the stored
+ |   file is larger than size
+ ----------------------*/
+extern "C" int sat_bup_read(unsigned long device, const char *name, void *dst,
+                            long size)
+{
+    BupDir dir;
+    memset(&dir, 0, sizeof(dir));
+
+    int32_t dirRc = BUP_Dir((uint32_t)device, (uint8_t *)name, 1, &dir);
+    if (dirRc < 0) {
+        return sat_bup_map_error(dirRc);
+    }
+    if (dirRc == 0) {
+        return SAT_BUP_ERR_NOT_FOUND;
+    }
+    if (dir.datasize > (uint32_t)size) {
+        return SAT_BUP_ERR_BROKEN;
+    }
+
+    int32_t rc = BUP_Read((uint32_t)device, (uint8_t *)name, (uint8_t *)dst);
+    return sat_bup_map_error(rc);
+}
+
+/*----------------------
+ | sat_bup_write
+ | Description: Writes a save, stamping it with the current RTC time.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: device -- device id; name -- BUP filename; comment -- up to 10
+ |   characters; src -- the bytes; size -- how many; overwrite -- non-zero to
+ |   replace an existing file
+ | Returns: SAT_BUP_OK, or a mapped error
+ ----------------------*/
+extern "C" int sat_bup_write(unsigned long device, const char *name,
+                             const char *comment, const void *src,
+                             long size, int overwrite)
+{
+    BupDir dir;
+    memset(&dir, 0, sizeof(dir));
+    strncpy((char *)dir.filename, name, 11);
+    strncpy((char *)dir.comment, comment, 10);
+    dir.language = BUP_ENGLISH;
+    dir.date = sat_bup_date_now();
+    dir.datasize = (uint32_t)size;
+    dir.blocksize = 0;
+
+    int32_t rc = BUP_Write((uint32_t)device, &dir, (uint8_t *)src,
+                           overwrite ? 1 : 0);
+    return sat_bup_map_error(rc);
+}
+
+/*----------------------
+ | sat_bup_delete
+ | Description: Removes a save.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: device -- device id; name -- BUP filename
+ | Returns: SAT_BUP_OK, or a mapped error
+ ----------------------*/
+extern "C" int sat_bup_delete(unsigned long device, const char *name)
+{
+    return sat_bup_map_error(BUP_Delete((uint32_t)device, (uint8_t *)name));
+}
+
+/*----------------------
+ | sat_bup_date_now
+ | Description: The current RTC time as a BUP date word.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: the packed word
+ ----------------------*/
+extern "C" unsigned long sat_bup_date_now(void)
+{
+    SRL::Types::DateTime now = SRL::Types::DateTime::Now();
+    BupDate d = now.ToBackupUnitDate();
+    return BUP_SetDate(&d);
+}
