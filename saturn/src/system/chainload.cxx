@@ -14,6 +14,7 @@ extern "C" {
 #include "discsec.h"
 #include "fadecalc.h"
 #include "saturn_bootart.h"
+#include "saturn_compat.h"
 #include "sound.h"
 #include "video.h"
 }
@@ -97,7 +98,17 @@ typedef void (*chainload_fn)(const void *src, void *dst,
  ----------------------*/
 static void chainload_restore(void)
 {
-	boot_art_fade(FADECALC_LEVEL_NORMAL);
+	/* DIAGNOSTIC BUILD ONLY -- revert to the two-line restore below once the
+	   failing gate is known. boot_art_load hides NBG0, which is the layer
+	   SRL::Debug::Print (and so printf, via saturn_compat.cxx's diag_write)
+	   draws on, so a chainload failure would otherwise print its reason onto a
+	   hidden layer behind faded-out sprites. Releasing the art puts NBG0 back
+	   and makes the reason readable, at the cost of the menu art.
+
+	   boot_art_fade(FADECALC_LEVEL_NORMAL);
+	   video_set_fade(FADECALC_LEVEL_NORMAL); */
+	boot_art_release();
+	boot_art_present();
 	video_set_fade(FADECALC_LEVEL_NORMAL);
 }
 
@@ -150,17 +161,22 @@ void chainload_run(void)
 
 	if (!image.Exists())
 	{
+		printf("chainload: 1 open failed\n");
 		chainload_restore();
 		return;
 	}
 
 	int bytes = (int)image.Size.Bytes;
 
+	printf("chainload: b%d s%d ss%d\n",
+		(int)image.Size.Bytes, (int)image.Size.Sectors, (int)image.Size.SectorSize);
+
 	if (bytes <= 0 ||
 		(unsigned long)bytes > CHAINLOAD_MAX_BYTES ||
 		image.Size.SectorSize <= 0 ||
 		image.Size.SectorSize > DISC_MAX_SECTOR_BYTES)
 	{
+		printf("chainload: 2 bad size\n");
 		chainload_restore();
 		return;
 	}
@@ -173,6 +189,7 @@ void chainload_run(void)
 
 	if (staged == 0)
 	{
+		printf("chainload: 3 no LWRAM for %d\n", (int)staging);
 		chainload_restore();
 		return;
 	}
@@ -181,6 +198,7 @@ void chainload_run(void)
 
 	if (tramp == 0)
 	{
+		printf("chainload: 4 no LWRAM for trampoline\n");
 		SRL::Memory::LowWorkRam::Free(staged);
 		chainload_restore();
 		return;
@@ -189,13 +207,18 @@ void chainload_run(void)
 	video_set_fade(0);
 	disc_stop_track();
 
-	if (image.LoadBytes(0, bytes, staged) != bytes)
+	int loaded = image.LoadBytes(0, bytes, staged);
+
+	if (loaded != bytes)
 	{
+		printf("chainload: 5 read %d of %d\n", loaded, bytes);
 		SRL::Memory::LowWorkRam::Free(tramp);
 		SRL::Memory::LowWorkRam::Free(staged);
 		chainload_restore();
 		return;
 	}
+
+	printf("chainload: staged, jumping\n");
 
 	for (unsigned int i = 0; i < sizeof(g_trampoline) / sizeof(g_trampoline[0]); i++)
 	{
