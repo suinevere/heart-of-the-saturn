@@ -168,7 +168,10 @@ the screen shows `IN USE`. This is reachable only from "shortcut is NONE, player
 button a core row owns", and the fix available to the player is obvious: give the shortcut
 a free button, or move the core row first.
 
-The three core rows can never hold `PAD_NONE`; only the shortcut row can.
+The three core rows can never hold `PAD_NONE`; only the shortcut row can — and since a
+capture can only ever produce a button, **Left on the shortcut row is what clears it back
+to `NONE`.** `keymap_assign` accepts `PAD_NONE` for that row alone and rejects it for the
+other three, so the "no core row unbound" rule holds on this path too.
 
 #### The stored entry
 
@@ -251,8 +254,13 @@ as cursor movement even inside capture mode.
 
 ### `menu_layout.c` — the rows
 
-A `MENU_PANEL_CONTROLS` id beside the three existing ones, with the slot panel's geometry
-(24..295) since the rows are narrower than a slot row. Each row is a label glyph run plus
+**No new panel.** `CONTROLS` draws on `MENU_PANEL_SLOTS`. A fourth panel id would cost a
+new art asset, a `disc_manifest.h` entry, an art-tool run and a bump to
+`MENU_ART_PANEL_COUNT` and `g_panel[]` in `saturn_menuart.cxx` — all to obtain geometry
+identical to the slots panel's, since the rows are narrower than a slot row. Reusing it
+means the art layer needs no change at all for this feature.
+
+Each row is a label glyph run plus
 a binding name right-aligned: `A` … `Z`, `L`, `R`, or `NONE`; `PRESS BUTTON` in place of
 the name on the row being captured.
 
