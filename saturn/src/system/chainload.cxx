@@ -141,6 +141,12 @@ static void chainload_restore(void)
 int chainload_available(void)
 {
 	SRL::Cd::File image(CHAINLOAD_IMAGE);
+
+	/* DIAGNOSTIC BUILD ONLY. 100 separates "the menu was reached and
+	   chainload_run was never called" from "this state was saved before any of
+	   it ran", which a slot left at its initial 0 cannot distinguish. */
+	g_chainDiag[1] = 100u;
+
 	return image.Exists() ? 1 : 0;
 }
 
