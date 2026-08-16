@@ -84,6 +84,50 @@ escaped because `part1_clean` deletes it before each count. Both are excluded by
 in both halves of the polyglot. The same miscount also defeated the already-installed
 guard at the top of that script, so every build was re-extracting the whole rip.
 
+## Mednafen save states ARE readable — the earlier note was wrong
+
+`mcs/*.mc?` is **gzip**. `gzip.decompress` gives an `MDFNSVST` blob: 32-byte header, a
+302x240x3 RGB preview, then sections of `char name[32]` + `uint32 size` + entries of
+`uint8 namelen` + name + `uint32 size` + data. `MAIN/WorkRAMH` and `MAIN/WorkRAML` are flat
+1 MB each and **byte-swapped** (`b[i^1]`); `SH2-M`/`SH2-S` carry `PC`, `R` (r0-r15) and
+`CtrlRegs` = SR, GBR, VBR; `SMPC` carries `SlaveSH2On`. The previous session's byte-search
+hit `CDB/Buffers->Data`, the CD block's buffer, which is why matches looked non-linear.
+This channel answers everything the on-screen diagnostics were being built to answer —
+use it before adding another printf. Parser: see this session's scratchpad, ~40 lines.
+
+## What the states proved
+
+- HWRAM at `0x06004000` is a **100.0000% byte match for Part I's image**. The staging, the
+  trampoline and the jump are all correct and always were.
+- Part I's `PreLoader`, its constructors and `SGL_Start` all run: `GBR = 0x060ffc00` and
+  `SR = 0x000000f0` are exactly what `SGL_Start` sets.
+- The master then sits at `PC = 0x06000956`, which is `ldc r0,sr; bf -2` at `0x0600094e` —
+  the BIOS hang stub wired to vectors 4, 6, 9 and 10 (illegal instruction, slot illegal,
+  CPU address error, DMA address error). The stacked frame at `R15` gives faulting
+  `PC = 0x06000348`, which holds `0xffff`. Part I took a CPU exception.
+
+## The cause: the slave processor was never actually halted
+
+`SMPC/SlaveSH2On` reads `01` in **every** state, before and after the jump, across four
+runs; the slave PC walks from `0x06025bba` to `0x0602613a`, straight through the copy.
+
+`slSlaveOffWait()` is `slRequestCommand(SMPC_SSHOFF, SMPC_WAIT)`, and `_slRequestCommand`
+opens with a semaphore acquire and `cmp/eq #0,r0; bf` to its exit — it returns -1 having
+done nothing when it cannot have it, and SGL reads the pads through that same SMPC port
+every frame. A fifth silent failure, same shape as the four below.
+
+Two things settle that leaving it halted is correct: `slInitSystem` only ever requests
+commands 11, 13 and 14, never 1 (`SSHON`), so SGL assumes the boot left the slave running
+and never starts it; and Part I references the slave nowhere. Also note the BIOS slave
+entry at `0x06000250` held `0x06014450`, inside the overwritten window, so restarting it
+would have been worse than leaving it down.
+
+`9952568` replaces the call with `chainload_slave_off`, which writes `SMPC_COMREG`
+(`0x2010001f`) directly with the documented `SF` (`0x20100063`) handshake, bounds both
+waits, and **returns a result the caller checks** — a refusal now returns to the menu
+rather than jumping into a guaranteed crash. It runs before `GFS_Reset` so that return is
+still safe.
+
 ## Four traps that all failed silently
 
 - **`sound_done()` is declared but not linked.** `makefile:103` filters `src/sound.c` out of
@@ -104,10 +148,11 @@ guard at the top of that script, so every build was re-extracting the whole rip.
 
 ## Do not read Mednafen save states by byte-searching
 
-Tried and refuted. Every probe into our own `0.bin` matches for exactly 2048 bytes at
-non-linear offsets — the states compress memory blocks, so a `find` hits incidental raw
-fragments, not RAM. A magic word read out of one is meaningless, and `stage=0` read that way
-was an artefact. The on-screen hold exists because this channel does not work.
+**Stale — the conclusion drawn here was wrong. See "Mednafen save states ARE readable"
+above.** Byte-searching a state does fail, and the 2048-byte non-linear matches were real,
+but they were the CD block's sector buffer, not evidence that the states are unreadable.
+Parse the container instead. The diagnostic scaffolding this section was used to justify
+cost several rebuild-and-run cycles that one parser would have replaced.
 
 ## Blocking, before any of the above can be re-run end to end
 
