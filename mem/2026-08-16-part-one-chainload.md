@@ -1,274 +1,120 @@
 ---
 name: 2026-08-16-part-one-chainload
-description: Part I chain-load shipped on port/subtitle-and-save-menus and failing on hardware at or after the quiesce; staging is proven good, a diagnostic build holds the failing stage on screen, and Another-Saturn must be tagged before fetch.sh resolves at all.
+description: The boot menu's Part I chain-load, working on hardware. What broke it was machine state below the entry point that the copy cannot reach, fixed on both sides; how to read a Mednafen save state, which is the tool that found all of it.
 metadata:
   type: project
 ---
 
 The boot menu's *OUT OF THIS WORLD* entry chain-loads Another-Saturn's program over ours.
-Implemented, reviewed and squashed on **`port/subtitle-and-save-menus`**; **not working on
-hardware**. Read the documents rather than re-deriving them:
+**Working on hardware.** Read the documents rather than re-deriving them:
 
-- Spec, including the amendment that replaced building Part I with downloading it:
-  `docs/superpowers/specs/2026-08-16-hota-saturn-part-one-chainload-design.md`
+- Spec: `docs/superpowers/specs/2026-08-16-hota-saturn-part-one-chainload-design.md`
 - Plan: `docs/superpowers/plans/2026-08-16-hota-saturn-part-one-chainload.md`
-- Execution ledger — every ruling, every deferred minor, both fix waves:
-  `.superpowers/sdd/2026-08-16-hota-saturn-part-one-chainload/progress.md` (gitignored)
-- Per-task reports incl. the hand-back symptom→cause table: same directory, `task-4-report.md`
-- Feature squashed to `3813cee`; `origin/main` still holds the 18 individual commits.
+- Execution ledger: `.superpowers/sdd/2026-08-16-hota-saturn-part-one-chainload/progress.md` (gitignored)
 
-## Where it actually is
+## What the chain-load does
 
-Staging is **proven good on hardware**. The last run reached the `staged, jumping` print,
-and the diagnostics read `bytes 216856`, `s106`, `ss2048` — file, download, sector rounding
-and `LoadBytes` are all correct. The failure is in the six quiesce statements or the jump.
+`chainload_run` (`saturn/src/system/chainload.cxx`) stages `ANOTHER.BIN` into Low Work RAM,
+copies it over ourselves at `0x06004000` through the uncached mirror using a hand-encoded
+trampoline that runs from LWRAM, and jumps. None of that was ever wrong. Every failure in
+this feature came from **machine state the copy cannot reach**, and there is exactly one
+place it lives: `0x06000000`-`0x06004000`, the BIOS work area below the entry point.
 
-`chainload_run` records progress in `g_chainDiag[6]` behind magic `0x5a17c0de`, and
-`chainload_hold()` now parks that on screen for ten seconds on **every** exit path.
-Stage numbers: 1 opened, 2 sized, 3 allocating, 4 trampoline alloc, 5 about to read,
-6 read returned, 7 quiescing, 8 about to jump, 100 menu reached but `chainload_run`
-never entered.
+`smpsys.c` — the IP, in `SaturnRingLib/modules/sgl/IP/` — is the authority on what a program
+at `0x06004000` may assume. It is worth reading before touching this.
 
-**Stage 7 vs 8 is the whole question.** 7 means a quiesce call hangs; 8 means the
-trampoline or the jump is at fault. The six quiesce statements were written independent
-and consecutive precisely so they can be removed one at a time — do that, do not rewrite
-the function.
+## The four things that were actually wrong
 
-**Superseded, 2026-08-16.** The hold could never answer that: it was placed *after* the
-quiesce, and its `boot_art_present` is `SRL::Core::Synchronize`, a wait on a vblank the
-quiesce has just masked at the SCU and at the SH-2 — so it hung on its first present,
-before the line that lights the screen, and the copy and the jump have never once run.
-`4076770` replaces it with a `printf`, which `SRL::Debug::Print` puts straight into VDP2
-VRAM and needs no vblank. **`chainload_hold` may only be called while interrupts live.**
-If `quiesced, jumping` now appears and the screen stays black, the quiesce is clean and
-the fault is the trampoline or the jump.
+1. **The diagnostic hold was itself the hang.** `chainload_hold` sat after the quiesce and
+   its `boot_art_present` is `SRL::Core::Synchronize`, a wait on a vblank the quiesce had
+   just masked. The copy and the jump had never run at all. `4076770`.
+2. **The disc carried Part I's program but never its data.** `tools/another/fetch.sh`
+   excludes it by design; `tools/assets/part1/data.bat` installs `bank01`..`bank0d` and
+   `memlist.bin`, and had never been run. Part I reached `Resource::readEntries`, called
+   `error()`, and `exit(-1)`. Not reproducible from a clean checkout — a fresh clone must
+   run that step.
+3. **The slave processor never stopped.** `slSlaveOffWait` reaches `slRequestCommand`, which
+   takes a semaphore first and returns having done nothing when it cannot have it — and SGL
+   polls the pads through that same SMPC port every frame. `9952568` writes `COMREG`
+   (`0x2010001f`) directly with the `SF` (`0x20100063`) handshake and checks the result.
+4. **Interrupt hooks pointing into the overwritten window.** Two separate tables, and this
+   was the whole fight:
+   - the BIOS user-interrupt hooks at `0x06000900 + vector * 4`, cleared by `79cf69d`
+   - the FRT overflow handler, which `SRL::Timer::Init` writes **straight into the SH-2
+     vector table** at `VBR + 0x66 * 4`, so `SYS_SETUINT` never reaches it. Fixed upstream.
 
-Two things checked against the toolchain rather than assumed, so the quiesce is not the
-next suspect: SGL's own entry sets `SR` to `0xf0` itself (`SGL_Start`, `LIBSGL.A` section
-`SLSTART`), so masking to level 15 is the state it expects; and `slInitSystem` writes the
-SCU mask from its own `_IntPrioMask` table and drops `SR` back at the end, so
-`SYS_SETSCUIM(0xffffffff)` is recoverable.
+   Masking interrupts before the jump does not cover either: **Part I lifts the mask itself**,
+   inside `slInitSystem`, and only re-hooks afterwards.
 
-`quiesced, jumping` then printed on hardware, so the whole of `chainload_run` runs. The
-stale-instruction-cache worry this note first raised is **not** a hazard: `SGL_Start`
-(`LIBSGL.A`, section `SLSTART`) writes `0x11` to `0xfffffe92` itself — `mov #17, r0;
-mov.b r0, @(2,r1)` with `r1` at `0xfffffe90` — so Part I purges and re-enables the cache
-before `main`, and the only code reached before that is `PreLoader` and the ctors.
+## Where the fix lives now
 
-## The actual reason the entry did nothing: the disc has no Part I data
+Part I sanitises its own entry. `sat_boot_sanitize` in Another-Saturn's
+`saturn/src/system/saturn_platform.cxx` runs before `SRL::Core::Initialize` and reasserts the
+IP hand-off: FRT interrupts off first, slave off, SCU DSP and SH-2 DMAC quiet, BIOS hooks
+released, SCU mask closed. See that project's `mem/chain-loadable-boot.md`.
 
-`Engine::init` calls `Resource::readEntries`, which opens `memlist.bin` and calls
-`error()` when it is missing; `error()` ends in `exit(-1)` (`util.cxx:37-45`). Part I's
-banks are named lower-case by `sprintf("bank%02x")` in its `bank.cxx`, and its
-`sat_cd_open` upper-cases and appends the ISO9660 trailing dot.
+That is the right side for it. This side was reconstructing Part I's requirements by
+inspection, one save state per build cycle; Part I knows them, can test them in its own tree,
+and the fix makes its published artifact bootable from any host. What cannot move there is
+anything that must happen *before* the copy — halting the slave — which stays here.
 
-**`tools/another/fetch.sh` deliberately never installs them** — it says so in its own
-header, and only *stages* the data step into `tools/assets/part1/`. That step had never
-been run, so `saturn/cd/data` carried `ANOTHER.BIN` and `OPENING.CPK` and nothing else of
-Part I's. So the chain-load handed the console to a program that initialises SRL, blanks
-the screen, and exits before drawing anything.
+## Reading a Mednafen save state
 
-The 14 files (`bank01`..`bank0d`, `memlist.bin`) are now in `saturn/cd/data`, extracted
-from the user's own `Another World (USA) - Complete` disc rather than by downloading
-`GAME_URL`. All 14 are covered by `.gitignore`'s `BANK*`/`bank*`/`*.bin` rules, so they
-stay off the repository, and nothing in `clean` removes them — `part1_clean` deletes only
-`ANOTHER.BIN` and `OPENING.CPK`. They are **not reproducible from a clean checkout**: a
-fresh clone must run `tools/assets/part1/data.bat`, which the build never calls because it
-downloads gated data. `HOTA_PART1=1` will otherwise author a disc whose menu entry loads a
-program that exits on the missing `memlist.bin`, exactly as above.
+This is the tool that found all of it, and the earlier note saying it does not work was
+wrong. `SaturnRingLib/emulators/mednafen/mcs/*.mc?` is **gzip**. Inflated, it is `MDFNSVST`:
+a 32-byte header, a 302x240x3 RGB preview (a screenshot — extractable to PNG, and "all
+pixels black" is itself a finding), then sections of `char name[32]` + `uint32 size`, each
+holding entries of `uint8 namelen` + name + `uint32 size` + data.
 
-Installing them broke the build once, fixed in `3a56cde`: `tools/assets/data.bat` counts
-Heart of the Alien's 19 blobs as `*.bin` minus `0.bin`, and `memlist.bin` matched, giving
-"expected 19 data blobs, installed 20". `ANOTHER.BIN` matches the same glob and only
-escaped because `part1_clean` deletes it before each count. Both are excluded by name now,
-in both halves of the polyglot. The same miscount also defeated the already-installed
-guard at the top of that script, so every build was re-extracting the whole rip.
+- `MAIN/WorkRAMH` and `MAIN/WorkRAML` are flat 1 MB, **byte-swapped** (`b[i^1]`)
+- `SH2-M`/`SH2-S` carry `PC`, `R` (r0-r15), `CtrlRegs` = SR, GBR, VBR, `SysRegs` = MACH,
+  MACL, PR, plus `IPRA`/`IPRB`/`VCRA`-`VCRD`/`CCR`
+- `SMPC/SlaveSH2On` says whether the slave is running
 
-## Mednafen save states ARE readable — the earlier note was wrong
+Mednafen's `PC` is the fetch stage, **4 bytes ahead** of the executing instruction. A master
+stopped at `0x06000956` is spinning in the BIOS's `ldc r0,sr; bf -2` stub at `0x0600094e`,
+which serves vectors 4, 6, 9 and 10 — illegal instruction and address error. The stacked
+frame at `R15` then gives the faulting PC and SR, which is how each of these was located.
 
-`mcs/*.mc?` is **gzip**. `gzip.decompress` gives an `MDFNSVST` blob: 32-byte header, a
-302x240x3 RGB preview, then sections of `char name[32]` + `uint32 size` + entries of
-`uint8 namelen` + name + `uint32 size` + data. `MAIN/WorkRAMH` and `MAIN/WorkRAML` are flat
-1 MB each and **byte-swapped** (`b[i^1]`); `SH2-M`/`SH2-S` carry `PC`, `R` (r0-r15) and
-`CtrlRegs` = SR, GBR, VBR; `SMPC` carries `SlaveSH2On`. The previous session's byte-search
-hit `CDB/Buffers->Data`, the CD block's buffer, which is why matches looked non-linear.
-This channel answers everything the on-screen diagnostics were being built to answer —
-use it before adding another printf. Parser: see this session's scratchpad, ~40 lines.
+The previous session's byte-search hit `CDB/Buffers->Data`, the CD block's sector buffer,
+which is why matches looked non-linear. Parse the container; do not grep it.
 
-## What the states proved
+## Two traps that cost runs, both now closed
 
-- HWRAM at `0x06004000` is a **100.0000% byte match for Part I's image**. The staging, the
-  trampoline and the jump are all correct and always were.
-- Part I's `PreLoader`, its constructors and `SGL_Start` all run: `GBR = 0x060ffc00` and
-  `SR = 0x000000f0` are exactly what `SGL_Start` sets.
-- The master then sits at `PC = 0x06000956`, which is `ldc r0,sr; bf -2` at `0x0600094e` —
-  the BIOS hang stub wired to vectors 4, 6, 9 and 10 (illegal instruction, slot illegal,
-  CPU address error, DMA address error). The stacked frame at `R15` gives faulting
-  `PC = 0x06000348`, which holds `0xffff`. Part I took a CPU exception.
+**The asset cache hid a republished release.** `fetch.sh` skipped any file already present
+and the makefile passes no force flag, so a rebuilt binary stayed invisible — the release
+workflow uploads with `--clobber`, so a tag is not a version. `0e4c600` re-fetches
+`SHA256SUMS` every run and re-downloads only what fails its digest.
 
-## The cause: the slave processor was never actually halted
-
-`SMPC/SlaveSH2On` reads `01` in **every** state, before and after the jump, across four
-runs; the slave PC walks from `0x06025bba` to `0x0602613a`, straight through the copy.
-
-`slSlaveOffWait()` is `slRequestCommand(SMPC_SSHOFF, SMPC_WAIT)`, and `_slRequestCommand`
-opens with a semaphore acquire and `cmp/eq #0,r0; bf` to its exit — it returns -1 having
-done nothing when it cannot have it, and SGL reads the pads through that same SMPC port
-every frame. A fifth silent failure, same shape as the four below.
-
-Two things settle that leaving it halted is correct: `slInitSystem` only ever requests
-commands 11, 13 and 14, never 1 (`SSHON`), so SGL assumes the boot left the slave running
-and never starts it; and Part I references the slave nowhere. Also note the BIOS slave
-entry at `0x06000250` held `0x06014450`, inside the overwritten window, so restarting it
-would have been worse than leaving it down.
-
-`9952568` replaces the call with `chainload_slave_off`, which writes `SMPC_COMREG`
-(`0x2010001f`) directly with the documented `SF` (`0x20100063`) handshake, bounds both
-waits, and **returns a result the caller checks** — a refusal now returns to the menu
-rather than jumping into a guaranteed crash. It runs before `GFS_Reset` so that return is
-still safe.
-
-## The real cause: BIOS state below the entry point, which the copy cannot reach
-
-The copy rewrites `0x06004000` upward. **`0x06000000`-`0x06004000` is the BIOS work area
-and is never rewritten**, so Part I inherits ours. A menu-time state has 22 longwords in
-there pointing into the window about to be overwritten; six are the BIOS user-interrupt
-hook table at `0x06000a00`:
-
-| slot | vector | held |
-|---|---|---|
-| `0x06000a00` | `0x40` vblank-in | `0x0602cbf6` |
-| `0x06000a04` | `0x41` vblank-out | `0x0602cd4e` |
-| `0x06000a1c` | `0x47` system manager | `0x0602d384` |
-| `0x06000a24` | `0x49` level-2 DMA end | `0x0602cbe4` |
-| `0x06000a28` | `0x4a` level-1 DMA end | `0x0602cbd2` |
-| `0x06000a2c` | `0x4b` level-0 DMA end | `0x0602cbc0` |
-
-Masking interrupts before the jump does not cover this, because **Part I lifts the mask
-itself**: `slInitSystem` sets SR back partway through its own run (`jsr @r13` with `r4 = 0`)
-and only re-hooks afterwards; SRL's `slIntFunction` is later still. The first vblank in that
-window is dispatched into Part I's data. That is why the faulting PC differs run to run
-(`0x06000348` once, `0x00000002` the next, `GBR` clobbered to `0x00018405`) while the
-landing spot is always the BIOS illegal-instruction stub.
-
-`smpsys.c:156-157` does precisely this cleanup for its own two hooks before jumping to
-`APP_ENTRY`, commented "hook re-initialisation". `79cf69d` clears `0x40`-`0x5f` through
-`SYS_SETUINT`/`SYS_SETSINT`.
-
-**`79cf69d` works.** Confirmed by reading the bytes each hook points at: in Part I's image
-every one starts `2f 06` (`mov.l r0,@-r15`, a handler prologue); in ours they are mid-function
-debris. The six slots now hold **Part I's own handlers**, so it reaches `slInitInterrupt`
-inside `slInitSystem`. Do not compare a pre-jump table against a post-jump one to decide
-this — that comparison is meaningless and cost an hour here.
-
-## Where it stands, and the next fault
-
-Part I still ends in the same BIOS stub, but later and from a different cause: the stacked
-frame gives faulting `PC = 0x00000002` with `SR = 0x000000f0`. Interrupts are still masked,
-so this is *inside* `slInitSystem`, before it lifts the mask — a call through a pointer
-holding 2. Ruled out by reading the state:
-
-- every BIOS pointer `slInitSystem` calls through is intact — `*(0x06000280) = 0x06000810`,
-  `*(0x06000320) = 0x060006b0`, `*(0x06000340) = 0x060007b0`, `*(0x06000344) = 0x060007c0`
-- no slot in the hook table `0x06000900`-`0x06000b00` holds a small value
-- the master's own vector table `0x40`-`0x4b` is byte-identical to its pre-jump contents
-- `*(0x06000324) = 0` (clock mode), so `SYS_CHGSYSCK` is skipped and does not reset the SMPC
-- the 79 stale-looking pointers in `0x060fb800`-`0x060ffc00` are all **below** the stack
-  pointer — dead frames, not live state. So is `SYS_SETSINT`: it writes through the *calling*
-  CPU's VBR, but the vector table is provably unchanged, so it is inert here, not harmful.
-
-**Replaying the IP is not available.** It is still resident at `0x06002000` (header intact,
-app entry `0x06004000` at `+0xf0`, code from `0x06002100`), but `smpsys.c` keeps `sequence`,
-`vramptr`, `cramptr` and `vbIcnt` as statics that have already run to completion, and
-nothing re-zeroes them. Re-entering it would clear the wrong quarters of VDP2 VRAM. It would
-have to be re-read from the disc's first sectors first, which GFS cannot do by LBA.
-
-## Two ways this wasted runs, both now closed
-
-**The cache hid a republished release.** `tools/another/fetch.sh` skipped any file already in
-`.another/`, and `saturn/makefile` calls it with no flag, so an ordinary build kept using a
-binary the release had already replaced — the workflow uploads with `--clobber`, so a tag is
-not a version. `0e4c600` re-fetches `SHA256SUMS` every run (300 bytes) and re-downloads only
-what fails its digest.
-
-**Do not verify a fetched binary by searching for constants.** `0xfffffe10` reaches a
+**Do not verify a fetched binary by searching it for constants.** `0xfffffe10` reaches a
 register through `mov.w` on a *sign-extended 16-bit* pool literal (`fe10`), so a four-byte
-search for it can never hit, and a build whose size is unchanged may still be new — padding
-absorbs small growth. Both led to calling a correct build stale. The test that works: diff
-the fetched image against the previous one, which a save state holds at
+search cannot hit it, and an unchanged file size proves nothing because padding absorbs small
+growth. Diff the fetched image against the previous one instead — a save state holds it at
 `WorkRAMH + 0x4000`. Differences outside the runtime-written window mean a different build.
 
-## The recommendation
+## Four earlier traps that all failed silently
 
-Every failure this session has been **inherited machine state**, found one at a time from
-save states at a build cycle each. That is the wrong end of the problem: we are
-reconstructing Part I's requirements by inspection when Part I knows them. The durable fix
-is a sanitise step at the top of Another-Saturn's own `sat_boot_init`, before
-`Core::Initialize` — it is in time because we hand over with interrupts fully masked and
-Part I does not lift the mask until `slInitSystem`, it is testable in that project's own
-tree, and it makes the published artifact bootable from any host rather than only this one.
-What cannot move there is anything that must happen *before* the copy, i.e. halting the
-slave.
+- **`sound_done()` was declared but not linked.** `makefile:103` filters `src/sound.c` out of
+  `SOURCES`. Verifying a symbol's *declaration* proves nothing; check it reaches the SH-2
+  link. Now `sound_flush_cache()`.
+- **`slSlaveFunc(NULL, NULL)` does not halt the slave.** It registers a function for the
+  slave to run. Right signature, wrong semantics — and `slSlaveOffWait` then had its own
+  failure, above.
+- **`game2bin_alloc()` in `initialize()` starved the chain-load.** `GAME2BIN_SIZE` plus
+  `MEMORY_SIZE` is 933,888 of LWRAM's 1,048,576. Moved to `load_part2_data()`.
+- **`boot_art_load` hides NBG0, the layer `printf` reaches.** Every diagnostic that seam
+  emitted landed on a hidden layer.
 
-## Four traps that all failed silently
+## State of the tree
 
-- **`sound_done()` is declared but not linked.** `makefile:103` filters `src/sound.c` out of
-  `SOURCES`; `sound_srl.cxx:72-75` says so outright. Verifying a symbol's *declaration*
-  proves nothing here — check it reaches the SH-2 link. Now `sound_flush_cache()`.
-- **`slSlaveFunc(NULL, NULL)` does not halt the slave.** It *registers a function for the
-  slave to run*. The halt is `slSlaveOffWait()` (`sl_def.h:2333`, SMPC `SSHOFF`). Same
-  class of error as above: right signature, wrong semantics.
-- **`game2bin_alloc()` in `initialize()` starved the chain-load.** `GAME2BIN_SIZE` (409,600)
-  plus `MEMORY_SIZE` (524,288) is 933,888 of LWRAM's 1,048,576, and every engine `malloc`
-  lands there (`saturn_compat.cxx:259`). That left ~82 KB against the 217,088 staging needs.
-  Moved to `load_part2_data()`; see its banner in `main.c`.
-- **`boot_art_load` hides NBG0, which is the layer `printf` reaches** through
-  `saturn_compat.cxx`'s `diag_write`. Every diagnostic this seam emitted landed on a hidden
-  layer. `SRL::Debug::Print` also never clears the rest of a row, so a short line leaves the
-  tail of a longer one behind it — stray digits on screen are debris, not values. Pad to
-  `DIAG_COLS` (40).
-
-## Do not read Mednafen save states by byte-searching
-
-**Stale — the conclusion drawn here was wrong. See "Mednafen save states ARE readable"
-above.** Byte-searching a state does fail, and the 2048-byte non-linear matches were real,
-but they were the CD block's sector buffer, not evidence that the states are unreadable.
-Parse the container instead. The diagnostic scaffolding this section was used to justify
-cost several rebuild-and-run cycles that one parser would have replaced.
-
-## Blocking, before any of the above can be re-run end to end
-
-`tools/another/fetch.sh` now downloads from
-`https://github.com/suinevere/Another-Saturn/releases/latest/download` and verifies against
-the published `SHA256SUMS`. **Another-Saturn has no tag and no release**, so a clean
-`HOTA_PART1=1` build 404s. Two commits on its `feature/publish-program-assets` branch
-(`604c077`, `c645002`) add the assets — `0.bin`, `OPENING.CPK`, `data.bat`, `CONFIG.ME`,
-`SHA256SUMS` — to both its pipelines. **Merge that branch and cut a tag first.** A local
-`.another/` cache currently masks this.
-
-## Still to do once it works
-
-- Delete the diagnostic scaffolding: `g_chainDiag`, `chainload_hold`, `CHAINLOAD_HOLD_MS`,
-  the `printf`s, and the stage-100 write in `chainload_available`. All marked
-  `DIAGNOSTIC BUILD ONLY`.
-- Acceptance criteria 4-7 in the spec have never passed; 1-3 and 6 are structural only.
-- Deferred minors are triaged in the ledger — the final review ruled `saturn/makefile`'s
-  stale `saturn_audio.cxx` reference fix-now (done) and the rest acceptable.
-- Bumping the Part I pin: the spec's file inventory is a snapshot of one upstream commit.
-  The `REFAUD.CPK` compile switch it cites was already removed at Another-Saturn's HEAD.
-  Re-check the copy allowlist against the new tree, not against the spec.
-
-## Suggested skills
-
-- **`superpowers:systematic-debugging`** for the stage 7/8 split. The Iron Law matters here:
-  three of the four traps above were found by reading rather than guessing, and every
-  speculative fix in this session cost a full rebuild-and-run cycle from the user.
-- **`superpowers:verification-before-completion`** before claiming any of this works. Nothing
-  in this feature has ever been compiled or run by an agent; the SH-2 toolchain and Mednafen
-  are the user's, and *they run every build* — never invoke `make`, `compile.bat` or the
-  emulator. `bash saturn/tests/run_tests.sh` is host gcc and is fine.
-- **`superpowers:subagent-driven-development`** only if a new plan is written; the existing
-  one is fully executed.
+- Diagnostic scaffolding deleted in `e1d1d36`: `g_chainDiag`, `chainload_hold`, the
+  `printf`s, the stage-100 write. The staging checks remain — they still return to the menu.
+- Part I's data lives in `saturn/cd/data` (gitignored) and survives `clean`; `part1_clean`
+  removes only `ANOTHER.BIN` and `OPENING.CPK`.
+- `tools/assets/data.bat` excludes `ANOTHER.BIN` and `memlist.bin` from its 19-blob count
+  (`3a56cde`) — both match the glob and either one fails the build.
+- Another-Saturn is pinned by release, not by ref. Bumping it means re-checking the copy
+  allowlist against the new tree, not against the spec.
 
 Related: [[2026-08-14-subtitle-and-save-menus]] for the boot menu and fade layer this builds
 on, [[2026-08-13-boot-sequence-build]] for the game-select card and its art pipeline.
