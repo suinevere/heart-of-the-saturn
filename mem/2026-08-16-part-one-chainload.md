@@ -49,13 +49,30 @@ next suspect: SGL's own entry sets `SR` to `0xf0` itself (`SGL_Start`, `LIBSGL.A
 SCU mask from its own `_IntPrioMask` table and drops `SR` back at the end, so
 `SYS_SETSCUIM(0xffffffff)` is recoverable.
 
-**Next suspect if the jump is reached and fails: stale instruction cache.** The purge at
-`chainload.cxx:340` runs *before* the argument setup and `jsr` that reach the trampoline,
-and those instructions live in the HWRAM window the copy then overwrites, so their cache
-lines survive holding our code over Part I's addresses. The purge belongs inside the
-trampoline, after the loop — reachable without a literal pool via
-`mov.w @(disp,PC), r1` on an `0xfe92` word appended to `g_trampoline`, which sign-extends
-to the SH-2 `CCR` at `0xfffffe92` and travels with the copied code.
+`quiesced, jumping` then printed on hardware, so the whole of `chainload_run` runs. The
+stale-instruction-cache worry this note first raised is **not** a hazard: `SGL_Start`
+(`LIBSGL.A`, section `SLSTART`) writes `0x11` to `0xfffffe92` itself — `mov #17, r0;
+mov.b r0, @(2,r1)` with `r1` at `0xfffffe90` — so Part I purges and re-enables the cache
+before `main`, and the only code reached before that is `PreLoader` and the ctors.
+
+## The actual reason the entry did nothing: the disc has no Part I data
+
+`Engine::init` calls `Resource::readEntries`, which opens `memlist.bin` and calls
+`error()` when it is missing; `error()` ends in `exit(-1)` (`util.cxx:37-45`). Part I's
+banks are named lower-case by `sprintf("bank%02x")` in its `bank.cxx`, and its
+`sat_cd_open` upper-cases and appends the ISO9660 trailing dot.
+
+**`tools/another/fetch.sh` deliberately never installs them** — it says so in its own
+header, and only *stages* the data step into `tools/assets/part1/`. That step had never
+been run, so `saturn/cd/data` carried `ANOTHER.BIN` and `OPENING.CPK` and nothing else of
+Part I's. So the chain-load handed the console to a program that initialises SRL, blanks
+the screen, and exits before drawing anything.
+
+The 14 files (`bank01`..`bank0d`, `memlist.bin`) are now in `saturn/cd/data`, extracted
+from the user's own `Another World (USA) - Complete` disc rather than by downloading
+`GAME_URL`. All 14 are covered by `.gitignore`'s `BANK*`/`bank*`/`*.bin` rules, so they
+stay off the repository — but they are **not reproducible from a clean checkout**, and a
+fresh clone must run `tools/assets/part1/data.bat` or this returns.
 
 ## Four traps that all failed silently
 
