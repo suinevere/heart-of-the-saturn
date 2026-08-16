@@ -13,6 +13,7 @@ extern "C" {
 #include "disc.h"
 #include "discsec.h"
 #include "fadecalc.h"
+#include "platform.h"
 #include "saturn_bootart.h"
 #include "sound.h"
 #include "video.h"
@@ -130,6 +131,52 @@ static void chainload_restore(void)
 }
 
 /*----------------------
+ | CHAINLOAD_HOLD_MS / chainload_hold
+ | Description: DIAGNOSTIC BUILD ONLY -- delete with g_chainDiag.
+ |
+ |   Puts the recorded state on screen and keeps it there long enough to read.
+ |   Three things conspired to make the earlier prints unreadable and this
+ |   answers all of them: boot_art_load hides NBG0, which is the layer printf
+ |   reaches, so the art is released first; every path out of here either
+ |   blacks the screen or jumps, so the text is held for ten seconds before
+ |   either happens; and SRL::Debug::Print writes a string without clearing the
+ |   rest of its row, so a short line leaves the tail of a longer one behind it
+ |   -- every line below is padded to DIAG_COLS (40) to wipe what it lands on.
+ |
+ |   Presenting inside the wait is what advances platform_ticks: it is driven
+ |   by Core::Synchronize, which boot_art_present is the only thing here that
+ |   reaches, so a bare spin would never terminate.
+ | Author: suinevere
+ | Dependencies: platform.h, saturn_bootart.h, video.h
+ | Globals: g_chainDiag
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+#define CHAINLOAD_HOLD_MS 10000u
+
+static void chainload_hold(void)
+{
+	unsigned int start;
+
+	boot_art_release();
+	boot_art_present();
+	video_set_fade(FADECALC_LEVEL_NORMAL);
+
+	printf("-- CHAINLOAD DIAG ---------------------\n");
+	printf("stage   %-30d\n", (int)g_chainDiag[1]);
+	printf("bytes   %-10d loaded %-11d\n", (int)g_chainDiag[2], (int)g_chainDiag[3]);
+	printf("staged  %08x   size   %-11d\n", (unsigned int)g_chainDiag[4], (int)g_chainDiag[5]);
+	printf("--------------------------------------\n");
+
+	start = platform_ticks();
+
+	while (platform_ticks() - start < CHAINLOAD_HOLD_MS)
+	{
+		boot_art_present();
+	}
+}
+
+/*----------------------
  | chainload_available
  | Description: Reports whether Part I's program is on this disc.
  | Author: suinevere
@@ -192,6 +239,7 @@ void chainload_run(void)
 	if (!image.Exists())
 	{
 		printf("chainload: 1 open failed\n");
+		chainload_hold();
 		chainload_restore();
 		return;
 	}
@@ -210,6 +258,7 @@ void chainload_run(void)
 		image.Size.SectorSize > DISC_MAX_SECTOR_BYTES)
 	{
 		printf("chainload: 2 bad size\n");
+		chainload_hold();
 		chainload_restore();
 		return;
 	}
@@ -228,6 +277,7 @@ void chainload_run(void)
 	if (staged == 0)
 	{
 		printf("chainload: 3 no LWRAM for %d\n", (int)staging);
+		chainload_hold();
 		chainload_restore();
 		return;
 	}
@@ -240,6 +290,7 @@ void chainload_run(void)
 	{
 		printf("chainload: 4 no LWRAM for trampoline\n");
 		SRL::Memory::LowWorkRam::Free(staged);
+		chainload_hold();
 		chainload_restore();
 		return;
 	}
@@ -259,6 +310,7 @@ void chainload_run(void)
 		printf("chainload: 5 read %d of %d\n", loaded, bytes);
 		SRL::Memory::LowWorkRam::Free(tramp);
 		SRL::Memory::LowWorkRam::Free(staged);
+		chainload_hold();
 		chainload_restore();
 		return;
 	}
@@ -280,6 +332,8 @@ void chainload_run(void)
 	__asm__ __volatile__("ldc %0, sr" :: "r"(0x000000f0u) : "memory");
 
 	g_chainDiag[1] = 8u;
+
+	chainload_hold();
 
 	chainload_fn go = (chainload_fn)((unsigned long)tramp | CHAINLOAD_UNCACHED);
 
