@@ -159,6 +159,11 @@ int chainload_available(void)
  |   does not invalidate lines already holding our own code over that window --
  |   and we are executing from that window, so such lines are certain to exist.
  |
+ |   The slave is stopped with slSlaveOffWait, not slSlaveFunc(NULL): the latter
+ |   registers a function for the slave to run and never halts it, so a null
+ |   pointer there leaves the second CPU live -- and executing whatever it finds
+ |   -- while this one overwrites the address space out from under it.
+ |
  |   The sound quiesce is two calls because the SCSP is driven from two sides:
  |   sound_flush_cache is named for its memory job but stops all four PCM
  |   channels first, which is the only teardown this port has for the voices it
@@ -262,7 +267,7 @@ void chainload_run(void)
 	g_chainDiag[1] = 7u;
 
 	GFS_Reset();
-	slSlaveFunc(NULL, NULL);
+	slSlaveOffWait();
 	sound_flush_cache();
 	slSoundOffWait();
 	SYS_SETSCUIM(0xffffffffu);
