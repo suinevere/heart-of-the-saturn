@@ -14,7 +14,6 @@ extern "C" {
 #include "discsec.h"
 #include "fadecalc.h"
 #include "saturn_bootart.h"
-#include "saturn_compat.h"
 #include "sound.h"
 #include "video.h"
 }
@@ -24,6 +23,13 @@ extern "C" {
 #include <sgl.h>
 #include <sega_gfs.h>
 #include <sega_sys.h>
+
+/* Last, and outside the block above, for the reason disc_srl.cxx:65-67 orders
+   it the same way: this header carries its own extern "C" guard, and it
+   #defines getenv, so any SDK header that declares getenv after it would have
+   that declaration rewritten into a syntax error. It only has to precede the
+   printf call sites below. */
+#include "saturn_compat.h"
 
 /*----------------------
  | CHAINLOAD_ENTRY
