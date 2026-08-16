@@ -78,6 +78,29 @@ extern "C" {
 #define SMPC_TRIES  100000u
 
 /*----------------------
+ | CHAINLOAD_UINT_FIRST / CHAINLOAD_UINT_LAST
+ | Description: The SCU interrupt vectors whose BIOS hooks have to be let go of
+ |   before Part I lands.
+ |
+ |   The hooks live at 0x06000a00, in the BIOS work area below CHAINLOAD_ENTRY,
+ |   which is the one part of HWRAM the copy does not rewrite -- so Part I
+ |   inherits ours. A save state taken in the menu has six of them pointing at
+ |   0x0602cbf6, 0x0602cd4e, 0x0602d384, 0x0602cbe4, 0x0602cbd2 and 0x0602cbc0:
+ |   vblank in and out, system manager, and the three DMA-end vectors, every one
+ |   of them an address the image is about to be written over. slInitSystem
+ |   unmasks interrupts partway through its own run and only re-hooks afterwards,
+ |   so the first vblank inside that window is dispatched into Part I's data.
+ |
+ |   smpsys.c:156-157 does exactly this before it jumps to APP_ENTRY, for its own
+ |   two hooks and with the comment "hook re-initialisation". The whole range is
+ |   cleared here rather than a named few because which vectors SGL took is its
+ |   business, not ours.
+ | Author: suinevere
+ ----------------------*/
+#define CHAINLOAD_UINT_FIRST 0x40u
+#define CHAINLOAD_UINT_LAST  0x5fu
+
+/*----------------------
  | g_trampoline
  | Description: Copy-and-jump, hand-encoded because it must run from LWRAM
  |   while HWRAM is being overwritten, and a compiled function cannot be
@@ -277,6 +300,11 @@ int chainload_available(void)
  |   overrun disc_read_file_body refuses at disc_srl.cxx:757. The copy length
  |   still comes from the image size; only the allocation grows.
  |
+ |   The BIOS interrupt hooks are released before the mask goes on, because they
+ |   are the one piece of our state Part I cannot avoid inheriting -- see
+ |   CHAINLOAD_UINT_FIRST. The mask alone does not cover it: Part I lifts the
+ |   mask itself, inside slInitSystem, before it has hooks of its own.
+ |
  |   The cache purge before the jump is not redundant with the uncached mirror.
  |   Writing Part I through the mirror keeps the write off the cache, but it
  |   does not invalidate lines already holding our own code over that window --
@@ -409,6 +437,13 @@ void chainload_run(void)
 	GFS_Reset();
 	sound_flush_cache();
 	slSoundOffWait();
+
+	for (unsigned int vector = CHAINLOAD_UINT_FIRST; vector <= CHAINLOAD_UINT_LAST; vector++)
+	{
+		SYS_SETUINT(vector, 0);
+		SYS_SETSINT(vector, 0);
+	}
+
 	SYS_SETSCUIM(0xffffffffu);
 	__asm__ __volatile__("ldc %0, sr" :: "r"(0x000000f0u) : "memory");
 
