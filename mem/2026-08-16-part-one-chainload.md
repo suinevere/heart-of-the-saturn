@@ -34,6 +34,29 @@ trampoline or the jump is at fault. The six quiesce statements were written inde
 and consecutive precisely so they can be removed one at a time — do that, do not rewrite
 the function.
 
+**Superseded, 2026-08-16.** The hold could never answer that: it was placed *after* the
+quiesce, and its `boot_art_present` is `SRL::Core::Synchronize`, a wait on a vblank the
+quiesce has just masked at the SCU and at the SH-2 — so it hung on its first present,
+before the line that lights the screen, and the copy and the jump have never once run.
+`4076770` replaces it with a `printf`, which `SRL::Debug::Print` puts straight into VDP2
+VRAM and needs no vblank. **`chainload_hold` may only be called while interrupts live.**
+If `quiesced, jumping` now appears and the screen stays black, the quiesce is clean and
+the fault is the trampoline or the jump.
+
+Two things checked against the toolchain rather than assumed, so the quiesce is not the
+next suspect: SGL's own entry sets `SR` to `0xf0` itself (`SGL_Start`, `LIBSGL.A` section
+`SLSTART`), so masking to level 15 is the state it expects; and `slInitSystem` writes the
+SCU mask from its own `_IntPrioMask` table and drops `SR` back at the end, so
+`SYS_SETSCUIM(0xffffffff)` is recoverable.
+
+**Next suspect if the jump is reached and fails: stale instruction cache.** The purge at
+`chainload.cxx:340` runs *before* the argument setup and `jsr` that reach the trampoline,
+and those instructions live in the HWRAM window the copy then overwrites, so their cache
+lines survive holding our code over Part I's addresses. The purge belongs inside the
+trampoline, after the loop — reachable without a literal pool via
+`mov.w @(disp,PC), r1` on an `0xfe92` word appended to `g_trampoline`, which sign-extends
+to the SH-2 `CCR` at `0xfffffe92` and travels with the copied code.
+
 ## Four traps that all failed silently
 
 - **`sound_done()` is declared but not linked.** `makefile:103` filters `src/sound.c` out of
