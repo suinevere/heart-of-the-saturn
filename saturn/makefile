@@ -148,16 +148,48 @@ SRL_CUSTOM_CCFLAGS += $(patsubst %,-I%,$(shell find src -type d))
 #
 # The extractor is built here too when absent, because a fresh clone has the
 # source but not the binary, and "one click" has to include that click.
+#
+# The self-repair is right for a checkout and wrong for a release build, which
+# must author a disc with no game data in it at all. Defaults on, so nothing
+# about a normal build changes; release.yml passes 0.
+HOTA_ASSETS ?= 1
+
+ifeq ($(HOTA_ASSETS),1)
 all: game_assets
+endif
 
 .PHONY: game_assets
 game_assets:
 	@[ -x ../tools/extract_disc ] || [ -x ../tools/extract_disc.exe ] || sh ../tools/build.sh
 	@sh ../tools/assets/data.bat
 
+# Part I's program, when asked for. Declared before the include for the reason
+# game_assets is: make records prerequisites in the order it first sees them,
+# and shared.mk's own `all:` lines would otherwise schedule the fetch after the
+# xorrisofs run that consumes what it produces.
+#
+# Opt-in rather than default: it reaches the network for a second game's
+# published build, which is not what somebody iterating on this one wants on
+# every make. Cached after the first fetch, so the cost is paid once.
+HOTA_PART1 ?= 0
+
+all: part1_assets
+
+.PHONY: part1_assets
+part1_assets:
+ifeq ($(HOTA_PART1),1)
+	@sh ../tools/another/fetch.sh
+endif
+
 # Include shared makefile
 SDK_ROOT = $(SRL_INSTALL_ROOT)/saturnringlib
 include $(SDK_ROOT)/shared.mk
+
+.PHONY: part1_clean
+part1_clean:
+	rm -f $(ASSETS_DIR)/ANOTHER.BIN $(ASSETS_DIR)/OPENING.CPK
+
+clean: part1_clean
 
 # shared.mk:146 sets MUSIC_DIR = ./cd/music with `=`, and every use of it is
 # inside a recipe, so a later assignment wins -- the same "append after the
@@ -175,6 +207,6 @@ endif
 # inside the COFF bracket the other SGL libraries sit in.
 #
 # The SDK ships LIBPCM.A but does not link it, and nothing in SaturnRingLib
-# uses it. See saturn_audio.cxx for why the port needs it: slPCMOn is one-shot
+# uses it. See sound_srl.cxx for why the port needs it: slPCMOn is one-shot
 # and cannot be driven gaplessly from frame-polled code.
 LIBS += $(SGLLDIR)/LIBPCM.A

@@ -41,7 +41,8 @@ static uint8_t boot_ramp(uint32_t elapsed, uint32_t deadline)
     return (uint8_t)((remaining * BOOT_VOLUME_MAX) / BOOT_FADE_MS);
 }
 
-void bootmenu_init(bootmenu_state *st, uint32_t now_ms)
+void bootmenu_init(bootmenu_state *st, uint32_t now_ms,
+                   int part1_available, int part2_available)
 {
     st->phase_start_ms = now_ms;
     st->music_start_ms = now_ms;
@@ -49,6 +50,8 @@ void bootmenu_init(bootmenu_state *st, uint32_t now_ms)
     st->in_menu = 0;
     st->highlight = (int)BOOT_ENTRY_OUT_OF_THIS_WORLD;
     st->music_started = 0;
+    st->part1_available = part1_available;
+    st->part2_available = part2_available;
 }
 
 void bootmenu_step(bootmenu_state *st, uint32_t now_ms, uint32_t pressed,
@@ -61,6 +64,7 @@ void bootmenu_step(bootmenu_state *st, uint32_t now_ms, uint32_t pressed,
 
     out->music_restart = 0;
     out->start_game = 0;
+    out->start_part1 = 0;
 
     if (!st->music_started)
     {
@@ -91,10 +95,18 @@ void bootmenu_step(bootmenu_state *st, uint32_t now_ms, uint32_t pressed,
                           : (int)BOOT_ENTRY_OUT_OF_THIS_WORLD;
         }
 
-        if ((pressed & BOOT_KEY_CONFIRM) != 0u
-            && highlight_before_move == (int)BOOT_ENTRY_HEART_OF_THE_ALIEN)
+        if ((pressed & BOOT_KEY_CONFIRM) != 0u)
         {
-            out->start_game = 1;
+            if (highlight_before_move == (int)BOOT_ENTRY_HEART_OF_THE_ALIEN
+                && st->part2_available)
+            {
+                out->start_game = 1;
+            }
+            else if (highlight_before_move == (int)BOOT_ENTRY_OUT_OF_THIS_WORLD
+                     && st->part1_available)
+            {
+                out->start_part1 = 1;
+            }
         }
     }
 

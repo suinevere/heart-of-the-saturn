@@ -28,8 +28,19 @@
 :; MUSIC_DIR="$CD_DIR/music"
 :;
 :; echo "== Step 1/2: install game data =="
-:; case "${1:-}" in prep|--prep) sh ./data.bat; echo "Prepared."; exit 0 ;; esac
 :; sh ./data.bat "$@"
+:;
+:; # Part I's data, staged into part1/ by tools/another/fetch.sh in a source
+:; # checkout, or by CI into the released kit -- one path either way, so this
+:; # never reaches outside tools/assets/ itself. Optional by design -- a
+:; # player who owns the Sega CD game but not the DOS release still gets a
+:; # working Part II disc, and the boot menu leaves OUT OF THIS WORLD
+:; # unconfirmable rather than launching into data that is not there. Runs
+:; # before the prep short-circuit below: installing game data is Step 1's
+:; # whole job, and a build with HOTA_PART1=1 needs this data too.
+:; if [ -f ./part1/data.bat ]; then if sh ./part1/data.bat "$@"; then echo "Part I: data installed."; else echo "Part I: data unavailable -- OUT OF THIS WORLD will not be playable on this disc."; fi; else echo "Part I: no data step present -- skipping."; fi
+:;
+:; case "${1:-}" in prep|--prep) echo "Prepared."; exit 0 ;; esac
 :;
 :; echo "== Step 2/2: build disc =="
 :; [ -f "$BASE_ISO" ] || { echo "ERROR: base ISO not found: $BASE_ISO" >&2; exit 1; }
@@ -101,11 +112,23 @@ SET "OUTPUT_DIR=%OUTPUT_DIR:/=\%"
 SET "MUSIC_DIR=%CD_DIR%\music"
 
 ECHO == Step 1/2: install game data ==
-IF /I "%~1"=="prep" GOTO doprep
-IF /I "%~1"=="--prep" GOTO doprep
 
 CALL "%~dp0data.bat" %*
 IF ERRORLEVEL 1 ( ECHO ERROR: data install failed & EXIT /B 1 )
+
+REM Part I's data, staged into part1\ by tools\another\fetch.sh in a source
+REM checkout, or by CI into the released kit. Optional -- its failure must
+REM not stop a Part II disc, so this deliberately does not test ERRORLEVEL
+REM the way the call above does. Runs before the prep short-circuit below:
+REM installing game data is Step 1's whole job, and a build with
+REM HOTA_PART1=1 needs this data too.
+IF EXIST "%~dp0part1\data.bat" (
+    CALL "%~dp0part1\data.bat" %*
+    IF ERRORLEVEL 1 ( ECHO Part I: data unavailable -- OUT OF THIS WORLD will not be playable on this disc. ) ELSE ( ECHO Part I: data installed. )
+) ELSE ( ECHO Part I: no data step present -- skipping. )
+
+IF /I "%~1"=="prep" ( ECHO Prepared. & ENDLOCAL & EXIT /B 0 )
+IF /I "%~1"=="--prep" ( ECHO Prepared. & ENDLOCAL & EXIT /B 0 )
 
 ECHO == Step 2/2: build disc ==
 REM Quote every expansion inside a parenthesized block: the disc name contains
@@ -140,12 +163,5 @@ IF ERRORLEVEL 1 ( ECHO ERROR: audio track layout failed & EXIT /B 1 )
 
 ECHO.
 ECHO Ready to burn or mount: "%OUTPUT_DIR%\%DISC_NAME%.cue"
-ENDLOCAL
-EXIT /B 0
-
-:doprep
-CALL "%~dp0data.bat"
-IF ERRORLEVEL 1 ( ECHO ERROR: data install failed & EXIT /B 1 )
-ECHO Prepared.
 ENDLOCAL
 EXIT /B 0

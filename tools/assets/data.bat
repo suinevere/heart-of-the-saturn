@@ -27,7 +27,13 @@
 :;
 :; # The 19 blobs disc_manifest.h lists. Counting them is the install check:
 :; # a partial extract is the failure worth catching, not a missing directory.
-:; count_blobs() { find "$DATA_DIR" -maxdepth 1 -type f \( -name '*.BIN' -o -name '*.bin' \) ! -name '0.bin' 2>/dev/null | wc -l | tr -d ' '; }
+:; # Three files share the extension without being ours: 0.bin is the SEGA boot
+:; # header the build supplies, and ANOTHER.BIN and memlist.bin are Part I's,
+:; # installed beside these by tools/another/fetch.sh and the setup kit's part1
+:; # step. Counting either of those turns a correct extract into "installed 20"
+:; # and, before that, defeats the already-installed guard below into
+:; # re-extracting the whole rip on every build.
+:; count_blobs() { find "$DATA_DIR" -maxdepth 1 -type f \( -name '*.BIN' -o -name '*.bin' \) ! -iname '0.bin' ! -iname 'another.bin' ! -iname 'memlist.bin' 2>/dev/null | wc -l | tr -d ' '; }
 :;
 :; if [ "$(count_blobs)" -eq 19 ] && [ "${1:-}" != "-f" ]; then
 :;     echo "Game data already installed in $DATA_DIR (pass -f to rebuild)."; exit 0
@@ -206,11 +212,14 @@ ECHO Installed %BLOBS% data blobs into "%DATA_DIR%"; %AUDIO% audio tracks in "%M
 ENDLOCAL
 EXIT /B 0
 
-REM 0.bin is the SEGA boot header the build supplies, not a game blob -- the
-REM POSIX half excludes it by name for the same reason.
+REM 0.bin is the SEGA boot header the build supplies, and ANOTHER.BIN and
+REM memlist.bin are Part I's -- none of the three is a game blob. The POSIX
+REM half excludes the same three by name, for the reason given there.
 :countblobs
 SET /A BLOBS=0
-FOR %%F IN ("%DATA_DIR%\*.bin") DO IF /I NOT "%%~nxF"=="0.bin" SET /A BLOBS+=1
+FOR %%F IN ("%DATA_DIR%\*.bin") DO (
+    IF /I NOT "%%~nxF"=="0.bin" IF /I NOT "%%~nxF"=="ANOTHER.BIN" IF /I NOT "%%~nxF"=="memlist.bin" SET /A BLOBS+=1
+)
 EXIT /B 0
 
 REM ASSET_DIR first, then the checkout's own rip -- see the POSIX half.

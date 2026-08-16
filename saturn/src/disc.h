@@ -59,10 +59,14 @@ extern "C" {
 /*----------------------
  | disc_open
  | Description: Opens the disc named by cue_path, parses its layout and
- |   validates the 19-file manifest against the real ISO9660 directory
- |   before any caller can read a byte. Must run before the first
- |   disc_read_file call -- game2bin_init() is the earliest one in the
- |   engine's startup sequence. Returns 1 on success, 0 on failure, matching
+ |   checks the 19-file manifest against the real ISO9660 directory before any
+ |   caller can read a byte. Must run before the first disc_read_file call --
+ |   boot_art_load() is the earliest one in the engine's startup sequence on
+ |   Saturn, game2bin_init() on the host. On the Saturn backend a manifest
+ |   fault is reported rather than taken, since a disc carrying only Part I
+ |   must still reach the boot menu, and disc_part2_available() is what the
+ |   caller asks instead; the host backend has no second game to degrade to
+ |   and still refuses. Returns 1 on success, 0 on failure, matching
  |   discfmt.h's convention since this function is built entirely out of
  |   discfmt calls. Safe to call again at any time, including after a prior
  |   disc_open succeeded or failed -- always starts from a clean slate (see
@@ -73,6 +77,25 @@ extern "C" {
  | Author: suinevere
  ----------------------*/
 int disc_open(const char *cue_path);
+
+/*----------------------
+ | disc_part2_available
+ | Description: Reports whether this disc carries Heart of the Alien's own
+ |   data, without failing if it does not. Same manifest disc_open checks, and
+ |   deliberately the same test -- a blob of the wrong size is as unplayable as
+ |   an absent one, and reporting it available would trade a menu that says so
+ |   for a crash partway into the game.
+ |
+ |   Answers a question about our data, so it lives here rather than in
+ |   chainload.h: this file's implementation is the only one that knows the
+ |   blob list.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: N/A
+ | Returns: non-zero when every blob is present and correctly sized
+ ----------------------*/
+int disc_part2_available(void);
 
 /*----------------------
  | disc_read_file

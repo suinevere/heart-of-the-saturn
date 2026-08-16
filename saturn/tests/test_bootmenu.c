@@ -53,7 +53,7 @@ static void test_screen_boundaries(void)
 {
     bootmenu_state st;
     boot_frame f;
-    bootmenu_init(&st, 1000u);
+    bootmenu_init(&st, 1000u, 1, 1);
 
     bootmenu_step(&st, 1000u, 0u, &f);
     expect_screen("t=0 is LEGAL", f.screen, BOOT_SCREEN_LEGAL);
@@ -85,7 +85,7 @@ static void test_skip_from_each_still(void)
     for (i = 0; i < sizeof(AT) / sizeof(AT[0]); i++) {
         bootmenu_state st;
         boot_frame f;
-        bootmenu_init(&st, 0u);
+        bootmenu_init(&st, 0u, 1, 1);
         bootmenu_step(&st, 0u, 0u, &f);
         bootmenu_step(&st, AT[i], BOOT_KEY_A, &f);
         expect_screen("a button skips to the menu", f.screen, BOOT_SCREEN_MENU);
@@ -112,7 +112,7 @@ static void test_held_button_skips_once(void)
     uint32_t previous = 0u;
     int frame;
 
-    bootmenu_init(&st, 0u);
+    bootmenu_init(&st, 0u, 1, 1);
     bootmenu_step(&st, 0u, held_edges(0u, &previous), &f);
 
     bootmenu_step(&st, 100u, held_edges(BOOT_KEY_C, &previous), &f);
@@ -132,7 +132,7 @@ static void test_move_and_confirm_on_one_frame(void)
     bootmenu_state st;
     boot_frame f;
 
-    bootmenu_init(&st, 0u);
+    bootmenu_init(&st, 0u, 1, 1);
     bootmenu_step(&st, 0u, 0u, &f);
     bootmenu_step(&st, BOOT_OPENING_MS, 0u, &f);
 
@@ -145,12 +145,17 @@ static void test_move_and_confirm_on_one_frame(void)
 
 static bootmenu_state g_menu_st;
 
-static void at_menu(void)
+static void at_menu_with(int part1, int part2)
 {
     boot_frame f;
-    bootmenu_init(&g_menu_st, 0u);
+    bootmenu_init(&g_menu_st, 0u, part1, part2);
     bootmenu_step(&g_menu_st, 0u, 0u, &f);
     bootmenu_step(&g_menu_st, BOOT_OPENING_MS, 0u, &f);
+}
+
+static void at_menu(void)
+{
+    at_menu_with(1, 1);
 }
 
 static void test_cursor_starts_on_part_one(void)
@@ -174,16 +179,49 @@ static void test_cursor_toggles(void)
                (int)f.highlight, (int)BOOT_ENTRY_OUT_OF_THIS_WORLD);
 }
 
-static void test_part_one_cannot_be_confirmed(void)
+static void test_part_one_starts_when_available(void)
 {
     boot_frame f;
-    at_menu();
+    at_menu_with(1, 1);
     bootmenu_step(&g_menu_st, BOOT_OPENING_MS + 100u, BOOT_KEY_A, &f);
-    expect_int("confirming OUT OF THIS WORLD does not start the game",
-               f.start_game, 0);
-    expect_int("and leaves the cursor where it was",
+    expect_int("confirming OUT OF THIS WORLD asks for Part I", f.start_part1, 1);
+    expect_int("and does not start Part II", f.start_game, 0);
+}
+
+static void test_part_one_inert_when_unavailable(void)
+{
+    boot_frame f;
+    at_menu_with(0, 1);
+    bootmenu_step(&g_menu_st, BOOT_OPENING_MS + 100u, BOOT_KEY_A, &f);
+    expect_int("an absent Part I does not launch", f.start_part1, 0);
+    expect_int("and does not fall through to Part II", f.start_game, 0);
+    expect_int("but the entry still lights",
                (int)f.highlight, (int)BOOT_ENTRY_OUT_OF_THIS_WORLD);
-    expect_screen("and stays on the menu", f.screen, BOOT_SCREEN_MENU);
+    expect_screen("and the menu stays up", f.screen, BOOT_SCREEN_MENU);
+}
+
+static void test_part_two_inert_when_unavailable(void)
+{
+    boot_frame f;
+    at_menu_with(1, 0);
+    bootmenu_step(&g_menu_st, BOOT_OPENING_MS + 100u, BOOT_KEY_DOWN, &f);
+    bootmenu_step(&g_menu_st, BOOT_OPENING_MS + 200u, BOOT_KEY_B, &f);
+    expect_int("an absent Part II does not start the game", f.start_game, 0);
+    expect_int("and does not launch Part I instead", f.start_part1, 0);
+    expect_int("but the entry still lights",
+               (int)f.highlight, (int)BOOT_ENTRY_HEART_OF_THE_ALIEN);
+}
+
+static void test_neither_game_present(void)
+{
+    boot_frame f;
+    at_menu_with(0, 0);
+    bootmenu_step(&g_menu_st, BOOT_OPENING_MS + 100u, BOOT_KEY_A, &f);
+    expect_int("no Part I", f.start_part1, 0);
+    bootmenu_step(&g_menu_st, BOOT_OPENING_MS + 200u, BOOT_KEY_DOWN, &f);
+    bootmenu_step(&g_menu_st, BOOT_OPENING_MS + 300u, BOOT_KEY_C, &f);
+    expect_int("no Part II", f.start_game, 0);
+    expect_screen("the menu is still drawable", f.screen, BOOT_SCREEN_MENU);
 }
 
 static void test_part_two_starts_the_game(void)
@@ -253,7 +291,10 @@ int main(void)
     test_move_and_confirm_on_one_frame();
     test_cursor_starts_on_part_one();
     test_cursor_toggles();
-    test_part_one_cannot_be_confirmed();
+    test_part_one_starts_when_available();
+    test_part_one_inert_when_unavailable();
+    test_part_two_inert_when_unavailable();
+    test_neither_game_present();
     test_part_two_starts_the_game();
     test_idle_timer_resets_on_ignored_input();
     test_fade_and_attract();
