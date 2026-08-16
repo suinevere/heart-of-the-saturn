@@ -13,7 +13,6 @@ extern "C" {
 #include "disc.h"
 #include "discsec.h"
 #include "fadecalc.h"
-#include "platform.h"
 #include "saturn_bootart.h"
 #include "sound.h"
 #include "video.h"
@@ -24,13 +23,6 @@ extern "C" {
 #include <sgl.h>
 #include <sega_gfs.h>
 #include <sega_sys.h>
-
-/* Last, and outside the block above, for the reason disc_srl.cxx:65-67 orders
-   it the same way: this header carries its own extern "C" guard, and it
-   #defines getenv, so any SDK header that declares getenv after it would have
-   that declaration rewritten into a syntax error. It only has to precede the
-   printf call sites below. */
-#include "saturn_compat.h"
 
 /*----------------------
  | CHAINLOAD_ENTRY
@@ -132,27 +124,6 @@ typedef void (*chainload_fn)(const void *src, void *dst,
                              unsigned long longwords, void *entry);
 
 /*----------------------
- | CHAINLOAD_DIAG_MAGIC / g_chainDiag
- | Description: DIAGNOSTIC BUILD ONLY -- delete once the chain-load works.
- |   Records how far chainload_run got, in work RAM, because the screen cannot
- |   be trusted to report it: boot_art_load hides NBG0, which is the layer
- |   printf reaches through saturn_compat.cxx's diag_write, so every message
- |   this function emits lands on a hidden layer.
- |
- |   The magic in slot 0 is what makes this findable without a linker map --
- |   a save state can be searched for the constant and the six words read off
- |   behind it. Slots are: magic, furthest stage reached, file bytes,
- |   LoadBytes' return, the staging buffer's address, its size.
- |
- |   volatile so the stores are not sunk or reordered past the calls between
- |   them; a stage that never runs must leave its slot at the previous value.
- | Author: suinevere
- ----------------------*/
-#define CHAINLOAD_DIAG_MAGIC 0x5a17c0deu
-
-volatile uint32_t g_chainDiag[6] = { CHAINLOAD_DIAG_MAGIC, 0, 0, 0, 0, 0 };
-
-/*----------------------
  | chainload_restore
  | Description: Puts the picture back after a staging failure. boot_fade_out
  |   ran before this file was entered and latched the art level at zero, and
@@ -170,60 +141,6 @@ static void chainload_restore(void)
 {
 	boot_art_fade(FADECALC_LEVEL_NORMAL);
 	video_set_fade(FADECALC_LEVEL_NORMAL);
-}
-
-/*----------------------
- | CHAINLOAD_HOLD_MS / chainload_hold
- | Description: DIAGNOSTIC BUILD ONLY -- delete with g_chainDiag.
- |
- |   Puts the recorded state on screen and keeps it there long enough to read.
- |   Three things conspired to make the earlier prints unreadable and this
- |   answers all of them: boot_art_load hides NBG0, which is the layer printf
- |   reaches, so the art is released first; every path out of here either
- |   blacks the screen or jumps, so the text is held for ten seconds before
- |   either happens; and SRL::Debug::Print writes a string without clearing the
- |   rest of its row, so a short line leaves the tail of a longer one behind it
- |   -- every line below is padded to DIAG_COLS (40) to wipe what it lands on.
- |
- |   Presenting inside the wait is what advances platform_ticks: it is driven
- |   by Core::Synchronize, which boot_art_present is the only thing here that
- |   reaches, so a bare spin would never terminate.
- |
- |   That dependency is also why this may only be called from a path that still
- |   has interrupts: Synchronize waits on a vblank, and the quiesce masks it at
- |   both the SCU and the SH-2, so a call after that point hangs on the first
- |   present -- before the line below that lights the screen back up. Every
- |   caller here is a staging failure, which returns while interrupts are live;
- |   the jump path prints instead, since SRL::Debug::Print writes VDP2 VRAM
- |   directly and needs no vblank to become visible.
- | Author: suinevere
- | Dependencies: platform.h, saturn_bootart.h, video.h
- | Globals: g_chainDiag
- | Params: N/A
- | Returns: N/A
- ----------------------*/
-#define CHAINLOAD_HOLD_MS 10000u
-
-static void chainload_hold(void)
-{
-	unsigned int start;
-
-	boot_art_release();
-	boot_art_present();
-	video_set_fade(FADECALC_LEVEL_NORMAL);
-
-	printf("-- CHAINLOAD DIAG ---------------------\n");
-	printf("stage   %-30d\n", (int)g_chainDiag[1]);
-	printf("bytes   %-10d loaded %-11d\n", (int)g_chainDiag[2], (int)g_chainDiag[3]);
-	printf("staged  %08x   size   %-11d\n", (unsigned int)g_chainDiag[4], (int)g_chainDiag[5]);
-	printf("--------------------------------------\n");
-
-	start = platform_ticks();
-
-	while (platform_ticks() - start < CHAINLOAD_HOLD_MS)
-	{
-		boot_art_present();
-	}
 }
 
 /*----------------------
@@ -282,11 +199,6 @@ int chainload_available(void)
 {
 	SRL::Cd::File image(CHAINLOAD_IMAGE);
 
-	/* DIAGNOSTIC BUILD ONLY. 100 separates "the menu was reached and
-	   chainload_run was never called" from "this state was saved before any of
-	   it ran", which a slot left at its initial 0 cannot distinguish. */
-	g_chainDiag[1] = 100u;
-
 	return image.Exists() ? 1 : 0;
 }
 
@@ -334,31 +246,19 @@ void chainload_run(void)
 {
 	SRL::Cd::File image(CHAINLOAD_IMAGE);
 
-	g_chainDiag[1] = 1u;
-
 	if (!image.Exists())
 	{
-		printf("chainload: 1 open failed\n");
-		chainload_hold();
 		chainload_restore();
 		return;
 	}
 
 	int bytes = (int)image.Size.Bytes;
 
-	g_chainDiag[1] = 2u;
-	g_chainDiag[2] = (uint32_t)bytes;
-
-	printf("chainload: b%d s%d ss%d\n",
-		(int)image.Size.Bytes, (int)image.Size.Sectors, (int)image.Size.SectorSize);
-
 	if (bytes <= 0 ||
 		(unsigned long)bytes > CHAINLOAD_MAX_BYTES ||
 		image.Size.SectorSize <= 0 ||
 		image.Size.SectorSize > DISC_MAX_SECTOR_BYTES)
 	{
-		printf("chainload: 2 bad size\n");
-		chainload_hold();
 		chainload_restore();
 		return;
 	}
@@ -367,30 +267,19 @@ void chainload_run(void)
 	unsigned long staging = (((unsigned long)bytes + (DISC_MAX_SECTOR_BYTES - 1ul)) /
 	                         DISC_MAX_SECTOR_BYTES) * DISC_MAX_SECTOR_BYTES;
 
-	g_chainDiag[1] = 3u;
-	g_chainDiag[5] = (uint32_t)staging;
-
 	void *staged = SRL::Memory::LowWorkRam::Malloc((size_t)staging);
-
-	g_chainDiag[4] = (uint32_t)staged;
 
 	if (staged == 0)
 	{
-		printf("chainload: 3 no LWRAM for %d\n", (int)staging);
-		chainload_hold();
 		chainload_restore();
 		return;
 	}
-
-	g_chainDiag[1] = 4u;
 
 	void *tramp = SRL::Memory::LowWorkRam::Malloc(sizeof(g_trampoline));
 
 	if (tramp == 0)
 	{
-		printf("chainload: 4 no LWRAM for trampoline\n");
 		SRL::Memory::LowWorkRam::Free(staged);
-		chainload_hold();
 		chainload_restore();
 		return;
 	}
@@ -398,24 +287,15 @@ void chainload_run(void)
 	video_set_fade(0);
 	disc_stop_track();
 
-	g_chainDiag[1] = 5u;
-
 	int loaded = image.LoadBytes(0, bytes, staged);
-
-	g_chainDiag[1] = 6u;
-	g_chainDiag[3] = (uint32_t)loaded;
 
 	if (loaded != bytes)
 	{
-		printf("chainload: 5 read %d of %d\n", loaded, bytes);
 		SRL::Memory::LowWorkRam::Free(tramp);
 		SRL::Memory::LowWorkRam::Free(staged);
-		chainload_hold();
 		chainload_restore();
 		return;
 	}
-
-	printf("chainload: staged, jumping\n");
 
 	for (unsigned int i = 0; i < sizeof(g_trampoline) / sizeof(g_trampoline[0]); i++)
 	{
@@ -424,15 +304,11 @@ void chainload_run(void)
 
 	if (!chainload_slave_off())
 	{
-		printf("chainload: 6 slave halt refused\n");
 		SRL::Memory::LowWorkRam::Free(tramp);
 		SRL::Memory::LowWorkRam::Free(staged);
-		chainload_hold();
 		chainload_restore();
 		return;
 	}
-
-	g_chainDiag[1] = 7u;
 
 	GFS_Reset();
 	sound_flush_cache();
@@ -446,10 +322,6 @@ void chainload_run(void)
 
 	SYS_SETSCUIM(0xffffffffu);
 	__asm__ __volatile__("ldc %0, sr" :: "r"(0x000000f0u) : "memory");
-
-	g_chainDiag[1] = 8u;
-
-	printf("chainload: quiesced, jumping\n");
 
 	chainload_fn go = (chainload_fn)((unsigned long)tramp | CHAINLOAD_UNCACHED);
 
