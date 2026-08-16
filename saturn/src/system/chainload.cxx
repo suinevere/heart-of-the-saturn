@@ -146,6 +146,14 @@ static void chainload_restore(void)
  |   Presenting inside the wait is what advances platform_ticks: it is driven
  |   by Core::Synchronize, which boot_art_present is the only thing here that
  |   reaches, so a bare spin would never terminate.
+ |
+ |   That dependency is also why this may only be called from a path that still
+ |   has interrupts: Synchronize waits on a vblank, and the quiesce masks it at
+ |   both the SCU and the SH-2, so a call after that point hangs on the first
+ |   present -- before the line below that lights the screen back up. Every
+ |   caller here is a staging failure, which returns while interrupts are live;
+ |   the jump path prints instead, since SRL::Debug::Print writes VDP2 VRAM
+ |   directly and needs no vblank to become visible.
  | Author: suinevere
  | Dependencies: platform.h, saturn_bootart.h, video.h
  | Globals: g_chainDiag
@@ -333,7 +341,7 @@ void chainload_run(void)
 
 	g_chainDiag[1] = 8u;
 
-	chainload_hold();
+	printf("chainload: quiesced, jumping\n");
 
 	chainload_fn go = (chainload_fn)((unsigned long)tramp | CHAINLOAD_UNCACHED);
 
