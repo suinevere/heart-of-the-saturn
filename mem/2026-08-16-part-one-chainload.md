@@ -128,6 +128,39 @@ waits, and **returns a result the caller checks** — a refusal now returns to t
 rather than jumping into a guaranteed crash. It runs before `GFS_Reset` so that return is
 still safe.
 
+## The real cause: BIOS state below the entry point, which the copy cannot reach
+
+The copy rewrites `0x06004000` upward. **`0x06000000`-`0x06004000` is the BIOS work area
+and is never rewritten**, so Part I inherits ours. A menu-time state has 22 longwords in
+there pointing into the window about to be overwritten; six are the BIOS user-interrupt
+hook table at `0x06000a00`:
+
+| slot | vector | held |
+|---|---|---|
+| `0x06000a00` | `0x40` vblank-in | `0x0602cbf6` |
+| `0x06000a04` | `0x41` vblank-out | `0x0602cd4e` |
+| `0x06000a1c` | `0x47` system manager | `0x0602d384` |
+| `0x06000a24` | `0x49` level-2 DMA end | `0x0602cbe4` |
+| `0x06000a28` | `0x4a` level-1 DMA end | `0x0602cbd2` |
+| `0x06000a2c` | `0x4b` level-0 DMA end | `0x0602cbc0` |
+
+Masking interrupts before the jump does not cover this, because **Part I lifts the mask
+itself**: `slInitSystem` sets SR back partway through its own run (`jsr @r13` with `r4 = 0`)
+and only re-hooks afterwards; SRL's `slIntFunction` is later still. The first vblank in that
+window is dispatched into Part I's data. That is why the faulting PC differs run to run
+(`0x06000348` once, `0x00000002` the next, `GBR` clobbered to `0x00018405`) while the
+landing spot is always the BIOS illegal-instruction stub.
+
+`smpsys.c:156-157` does precisely this cleanup for its own two hooks before jumping to
+`APP_ENTRY`, commented "hook re-initialisation". `79cf69d` clears `0x40`-`0x5f` through
+`SYS_SETUINT`/`SYS_SETSINT`.
+
+**Still open at handoff:** `SMPC/SlaveSH2On` reads `1` even after `9952568`, though the
+direct write's own check passed (a refusal returns to the menu, and it does not). The
+slave's registers are bit-identical across every state, so it looks parked rather than
+running, and the stale slave entry at `0x06000250` is the same class of inherited pointer.
+Verify `SlaveSH2On` in a fresh state before spending anything more on it.
+
 ## Four traps that all failed silently
 
 - **`sound_done()` is declared but not linked.** `makefile:103` filters `src/sound.c` out of
