@@ -26,8 +26,9 @@ PART1_CACHE=$(cfg PART1_CACHE)
 DEST=$(cd ../../saturn/cd/data && pwd)
 PART1_KIT_DEST="../assets/part1"
 
-# -f re-downloads over a populated cache, matching tools/assets/data.bat's flag
-# for the same purpose. Without it this is a no-op once the files are present.
+# -f re-downloads unconditionally. It should not normally be needed: the cache
+# below is validated against the published digests rather than trusted for
+# existing, so a republished release is picked up without it.
 FORCE=0
 case "${1:-}" in -f|--force) FORCE=1 ;; esac
 
@@ -37,18 +38,38 @@ mkdir -p "$PART1_CACHE"
 # interrupted download cannot look like a complete file to the next run -- the
 # same discipline tools/assets/data.bat keeps for its own fetch. --fail makes
 # curl exit non-zero on a 404 instead of writing the error page to disk.
-for f in 0.bin OPENING.CPK data.bat CONFIG.ME SHA256SUMS; do
+fetch() {
+    echo "Part I: fetching $1"
+    curl -fsSL -o "$PART1_CACHE/$1.part" "$PART1_URL/$1"
+    mv -f "$PART1_CACHE/$1.part" "$PART1_CACHE/$1"
+}
+
+# SHA256SUMS is re-fetched every run. It is 300 bytes, and it is the only thing
+# that can tell a cached file from a superseded one: the release workflow uploads
+# with --clobber, so an asset changes in place and a tag is not a version. A cache
+# that only asks whether the file exists therefore hides every republish, and the
+# makefile calls this with no flag -- so an ordinary build kept using a binary
+# that had already been replaced upstream. Three test runs were spent on that.
+fetch SHA256SUMS
+
+# Only a digest mismatch re-downloads, so a cache that is already current costs
+# one 300-byte request and nothing else. A file the manifest does not mention
+# leaves sha256sum with no input lines, which it reports as a failure -- so an
+# unknown name downloads rather than being silently skipped.
+for f in 0.bin OPENING.CPK data.bat CONFIG.ME; do
     if [ "$FORCE" = "1" ] || [ ! -f "$PART1_CACHE/$f" ]; then
-        echo "Part I: fetching $f"
-        curl -fsSL -o "$PART1_CACHE/$f.part" "$PART1_URL/$f"
-        mv -f "$PART1_CACHE/$f.part" "$PART1_CACHE/$f"
+        fetch "$f"
+    elif ! ( cd "$PART1_CACHE" &&
+             awk -v f="$f" '{ n = $NF; sub(/^\*/, "", n); if (n == f) print }' SHA256SUMS |
+             sha256sum -c --status - ) 2>/dev/null; then
+        echo "Part I: $f is stale against the published digest"
+        fetch "$f"
     fi
 done
 
-# The whole reason SHA256SUMS is published. Another-Saturn's release workflow
-# uploads with --clobber, so an asset can be replaced in place and a tag alone
-# is not a reproducible pin; the digests are. A mismatch means the release
-# moved under us, which is a thing to look at rather than build through.
+# The whole reason SHA256SUMS is published. A mismatch here after the loop above
+# means the release moved between the manifest being fetched and the assets being
+# read, which is a thing to look at rather than build through.
 ( cd "$PART1_CACHE" && sha256sum -c SHA256SUMS )
 
 cp -f "$PART1_CACHE/0.bin"       "$DEST/ANOTHER.BIN"
