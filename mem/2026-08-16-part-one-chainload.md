@@ -71,8 +71,18 @@ the screen, and exits before drawing anything.
 The 14 files (`bank01`..`bank0d`, `memlist.bin`) are now in `saturn/cd/data`, extracted
 from the user's own `Another World (USA) - Complete` disc rather than by downloading
 `GAME_URL`. All 14 are covered by `.gitignore`'s `BANK*`/`bank*`/`*.bin` rules, so they
-stay off the repository — but they are **not reproducible from a clean checkout**, and a
-fresh clone must run `tools/assets/part1/data.bat` or this returns.
+stay off the repository, and nothing in `clean` removes them — `part1_clean` deletes only
+`ANOTHER.BIN` and `OPENING.CPK`. They are **not reproducible from a clean checkout**: a
+fresh clone must run `tools/assets/part1/data.bat`, which the build never calls because it
+downloads gated data. `HOTA_PART1=1` will otherwise author a disc whose menu entry loads a
+program that exits on the missing `memlist.bin`, exactly as above.
+
+Installing them broke the build once, fixed in `3a56cde`: `tools/assets/data.bat` counts
+Heart of the Alien's 19 blobs as `*.bin` minus `0.bin`, and `memlist.bin` matched, giving
+"expected 19 data blobs, installed 20". `ANOTHER.BIN` matches the same glob and only
+escaped because `part1_clean` deletes it before each count. Both are excluded by name now,
+in both halves of the polyglot. The same miscount also defeated the already-installed
+guard at the top of that script, so every build was re-extracting the whole rip.
 
 ## Four traps that all failed silently
 
