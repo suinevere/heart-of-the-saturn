@@ -250,19 +250,13 @@ static int initialize()
 		panic("failed to initialize renderer module");
 	}
 
-	/* Both buffers must exist before load_part2_data(), whose game2bin_init()
-	   is the first thing in the engine that reads a blob off the disc and
-	   therefore the first thing that writes into either of them. On Saturn
-	   these are LWRAM allocations that can genuinely fail; on the host they
-	   cannot. */
+	/* The emulated map must exist before vm_reset() below writes into it. On
+	   Saturn it is an LWRAM allocation that can genuinely fail; on the host it
+	   cannot. GAME2.BIN's buffer is deliberately NOT taken here -- see
+	   load_part2_data(). */
 	if (!vm_alloc_memory())
 	{
 		panic("out of memory allocating the emulated 68000 map");
-	}
-
-	if (!game2bin_alloc())
-	{
-		panic("out of memory allocating the GAME2.BIN buffer");
 	}
 
 	screen_init();
@@ -288,6 +282,16 @@ static int initialize()
  |   its old position reads GAME2.BIN -- video_set_palette is the only consumer
  |   in the port and the VM is the only thing that calls it -- so the move
  |   costs the host build ordering and nothing else.
+ |
+ |   The allocation moved with the read, and that part is not cosmetic. The
+ |   buffer is GAME2BIN_SIZE (409,600) and the emulated map is MEMORY_SIZE
+ |   (524,288); together they are 933,888 of LWRAM's 1,048,576, and every
+ |   engine malloc lands there (saturn_compat.cxx:259). Reserving both during
+ |   initialize() left roughly 82 KB free at the boot menu, against the 217,088
+ |   the chain-load needs to stage Part I -- so selecting OUT OF THIS WORLD
+ |   failed on the allocation and returned to the menu. Part II's buffer is
+ |   Part II's to hold, and holding it before the player has chosen Part II is
+ |   what made a disc with two games on it only able to load one.
  | Author: suinevere
  | Dependencies: game2bin.h
  | Globals: N/A
@@ -296,6 +300,11 @@ static int initialize()
  ----------------------*/
 static void load_part2_data(void)
 {
+	if (!game2bin_alloc())
+	{
+		panic("out of memory allocating the GAME2.BIN buffer");
+	}
+
 	if (game2bin_init() < 0)
 	{
 		panic("can't read GAME2.BIN file");
