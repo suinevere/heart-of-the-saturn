@@ -183,6 +183,21 @@ app entry `0x06004000` at `+0xf0`, code from `0x06002100`), but `smpsys.c` keeps
 nothing re-zeroes them. Re-entering it would clear the wrong quarters of VDP2 VRAM. It would
 have to be re-read from the disc's first sectors first, which GFS cannot do by LBA.
 
+## Two ways this wasted runs, both now closed
+
+**The cache hid a republished release.** `tools/another/fetch.sh` skipped any file already in
+`.another/`, and `saturn/makefile` calls it with no flag, so an ordinary build kept using a
+binary the release had already replaced — the workflow uploads with `--clobber`, so a tag is
+not a version. `0e4c600` re-fetches `SHA256SUMS` every run (300 bytes) and re-downloads only
+what fails its digest.
+
+**Do not verify a fetched binary by searching for constants.** `0xfffffe10` reaches a
+register through `mov.w` on a *sign-extended 16-bit* pool literal (`fe10`), so a four-byte
+search for it can never hit, and a build whose size is unchanged may still be new — padding
+absorbs small growth. Both led to calling a correct build stale. The test that works: diff
+the fetched image against the previous one, which a save state holds at
+`WorkRAMH + 0x4000`. Differences outside the runtime-written window mean a different build.
+
 ## The recommendation
 
 Every failure this session has been **inherited machine state**, found one at a time from
