@@ -89,6 +89,27 @@ typedef void (*chainload_fn)(const void *src, void *dst,
                              unsigned long longwords, void *entry);
 
 /*----------------------
+ | CHAINLOAD_DIAG_MAGIC / g_chainDiag
+ | Description: DIAGNOSTIC BUILD ONLY -- delete once the chain-load works.
+ |   Records how far chainload_run got, in work RAM, because the screen cannot
+ |   be trusted to report it: boot_art_load hides NBG0, which is the layer
+ |   printf reaches through saturn_compat.cxx's diag_write, so every message
+ |   this function emits lands on a hidden layer.
+ |
+ |   The magic in slot 0 is what makes this findable without a linker map --
+ |   a save state can be searched for the constant and the six words read off
+ |   behind it. Slots are: magic, furthest stage reached, file bytes,
+ |   LoadBytes' return, the staging buffer's address, its size.
+ |
+ |   volatile so the stores are not sunk or reordered past the calls between
+ |   them; a stage that never runs must leave its slot at the previous value.
+ | Author: suinevere
+ ----------------------*/
+#define CHAINLOAD_DIAG_MAGIC 0x5a17c0deu
+
+volatile uint32_t g_chainDiag[6] = { CHAINLOAD_DIAG_MAGIC, 0, 0, 0, 0, 0 };
+
+/*----------------------
  | chainload_restore
  | Description: Puts the picture back after a staging failure. boot_fade_out
  |   ran before this file was entered and latched the art level at zero, and
@@ -104,17 +125,7 @@ typedef void (*chainload_fn)(const void *src, void *dst,
  ----------------------*/
 static void chainload_restore(void)
 {
-	/* DIAGNOSTIC BUILD ONLY -- revert to the two-line restore below once the
-	   failing gate is known. boot_art_load hides NBG0, which is the layer
-	   SRL::Debug::Print (and so printf, via saturn_compat.cxx's diag_write)
-	   draws on, so a chainload failure would otherwise print its reason onto a
-	   hidden layer behind faded-out sprites. Releasing the art puts NBG0 back
-	   and makes the reason readable, at the cost of the menu art.
-
-	   boot_art_fade(FADECALC_LEVEL_NORMAL);
-	   video_set_fade(FADECALC_LEVEL_NORMAL); */
-	boot_art_release();
-	boot_art_present();
+	boot_art_fade(FADECALC_LEVEL_NORMAL);
 	video_set_fade(FADECALC_LEVEL_NORMAL);
 }
 
@@ -165,6 +176,8 @@ void chainload_run(void)
 {
 	SRL::Cd::File image(CHAINLOAD_IMAGE);
 
+	g_chainDiag[1] = 1u;
+
 	if (!image.Exists())
 	{
 		printf("chainload: 1 open failed\n");
@@ -173,6 +186,9 @@ void chainload_run(void)
 	}
 
 	int bytes = (int)image.Size.Bytes;
+
+	g_chainDiag[1] = 2u;
+	g_chainDiag[2] = (uint32_t)bytes;
 
 	printf("chainload: b%d s%d ss%d\n",
 		(int)image.Size.Bytes, (int)image.Size.Sectors, (int)image.Size.SectorSize);
@@ -191,7 +207,12 @@ void chainload_run(void)
 	unsigned long staging = (((unsigned long)bytes + (DISC_MAX_SECTOR_BYTES - 1ul)) /
 	                         DISC_MAX_SECTOR_BYTES) * DISC_MAX_SECTOR_BYTES;
 
+	g_chainDiag[1] = 3u;
+	g_chainDiag[5] = (uint32_t)staging;
+
 	void *staged = SRL::Memory::LowWorkRam::Malloc((size_t)staging);
+
+	g_chainDiag[4] = (uint32_t)staged;
 
 	if (staged == 0)
 	{
@@ -199,6 +220,8 @@ void chainload_run(void)
 		chainload_restore();
 		return;
 	}
+
+	g_chainDiag[1] = 4u;
 
 	void *tramp = SRL::Memory::LowWorkRam::Malloc(sizeof(g_trampoline));
 
@@ -213,7 +236,12 @@ void chainload_run(void)
 	video_set_fade(0);
 	disc_stop_track();
 
+	g_chainDiag[1] = 5u;
+
 	int loaded = image.LoadBytes(0, bytes, staged);
+
+	g_chainDiag[1] = 6u;
+	g_chainDiag[3] = (uint32_t)loaded;
 
 	if (loaded != bytes)
 	{
@@ -231,12 +259,16 @@ void chainload_run(void)
 		((unsigned short *)tramp)[i] = g_trampoline[i];
 	}
 
+	g_chainDiag[1] = 7u;
+
 	GFS_Reset();
 	slSlaveFunc(NULL, NULL);
 	sound_flush_cache();
 	slSoundOffWait();
 	SYS_SETSCUIM(0xffffffffu);
 	__asm__ __volatile__("ldc %0, sr" :: "r"(0x000000f0u) : "memory");
+
+	g_chainDiag[1] = 8u;
 
 	chainload_fn go = (chainload_fn)((unsigned long)tramp | CHAINLOAD_UNCACHED);
 
