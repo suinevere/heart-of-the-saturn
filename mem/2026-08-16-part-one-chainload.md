@@ -155,11 +155,45 @@ landing spot is always the BIOS illegal-instruction stub.
 `APP_ENTRY`, commented "hook re-initialisation". `79cf69d` clears `0x40`-`0x5f` through
 `SYS_SETUINT`/`SYS_SETSINT`.
 
-**Still open at handoff:** `SMPC/SlaveSH2On` reads `1` even after `9952568`, though the
-direct write's own check passed (a refusal returns to the menu, and it does not). The
-slave's registers are bit-identical across every state, so it looks parked rather than
-running, and the stale slave entry at `0x06000250` is the same class of inherited pointer.
-Verify `SlaveSH2On` in a fresh state before spending anything more on it.
+**`79cf69d` works.** Confirmed by reading the bytes each hook points at: in Part I's image
+every one starts `2f 06` (`mov.l r0,@-r15`, a handler prologue); in ours they are mid-function
+debris. The six slots now hold **Part I's own handlers**, so it reaches `slInitInterrupt`
+inside `slInitSystem`. Do not compare a pre-jump table against a post-jump one to decide
+this — that comparison is meaningless and cost an hour here.
+
+## Where it stands, and the next fault
+
+Part I still ends in the same BIOS stub, but later and from a different cause: the stacked
+frame gives faulting `PC = 0x00000002` with `SR = 0x000000f0`. Interrupts are still masked,
+so this is *inside* `slInitSystem`, before it lifts the mask — a call through a pointer
+holding 2. Ruled out by reading the state:
+
+- every BIOS pointer `slInitSystem` calls through is intact — `*(0x06000280) = 0x06000810`,
+  `*(0x06000320) = 0x060006b0`, `*(0x06000340) = 0x060007b0`, `*(0x06000344) = 0x060007c0`
+- no slot in the hook table `0x06000900`-`0x06000b00` holds a small value
+- the master's own vector table `0x40`-`0x4b` is byte-identical to its pre-jump contents
+- `*(0x06000324) = 0` (clock mode), so `SYS_CHGSYSCK` is skipped and does not reset the SMPC
+- the 79 stale-looking pointers in `0x060fb800`-`0x060ffc00` are all **below** the stack
+  pointer — dead frames, not live state. So is `SYS_SETSINT`: it writes through the *calling*
+  CPU's VBR, but the vector table is provably unchanged, so it is inert here, not harmful.
+
+**Replaying the IP is not available.** It is still resident at `0x06002000` (header intact,
+app entry `0x06004000` at `+0xf0`, code from `0x06002100`), but `smpsys.c` keeps `sequence`,
+`vramptr`, `cramptr` and `vbIcnt` as statics that have already run to completion, and
+nothing re-zeroes them. Re-entering it would clear the wrong quarters of VDP2 VRAM. It would
+have to be re-read from the disc's first sectors first, which GFS cannot do by LBA.
+
+## The recommendation
+
+Every failure this session has been **inherited machine state**, found one at a time from
+save states at a build cycle each. That is the wrong end of the problem: we are
+reconstructing Part I's requirements by inspection when Part I knows them. The durable fix
+is a sanitise step at the top of Another-Saturn's own `sat_boot_init`, before
+`Core::Initialize` — it is in time because we hand over with interrupts fully masked and
+Part I does not lift the mask until `slInitSystem`, it is testable in that project's own
+tree, and it makes the published artifact bootable from any host rather than only this one.
+What cannot move there is anything that must happen *before* the copy, i.e. halting the
+slave.
 
 ## Four traps that all failed silently
 
