@@ -1,0 +1,183 @@
+name: Build & release setup kit
+
+# Tag pushes (v*) build the two-game engine-only disc, package the setup kit,
+# and attach it to a release -- creating the release if one does not exist yet.
+# Manual runs do the same but upload the kit as a workflow artifact instead.
+#
+# This workflow never touches either game's data. The disc it ships boots but
+# has no resources in it; the end user runs update.bat, which fetches their own
+# copies and folds them in. The complete disc is built only by full-image.yml,
+# and only as a private artifact.
+on:
+  push:
+    tags: ['v*', '[0-9]*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DISC_NAME: Heart of the Alien (USA)
+  KIT_NAME: Heart of the Alien - Parts I and II Setup Kit
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with SaturnRingLib submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install host tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xorriso wget unzip zip curl
+
+      # Same cache key Another-Saturn uses, so the SH-2 gcc fetch is shared
+      # between the two projects' runs.
+      - name: Cache SaturnRingLib toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            SaturnRingLib/Compiler
+            SaturnRingLib/tools/bin
+          key: srl-toolchain-gcc14.2.0-iso2raw0.2.2
+
+      - name: Fetch SH-2 toolchain + iso2raw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        working-directory: SaturnRingLib
+        run: |
+          set -e
+          bash tools/scripts/getcompiler.sh 14.2.0
+          bash tools/scripts/getiso2raw.sh v0.2.2
+
+      # HOTA_AUDIO=none because the shipped disc is data-only: the 41 CD-DA
+      # tracks come from the player's own rip and are laid by update.bat.
+      # HOTA_PART1=1 runs tools/another/fetch.sh, which downloads Part I's
+      # published build, verifies it against the SHA256SUMS shipped beside it,
+      # and copies it in as ANOTHER.BIN. No SH-2 toolchain is needed for Part I
+      # on this path -- the cache above is for our own build only.
+      # HOTA_ASSETS=0 suppresses the makefile's data.bat self-repair, which is
+      # right for a checkout and wrong here: it would fetch the Sega CD rip and
+      # bake somebody else's data into a disc we then publish.
+      - name: Build engine-only two-game disc
+        working-directory: saturn
+        run: |
+          set -e
+          export SRL_INSTALL_ROOT=../SaturnRingLib
+          make all HOTA_PART1=1 HOTA_AUDIO=none HOTA_ASSETS=0
+          ls -la BuildDrop
+
+      # Two games on one disc means two ways to redistribute data that is not
+      # ours. Both gated sets are refused, in the skeleton and in the ISO.
+      - name: Assert the disc carries no game data
+        run: |
+          set -e
+          if ls saturn/cd/data/bank* saturn/cd/data/BANK* saturn/cd/data/memlist.bin saturn/cd/data/MEMLIST.BIN 2>/dev/null | grep -q .; then
+            echo "ERROR: Part I data present in the CD skeleton -- refusing to package"; exit 1
+          fi
+          for f in END1 END2 END3 END4 GAME2 INTRO1 INTRO2 INTRO3 INTRO4 MAKE2MB MID2 ROOMS1 ROOMS2 ROOMS3 ROOMS4 ROOMS5 ROOMS6 ROOMS7 ROOMS8; do
+            if [ -f "saturn/cd/data/$f.BIN" ] || [ -f "saturn/cd/data/$f.bin" ]; then
+              echo "ERROR: Part II blob $f present in the CD skeleton -- refusing to package"; exit 1
+            fi
+          done
+          xorriso -indev "saturn/BuildDrop/${DISC_NAME}.iso" -find / 2>/dev/null | tee /tmp/base-listing
+          if grep -qiE "BANK|MEMLIST|ROOMS1|GAME2" /tmp/base-listing; then
+            echo "ERROR: game data inside the base ISO"; exit 1
+          fi
+          for f in 0.BIN ANOTHER.BIN OPENING.CPK MENUOOTW.ART; do
+            grep -q "'/$f'" /tmp/base-listing || { echo "ERROR: /$f missing -- disc is incomplete"; exit 1; }
+          done
+
+      - name: Stage setup kit
+        id: kit
+        run: |
+          set -e
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then VER="${GITHUB_REF_NAME}"; else VER="${GITHUB_SHA::7}"; fi
+
+          STAGE="$RUNNER_TEMP/kit-stage"
+          mkdir -p "$STAGE/${DISC_NAME}" "$STAGE/data" "$STAGE/music" "$STAGE/part1"
+
+          cp "saturn/BuildDrop/${DISC_NAME}.iso" "$STAGE/${DISC_NAME}/${DISC_NAME}.iso"
+          cp -r tools/assets/bin tools/assets/lib "$STAGE/"
+          cp tools/assets/data.bat tools/assets/update.bat "$STAGE/"
+          cp tools/assets/README-kit.md "$STAGE/README.md"
+          cp saturn/cd/music/tracklist "$STAGE/music/tracklist"
+
+          # Part I's data step. fetch.sh already staged tools/assets/part1/ with
+          # Another-Saturn's data.bat verbatim plus a CONFIG.ME pointing at our
+          # CD skeleton, so this copies an already-correct directory and only
+          # re-aims DATA_DIR at the kit's own layout. Their data.bat resolves
+          # DATA_DIR relative to its own directory with no override, which is
+          # why the path has to be rewritten per context rather than passed in.
+          cp tools/assets/part1/data.bat "$STAGE/part1/data.bat"
+          sed 's|^DATA_DIR=.*|DATA_DIR=../data|' tools/assets/part1/CONFIG.ME > "$STAGE/part1/CONFIG.ME"
+          grep -q '^DATA_DIR=../data$' "$STAGE/part1/CONFIG.ME"
+
+          # In a checkout CD_DIR points back at the CD skeleton; in the kit
+          # there is no checkout, so it becomes the kit root.
+          sed 's|^CD_DIR=.*|CD_DIR=.|' tools/assets/CONFIG.ME > "$STAGE/CONFIG.ME"
+          grep -q '^CD_DIR=.$' "$STAGE/CONFIG.ME"
+
+          chmod +x "$STAGE"/*.bat "$STAGE"/part1/*.bat "$STAGE"/bin/lin/iso2raw "$STAGE"/bin/mac/*/iso2raw
+
+          echo "ver=$VER"           >> "$GITHUB_OUTPUT"
+          echo "stage_dir=$STAGE"   >> "$GITHUB_OUTPUT"
+
+      # Prove the kit works before shipping it, on a copy so downloads and
+      # outputs never reach the zip. The only place the Linux path (system
+      # xorriso + bin/lin/iso2raw) is exercised, and the only automated proof
+      # that both games coexist on one disc.
+      - name: Smoke-test the kit
+        run: |
+          set -e
+          TEST="$RUNNER_TEMP/kit-test"
+          cp -r "${{ steps.kit.outputs.stage_dir }}" "$TEST"
+          (cd "$TEST" && bash update.bat)
+          out="$TEST/${DISC_NAME} - Complete"
+          test -s "$out/${DISC_NAME} (Track 01).bin"
+          grep -q "FILE \"${DISC_NAME} (Track 01).bin\" BINARY" "$out/${DISC_NAME}.cue"
+          perl -e 'binmode STDIN; binmode STDOUT; while (read(STDIN,$s,2352)==2352) { print substr($s,16,2048) }' \
+            < "$out/${DISC_NAME} (Track 01).bin" > /tmp/deraw.iso
+          xorriso -indev /tmp/deraw.iso -find / 2>/dev/null | tee /tmp/full-listing
+          for f in 0.BIN ANOTHER.BIN OPENING.CPK BANK01 BANK0D MEMLIST.BIN ROOMS1.BIN GAME2.BIN; do
+            grep -q "'/$f'" /tmp/full-listing || { echo "ERROR: /$f missing from the built disc"; exit 1; }
+          done
+          # IP.BIN is the SEGA boot header; without it byte-for-byte the disc
+          # is a coaster, and xorriso rewrites that area unless we restore it.
+          cmp -n 32768 "saturn/BuildDrop/${DISC_NAME}.iso" /tmp/deraw.iso
+          echo "Kit smoke test passed: both games on one disc."
+
+      - name: Package setup kit
+        id: package
+        run: |
+          set -e
+          NAME="${KIT_NAME} (${{ steps.kit.outputs.ver }})"
+          (cd "${{ steps.kit.outputs.stage_dir }}" && zip -rq "$RUNNER_TEMP/${NAME}.zip" .)
+          echo "artifact_name=${NAME}"             >> "$GITHUB_OUTPUT"
+          echo "zip_path=$RUNNER_TEMP/${NAME}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Upload kit as workflow artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.kit.outputs.stage_dir }}
+
+      - name: Attach to GitHub release (tag runs)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            printf '%s\n' \
+              "Automated Heart of the Alien / Out of This World Saturn build from $TAG." \
+              "" \
+              "Unzip and run \`update.bat\` (double-click on Windows, or \`bash update.bat\`)." \
+              "It fetches both games' original data files and builds a burnable cue/bin." \
+              "See README.md in the zip." > /tmp/notes.md
+            gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md
+          fi
+          gh release upload "$TAG" "${{ steps.package.outputs.zip_path }}" --clobber

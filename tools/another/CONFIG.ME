@@ -1,0 +1,20 @@
+# Part I (Another-Saturn) source.
+# KEY=VALUE, one per line. Lines starting with '#' are ignored.
+# Relative paths resolve against this file's own directory, not the caller's cwd.
+
+# Where fetch.sh takes Part I's published build from. GitHub resolves
+# /releases/latest/download/<asset> to whatever the newest release is, so this
+# tracks upstream without naming a version here.
+#
+# There is no commit pin any more, and the tradeoff is worth stating: a git SHA
+# was immutable, a release is not -- Another-Saturn's own workflow uploads with
+# --clobber, so an asset can be replaced under a tag that never moved. The
+# SHA256SUMS file it publishes alongside is what closes that, and fetch.sh
+# verifies against it rather than trusting the URL. To pin a specific version
+# instead, replace `latest/download` with `download/<tag>`.
+PART1_URL=https://github.com/suinevere/Another-Saturn/releases/latest/download
+
+# Download cache. Gitignored, and safe to delete -- fetch.sh re-fetches what is
+# missing. Kept out of the build tree so `make clean` cannot force an 11 MB
+# re-download of OPENING.CPK.
+PART1_CACHE=../../.another

@@ -48,6 +48,7 @@
 #include "system/saturn_backup.h"
 #include "system/saturn_saveslot.h"
 #include "menus/menu.h"
+#include "chainload.h"
 #endif
 
 static char *VERSION = "1.2.4";
@@ -235,9 +236,11 @@ static void atexit_callback(void)
 /*----------------------
  | initialize
  | Description: Engine bring-up after the disc is open: the renderer, the two
- |   bulk buffers, GAME2.BIN and the first screen. platform_init() and the
- |   atexit registration used to head this function and now run in main()
- |   ahead of disc_open(), for the reason main()'s banner gives.
+ |   bulk buffers and the first screen. platform_init() and the atexit
+ |   registration used to head this function and now run in main() ahead of
+ |   disc_open(), for the reason main()'s banner gives. Reading GAME2.BIN used
+ |   to sit here too and now runs in load_part2_data(), for the reason that
+ |   function's banner gives.
  | Author: suinevere
  ----------------------*/
 static int initialize()
@@ -247,10 +250,11 @@ static int initialize()
 		panic("failed to initialize renderer module");
 	}
 
-	/* Both buffers must exist before game2bin_init(), which is the first
-	   thing in the engine that reads from the disc and therefore the first
-	   thing that writes into either of them. On Saturn these are LWRAM
-	   allocations that can genuinely fail; on the host they cannot. */
+	/* Both buffers must exist before load_part2_data(), whose game2bin_init()
+	   is the first thing in the engine that reads a blob off the disc and
+	   therefore the first thing that writes into either of them. On Saturn
+	   these are LWRAM allocations that can genuinely fail; on the host they
+	   cannot. */
 	if (!vm_alloc_memory())
 	{
 		panic("out of memory allocating the emulated 68000 map");
@@ -259,11 +263,6 @@ static int initialize()
 	if (!game2bin_alloc())
 	{
 		panic("out of memory allocating the GAME2.BIN buffer");
-	}
-
-	if (game2bin_init() < 0)
-	{
-		panic("can't read GAME2.BIN file");
 	}
 
 	screen_init();
@@ -277,6 +276,30 @@ static int initialize()
 	}
 
 	return 0;
+}
+
+/*----------------------
+ | load_part2_data
+ | Description: Reads GAME2.BIN, the first of Part II's nineteen blobs the
+ |   engine touches. Split out of initialize() and called after
+ |   boot_sequence() because that read is the one piece of bring-up a disc
+ |   without Part II cannot satisfy: taken in initialize(), it panicked before
+ |   the menu that is supposed to say so had been drawn. Nothing between it and
+ |   its old position reads GAME2.BIN -- video_set_palette is the only consumer
+ |   in the port and the VM is the only thing that calls it -- so the move
+ |   costs the host build ordering and nothing else.
+ | Author: suinevere
+ | Dependencies: game2bin.h
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+static void load_part2_data(void)
+{
+	if (game2bin_init() < 0)
+	{
+		panic("can't read GAME2.BIN file");
+	}
 }
 
 /** Loads a screen from room file
@@ -1283,8 +1306,10 @@ static void boot_fade_out(int screen, int highlight)
  | boot_sequence
  | Description: Runs the opening stills and the game-select menu, returning
  |   when the player starts Heart of the Alien. Sits between initialize() and
- |   run() so the disc reads it needs are already done and the drive is free
- |   for CD-DA.
+ |   load_part2_data(): the renderer, the pad and the disc are all up, and no
+ |   blob of either game has been read yet, which is what lets a disc missing
+ |   one of them reach this menu instead of a panic. GAME2.BIN is read on the
+ |   way out, behind the fade this function already leaves black.
  |
  |   Returns immediately if the artwork will not load: a missing decoration
  |   must never brick the disc, so a build without the TGAs boots into the
@@ -1307,7 +1332,8 @@ static void boot_fade_out(int screen, int highlight)
  |   boot_art_release only toggles NBG0; nothing else in the port draws
  |   sprites, so nothing would otherwise replace them.
  | Author: suinevere
- | Dependencies: bootmenu.h, saturn_bootart.h, disc.h, input.h, platform.h
+ | Dependencies: bootmenu.h, saturn_bootart.h, chainload.h, disc.h, input.h,
+ |   platform.h
  | Globals: N/A
  | Params: N/A
  | Returns: N/A
@@ -1331,7 +1357,8 @@ static void boot_sequence(void)
 	check_events();
 	previous = boot_key_mask();
 
-	bootmenu_init(&state, (uint32_t)platform_ticks());
+	bootmenu_init(&state, (uint32_t)platform_ticks(),
+	              chainload_available(), disc_part2_available());
 
 	for (;;)
 	{
@@ -1348,6 +1375,13 @@ static void boot_sequence(void)
 		}
 
 		disc_set_music_volume(frame.music_volume);
+
+		if (frame.start_part1)
+		{
+			boot_fade_out((int)frame.screen, (int)frame.highlight);
+			chainload_run();
+			disc_play_track(BOOT_MUSIC_INDEX, 0);
+		}
 
 		if (frame.start_game)
 		{
@@ -1494,8 +1528,8 @@ int main(int argc, char **argv)
 
 	/* Positional argument after option parsing, or fall back to searching
 	   the cd directory for a cue sheet -- disc_open must run before
-	   initialize()'s game2bin_init() call, the first thing that reads
-	   from the disc. */
+	   load_part2_data()'s game2bin_init() call, the first thing that reads
+	   a blob from the disc. */
 	cue_path = (optind < argc) ? argv[optind] : find_cue_path();
 	if (cue_path == NULL)
 	{
@@ -1531,6 +1565,8 @@ int main(int argc, char **argv)
 #ifdef HOTA_SATURN
 	boot_sequence();
 #endif
+
+	load_part2_data();
 
 	switch(test_flag)
 	{

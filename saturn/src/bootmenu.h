@@ -44,9 +44,9 @@ typedef enum
 
 /*----------------------
  | boot_entry
- | Description: Which menu entry is lit. OUT OF THIS WORLD can be highlighted
- |   but never confirmed -- this engine carries no Part I data, and the entry
- |   exists because the original's menu does.
+ | Description: Which menu entry is lit. Either entry can be confirmed only
+ |   when its own game is available -- the entry exists because the
+ |   original's menu does, regardless of what this engine can currently run.
  | Author: suinevere
  ----------------------*/
 typedef enum
@@ -133,11 +133,14 @@ typedef struct
     int      in_menu;
     int      highlight;
     int      music_started;
+    int      part1_available;
+    int      part2_available;
 } bootmenu_state;
 
 /*----------------------
  | boot_frame
- | Description: What the caller should do this frame.
+ | Description: What the caller should do this frame. start_game and
+ |   start_part1 are mutually exclusive: one confirm can only choose one game.
  | Author: suinevere
  ----------------------*/
 typedef struct
@@ -147,20 +150,28 @@ typedef struct
     uint8_t     music_volume;
     int         music_restart;
     int         start_game;
+    int         start_part1;
 } boot_frame;
 
 /*----------------------
  | bootmenu_init
  | Description: Starts the sequence at the first opening still, with the
  |   cursor on OUT OF THIS WORLD to match the capture's first menu frame.
+ |
+ |   An unavailable game's entry still lights and still moves the cursor; only
+ |   confirming it is refused. The original's menu has no greyed-out state and
+ |   the capture the art is cropped from cannot supply one.
  | Author: suinevere
  | Dependencies: N/A
  | Globals: N/A
  | Params: st -- state to initialise; now_ms -- the clock's current reading,
- |         which need not be zero
+ |         which need not be zero; part1_available -- non-zero if Part I's
+ |         program is on the disc; part2_available -- non-zero if Part II's
+ |         blobs are
  | Returns: N/A
  ----------------------*/
-void bootmenu_init(bootmenu_state *st, uint32_t now_ms);
+void bootmenu_init(bootmenu_state *st, uint32_t now_ms,
+                   int part1_available, int part2_available);
 
 /*----------------------
  | bootmenu_step

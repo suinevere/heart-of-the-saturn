@@ -2,7 +2,7 @@
  | disc_srl.cxx
  | Description: Saturn implementation of disc.h, over SRL::Cd::File. Sibling
  |   of src/host/disc_cue.c: same five functions, no FILE *, no bin/cue --
- |   there is one drive and one mounted disc, so disc_open validates the
+ |   there is one drive and one mounted disc, so disc_open checks the
  |   19-file manifest (disc_manifest.h) against live GFS lookups instead of a
  |   cached ISO9660 directory, and disc_read_file bounds every read at
  |   max_size the same way the host backend does. CD-DA plays through
@@ -558,15 +558,97 @@ static void cdda_restore(void)
 }
 
 /*----------------------
+ | DISC_BOOT_PROGRAM
+ | Description: The disc's first-read file, written by shared.mk's
+ |   convert_binary on every build regardless of which game's data is present.
+ |   Resolving it is what tells disc_open that GFS answers at all, now that an
+ |   absent Part II is a menu state rather than a failure.
+ | Author: suinevere
+ ----------------------*/
+#define DISC_BOOT_PROGRAM "0.BIN"
+
+/*----------------------
+ | disc_manifest_scan
+ | Description: The one place DISC_MANIFEST_LIST is walked. Counts the blobs
+ |   that resolve and the blobs that are missing or the wrong size, and names
+ |   the first fault, so that disc_open can read the present count as proof of
+ |   a live filesystem while disc_part2_available reads the fault count as
+ |   Part II's availability, without either duplicating the other's walk.
+ | Author: suinevere
+ | Dependencies: disc_manifest.h, srl.hpp
+ | Globals: N/A
+ | Params: presentOut -- receives how many blobs resolved, or nullptr
+ |         reportPrefix -- printed alongside a fault, or nullptr to stay quiet
+ | Returns: how many blobs are missing or the wrong size
+ ----------------------*/
+static int disc_manifest_scan(int *presentOut, const char *reportPrefix)
+{
+	int presentCount = 0;
+	int missingCount = 0;
+	int sizeBadCount = 0;
+	const char *firstBad = 0;
+	int firstBadGot = 0;
+	int firstBadWant = 0;
+
+#define DISC_MANIFEST_CHECK(name, lba, size)                                          \
+	{                                                                                  \
+		SRL::Cd::File manifestFile(name);                                             \
+		if (!manifestFile.Exists())                                                   \
+		{                                                                              \
+			missingCount++;                                                           \
+			if (firstBad == 0) { firstBad = name; firstBadGot = -1; firstBadWant = (int)(size); } \
+		}                                                                              \
+		else                                                                           \
+		{                                                                              \
+			presentCount++;                                                           \
+			if (manifestFile.Size.Bytes != (int32_t)(size))                           \
+			{                                                                          \
+				sizeBadCount++;                                                       \
+				if (firstBad == 0) { firstBad = name; firstBadGot = (int)manifestFile.Size.Bytes; firstBadWant = (int)(size); } \
+			}                                                                          \
+		}                                                                              \
+	}
+
+	DISC_MANIFEST_LIST(DISC_MANIFEST_CHECK)
+#undef DISC_MANIFEST_CHECK
+
+	if (presentOut != 0)
+	{
+		*presentOut = presentCount;
+	}
+
+	if (reportPrefix != 0 && (missingCount != 0 || sizeBadCount != 0))
+	{
+		printf("%s: %d missing, %d wrong size\n", reportPrefix, missingCount, sizeBadCount);
+		printf("%s: %s got %d want %d\n", reportPrefix, firstBad, firstBadGot, firstBadWant);
+	}
+
+	return missingCount + sizeBadCount;
+}
+
+/*----------------------
  | disc_open
- | Description: Confirms SRL::Cd is up and validates the 19-file manifest
- |   against live GFS lookups before returning success, matching
- |   disc_cue.c's "fail loudly at startup, not quietly three minutes later"
- |   contract. cue_path is accepted and ignored: a Saturn disc has no cue
- |   sheet, there is one drive and one mounted disc. LBA is not checked --
- |   SRL::Cd::File exposes a GFS handle and a size, not a sector address --
- |   so only existence and size are verified; disc_cue.c treats an LBA
- |   mismatch as a non-fatal warning anyway, so nothing fatal is lost.
+ | Description: Confirms SRL::Cd is up and that the mounted disc's filesystem
+ |   answers, then returns. cue_path is accepted and ignored: a Saturn disc has
+ |   no cue sheet, there is one drive and one mounted disc.
+ |
+ |   The 19-file manifest is walked here but no longer gates the result. It
+ |   used to, and that made a disc carrying only Part I panic before the menu
+ |   it should have drawn ever existed; the design spec's error table asks for
+ |   HEART OF THE ALIEN to light and refuse to confirm instead. Part II's
+ |   absence is now a soft fact the caller asks disc_part2_available for, and
+ |   the walk survives here only for its diagnostics. LBA is not checked --
+ |   SRL::Cd::File exposes a GFS handle and a size, not a sector address -- so
+ |   only existence and size are reported; disc_cue.c treats an LBA mismatch as
+ |   a non-fatal warning anyway, so nothing fatal is lost.
+ |
+ |   What is still fatal is a disc nothing at all resolves on, which is what no
+ |   disc or a downed GFS looks like from here: every blob missing and the boot
+ |   program itself unreachable. Either half answering is proof enough that the
+ |   filesystem is up, so the two are checked as an or -- a disc with neither
+ |   game's data still boots, and a Part II-only disc never depends on the boot
+ |   program's name resolving.
+ |
  |   disc_close() up front makes this idempotent: a re-open always starts
  |   from a clean slate rather than layering state on a previous one, and a
  |   failure here leaves g_discOpened false, exactly as disc.h requires.
@@ -606,40 +688,27 @@ int disc_open(const char *cue_path)
 	   is what SRL::Core::Initialize does, discarding the result exactly as
 	   here. SRL::Cd::File resolves names through GFS_NameToId without ever
 	   consulting the flag, which is why every other SRL project works.
-	   The manifest check below is the real proof the drive and filesystem
-	   are up, so it, not the flag, decides what this function returns. */
+	   The lookups below are the real proof the drive and filesystem are up,
+	   so they, not the flag, decide what this function returns. */
 	SRL::Cd::Initialize();
 
-	int missingCount = 0;
-	int sizeBadCount = 0;
-	const char *firstBad = 0;
-	int firstBadGot = 0;
-	int firstBadWant = 0;
+	int presentCount = 0;
 
-#define DISC_MANIFEST_CHECK(name, lba, size)                                          \
-	{                                                                                  \
-		SRL::Cd::File manifestFile(name);                                             \
-		if (!manifestFile.Exists())                                                   \
-		{                                                                              \
-			missingCount++;                                                           \
-			if (firstBad == 0) { firstBad = name; firstBadGot = -1; firstBadWant = (int)(size); } \
-		}                                                                              \
-		else if (manifestFile.Size.Bytes != (int32_t)(size))                          \
-		{                                                                              \
-			sizeBadCount++;                                                            \
-			if (firstBad == 0) { firstBad = name; firstBadGot = (int)manifestFile.Size.Bytes; firstBadWant = (int)(size); } \
-		}                                                                              \
+	if (disc_manifest_scan(&presentCount, "disc_open") != 0)
+	{
+		printf("disc_open: Part II data incomplete, its menu entry will not confirm\n");
 	}
 
-	DISC_MANIFEST_LIST(DISC_MANIFEST_CHECK)
-#undef DISC_MANIFEST_CHECK
-
-	if (missingCount != 0 || sizeBadCount != 0)
+	if (presentCount == 0)
 	{
-		printf("disc_open: %d missing, %d wrong size\n", missingCount, sizeBadCount);
-		printf("disc_open: %s got %d want %d\n", firstBad, firstBadGot, firstBadWant);
-		disc_close();
-		return 0;
+		SRL::Cd::File bootProgram(DISC_BOOT_PROGRAM);
+		if (!bootProgram.Exists())
+		{
+			printf("disc_open: no file resolves, not even %s -- drive or GFS is down\n",
+			       DISC_BOOT_PROGRAM);
+			disc_close();
+			return 0;
+		}
 	}
 
 	printf("build %s\n", __TIME__);
@@ -652,6 +721,22 @@ int disc_open(const char *cue_path)
 
 	g_discOpened = true;
 	return 1;
+}
+
+/*----------------------
+ | disc_part2_available
+ | Description: Reports whether all of Part II's data is on the disc, over
+ |   disc_manifest_scan's walk. Requires disc_open to have run, since GFS must
+ |   be up for SRL::Cd::File to resolve a name.
+ | Author: suinevere
+ | Dependencies: disc_manifest.h, srl.hpp
+ | Globals: N/A
+ | Params: N/A
+ | Returns: 1 when every blob is present and correctly sized, 0 otherwise
+ ----------------------*/
+int disc_part2_available(void)
+{
+	return disc_manifest_scan(0, 0) == 0;
 }
 
 /*----------------------

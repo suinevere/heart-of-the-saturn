@@ -1,11 +1,16 @@
-# Heart of the Alien for Sega Saturn — setup kit
+# Heart of the Alien: Parts I and II for Sega Saturn — setup kit
 
 <!-- Shipped as README.md inside the release zip. See tools/assets/README.md
      for the source-checkout side of these scripts. -->
 
-The disc in this kit boots but has no game in it. Heart of the Alien's data
-files are not ours to give you, so `update.bat` takes them from your own copy
-of the Sega CD disc and folds them into the disc on your machine.
+The disc in this kit boots but has no game in it. Neither game's data files are
+ours to give you, so `update.bat` takes them from your own copies and folds
+them into the disc on your machine.
+
+This disc holds both games the original's menu offers. *Heart of the Alien* is
+Part II and comes from the Sega CD disc. *Out of This World* is Part I and comes
+from the PC DOS release. They are fetched independently, and if only one
+succeeds you get a disc on which only that game's menu entry can be confirmed.
 
 ## What you need first
 
@@ -56,6 +61,7 @@ a `bsdtar`/`tar` built with libarchive.
 | `assets/` | Download cache — drop your own copy here to use it instead |
 | `lib/` | Injection logic (`inject.sh` for POSIX, `inject.ps1` for Windows) |
 | `bin/` | Bundled `xorriso` / `iso2raw` — see `bin/README.md` for licenses |
+| `part1/` | Part I's own data step, from the Another-Saturn project |
 | `Heart of the Alien (USA)/` | The engine-only disc image |
 
 `update.bat` and `data.bat` are polyglot scripts: the same file runs under
