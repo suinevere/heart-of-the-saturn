@@ -39,8 +39,9 @@
  |   pixels to 170 are what separate the port's text from the original's.
  | Author: suinevere
  ----------------------*/
-#define MENU_TITLE_START_Y  161
-#define MENU_TITLE_LOAD_Y   177
+#define MENU_TITLE_START_Y     161
+#define MENU_TITLE_LOAD_Y      177
+#define MENU_TITLE_CONTROLS_Y  193
 #define MENU_TITLE_CURSOR_DX 16
 
 #define MENU_PAUSE_PANEL_X 76
@@ -90,6 +91,28 @@
 #define MENU_CONFIRM_ANSWER_Y 128
 #define MENU_CONFIRM_YES_CURSOR_X 120
 #define MENU_CONFIRM_NO_CURSOR_X  168
+
+/*----------------------
+ | MENU_CTRL_*
+ | Description: The controls screen's geometry, on MENU_PANEL_SLOTS. That
+ |   panel is 272x168 at (24, 28), so its interior after the art tool's 2 px
+ |   border is x 26..294 and y 30..194. Six rows at MENU_CTRL_ROW_DY from
+ |   MENU_CTRL_ROW0_Y end at 164 and the hint ends at 186, both inside it.
+ |
+ |   MENU_CTRL_VALUE_X is where the longest value has to fit: "PRESS?" is six
+ |   cells, ending at 220 + 48 = 268, inside 294. That is why the capture
+ |   prompt is abbreviated here and spelled out on the hint line instead --
+ |   "PRESS BUTTON" from this column would end at 316, off the panel and off
+ |   the screen.
+ | Author: suinevere
+ ----------------------*/
+#define MENU_CTRL_HEADING_Y 40
+#define MENU_CTRL_LABEL_X   44
+#define MENU_CTRL_VALUE_X   220
+#define MENU_CTRL_CURSOR_X  32
+#define MENU_CTRL_ROW0_Y    64
+#define MENU_CTRL_ROW_DY    18
+#define MENU_CTRL_HINT_Y    176
 
 /*----------------------
  | put_panel
@@ -339,14 +362,14 @@ static int centre_x(const char *s)
 
 /*----------------------
  | build_title
- | Description: Lays out the sub-title screen: START GAME, LOAD GAME and a
- |   cursor glyph next to whichever row is selected.
+ | Description: Lays out the sub-title screen: START GAME, LOAD GAME,
+ |   CONTROLS and a cursor glyph next to whichever row is selected.
  |
- |   Both rows are centred on their own width rather than sharing one left
- |   edge, so neither is hostage to the other's length; the cursor follows the
- |   row it marks rather than sitting at a fixed x, which is what keeps its gap
- |   to the text the same on both. That costs the cursor a four pixel step
- |   between the rows, which is the two strings' half-cell difference in length.
+ |   All three rows are centred on their own width rather than sharing one
+ |   left edge, so none is hostage to another's length; the cursor follows the
+ |   row it marks rather than sitting at a fixed x, which is what keeps its
+ |   gap to the text the same on all three. That costs the cursor a step
+ |   between rows equal to each pair's half-cell difference in length.
  |
  |   The only screen that draws in MENU_RAMP_TITLE_*, and the reason that pair
  |   exists: its text is the one text in the menus with no panel behind it, so
@@ -363,20 +386,30 @@ static void build_title(const MenuState *st, MenuItem *out, int cap, int *n)
 {
     int startX = centre_x("START GAME");
     int loadX = centre_x("LOAD GAME");
+    int controlsX = centre_x("CONTROLS");
+    int cursorX;
+    int cursorY;
 
     put_text(out, cap, n, startX, MENU_TITLE_START_Y, "START GAME",
              st->cursor == 0 ? MENU_RAMP_TITLE_SEL : MENU_RAMP_TITLE_DIM);
     put_text(out, cap, n, loadX, MENU_TITLE_LOAD_Y, "LOAD GAME",
              st->cursor == 1 ? MENU_RAMP_TITLE_SEL : MENU_RAMP_TITLE_DIM);
-    put_text(out, cap, n,
-             (st->cursor == 0 ? startX : loadX) - MENU_TITLE_CURSOR_DX,
-             st->cursor == 0 ? MENU_TITLE_START_Y : MENU_TITLE_LOAD_Y, ">",
+    put_text(out, cap, n, controlsX, MENU_TITLE_CONTROLS_Y, "CONTROLS",
+             st->cursor == 2 ? MENU_RAMP_TITLE_SEL : MENU_RAMP_TITLE_DIM);
+
+    cursorX = (st->cursor == 0) ? startX
+            : (st->cursor == 1) ? loadX
+                                 : controlsX;
+    cursorY = (st->cursor == 0) ? MENU_TITLE_START_Y
+            : (st->cursor == 1) ? MENU_TITLE_LOAD_Y
+                                 : MENU_TITLE_CONTROLS_Y;
+    put_text(out, cap, n, cursorX - MENU_TITLE_CURSOR_DX, cursorY, ">",
              MENU_RAMP_TITLE_SEL);
 }
 
 /*----------------------
  | build_pause
- | Description: Lays out the pause screen: its panel, the four rows and a
+ | Description: Lays out the pause screen: its panel, the five rows and a
  |   cursor glyph.
  | Author: suinevere
  | Dependencies: N/A
@@ -387,14 +420,14 @@ static void build_title(const MenuState *st, MenuItem *out, int cap, int *n)
  ----------------------*/
 static void build_pause(const MenuState *st, MenuItem *out, int cap, int *n)
 {
-    static const char *ROWS[4] = {
-        "RESUME", "SAVE GAME", "LOAD GAME", "RETURN TO TITLE"
+    static const char *ROWS[5] = {
+        "RESUME", "SAVE GAME", "LOAD GAME", "CONTROLS", "RETURN TO TITLE"
     };
     int i;
 
     put_panel(out, cap, n, MENU_PANEL_PAUSE, MENU_PAUSE_PANEL_X,
               MENU_PAUSE_PANEL_Y);
-    for (i = 0; i < 4; i++) {
+    for (i = 0; i < 5; i++) {
         put_text(out, cap, n, MENU_PAUSE_TEXT_X,
                  MENU_PAUSE_ROW0_Y + i * MENU_PAUSE_ROW_DY, ROWS[i],
                  st->cursor == i ? MENU_RAMP_SEL : MENU_RAMP_DIM);
@@ -493,6 +526,95 @@ static void build_confirm(const MenuState *st, MenuItem *out, int cap, int *n)
 }
 
 /*----------------------
+ | button_name
+ | Description: The label for a binding.
+ | Author: suinevere
+ | Dependencies: keymap.h
+ | Globals: N/A
+ | Params: b -- the button
+ | Returns: a static string, "NONE" for an empty binding
+ ----------------------*/
+static const char *button_name(PadButton b)
+{
+    switch (b) {
+    case PAD_A: return "A";
+    case PAD_B: return "B";
+    case PAD_C: return "C";
+    case PAD_X: return "X";
+    case PAD_Y: return "Y";
+    case PAD_Z: return "Z";
+    case PAD_L: return "L";
+    case PAD_R: return "R";
+    default:    return "NONE";
+    }
+}
+
+/*----------------------
+ | build_controls
+ | Description: Lays out the controls screen: a heading, four binding rows,
+ |   reset, back, and a hint line that changes with what the player is doing.
+ | Author: suinevere
+ | Dependencies: keymap.h
+ | Globals: N/A
+ | Params: st -- state to lay out; out -- destination; cap -- its capacity;
+ |         n -- running item count, advanced in place
+ | Returns: N/A
+ ----------------------*/
+static void build_controls(const MenuState *st, MenuItem *out, int cap, int *n)
+{
+    static const char *LABELS[MENU_CONTROLS_ROWS] = {
+        "RUN/SHOOT/SHIELD", "WHIP", "JUMP", "JUMP FORWARD",
+        "RESET DEFAULTS", "BACK"
+    };
+    const char *hint;
+    int i;
+    int y;
+
+    put_panel(out, cap, n, MENU_PANEL_SLOTS, MENU_SLOTS_PANEL_X,
+              MENU_SLOTS_PANEL_Y);
+    put_text(out, cap, n, centre_x("CONTROLS"), MENU_CTRL_HEADING_Y,
+             "CONTROLS", MENU_RAMP_DIM);
+
+    for (i = 0; i < MENU_CONTROLS_ROWS; i++) {
+        y = MENU_CTRL_ROW0_Y + i * MENU_CTRL_ROW_DY;
+        put_text(out, cap, n, MENU_CTRL_LABEL_X, y, LABELS[i],
+                 st->cursor == i ? MENU_RAMP_SEL : MENU_RAMP_DIM);
+
+        if (i >= KEYMAP_ROW_COUNT) {
+            continue;
+        }
+        if (st->capturing == i) {
+            put_text(out, cap, n, MENU_CTRL_VALUE_X, y, "PRESS?",
+                     MENU_RAMP_SEL);
+        } else if (st->mapRejected && st->cursor == i) {
+            put_text(out, cap, n, MENU_CTRL_VALUE_X, y, "IN USE",
+                     MENU_RAMP_SEL);
+        } else {
+            put_text(out, cap, n, MENU_CTRL_VALUE_X, y,
+                     button_name(st->map.row[i]),
+                     st->cursor == i ? MENU_RAMP_SEL : MENU_RAMP_DIM);
+        }
+    }
+
+    put_text(out, cap, n, MENU_CTRL_CURSOR_X,
+             MENU_CTRL_ROW0_Y + st->cursor * MENU_CTRL_ROW_DY, ">",
+             MENU_RAMP_SEL);
+
+    if (st->capturing >= 0) {
+        hint = "START CANCELS";
+    } else if (st->cursor == KEYMAP_ROW_FORWARD) {
+        hint = "LEFT CLEARS";
+    } else {
+        hint = "";
+    }
+
+    if (hint[0] != '\0') {
+        put_text(out, cap, n, MENU_CTRL_LABEL_X, MENU_CTRL_HINT_Y, hint,
+                 MENU_RAMP_DIM);
+    }
+}
+
+/*----------------------
  | menu_layout_build
  | Description: See menu_layout.h.
  | Author: suinevere
@@ -508,10 +630,11 @@ int menu_layout_build(const MenuState *st, const char *status, MenuItem *out,
     int n = 0;
 
     switch (st->screen) {
-    case MENU_TITLE:   build_title(st, out, cap, &n); break;
-    case MENU_PAUSE:   build_pause(st, out, cap, &n); break;
-    case MENU_SLOTS:   build_slots(st, status, out, cap, &n); break;
-    case MENU_CONFIRM: build_confirm(st, out, cap, &n); break;
+    case MENU_TITLE:    build_title(st, out, cap, &n); break;
+    case MENU_PAUSE:    build_pause(st, out, cap, &n); break;
+    case MENU_SLOTS:    build_slots(st, status, out, cap, &n); break;
+    case MENU_CONFIRM:  build_confirm(st, out, cap, &n); break;
+    case MENU_CONTROLS: build_controls(st, out, cap, &n); break;
     default: break;
     }
     return n;

@@ -53,6 +53,33 @@ static int ramp_of(const MenuItem *items, int n, int x, int y)
     return -1;
 }
 
+static int has_text(const MenuItem *items, int n, int x, int y, const char *s)
+{
+    int i;
+    int k;
+
+    for (k = 0; s[k] != '\0'; k++) {
+        int found = 0;
+
+        if (s[k] == ' ') {
+            continue;
+        }
+        for (i = 0; i < n; i++) {
+            if (items[i].kind == MENU_ITEM_GLYPH
+                && items[i].x == (short)(x + k * 8)
+                && items[i].y == (short)y
+                && items[i].id == (unsigned char)s[k]) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static void test_no_spaces_are_emitted(void)
 {
     MenuState st;
@@ -72,8 +99,8 @@ static void test_no_spaces_are_emitted(void)
     }
     expect_int("the sub-title menu has no panel",
                count_kind(items, n, MENU_ITEM_PANEL), 0);
-    expect_int("START GAME and LOAD GAME are 18 non-space glyphs",
-               count_kind(items, n, MENU_ITEM_GLYPH), 18);
+    expect_int("START GAME, LOAD GAME and CONTROLS are 26 non-space glyphs",
+               count_kind(items, n, MENU_ITEM_GLYPH), 26);
 }
 
 static void test_title_selected_row_uses_the_bright_ramp(void)
@@ -313,6 +340,80 @@ static void test_status_text(void)
                menu_layout_status_text(9999, SAT_BUP_INTERNAL), "SAVE FAILED");
 }
 
+static void test_controls_rows_and_values(void)
+{
+    MenuState st;
+    static MenuItem items[MENU_LAYOUT_MAX_ITEMS];
+    int n;
+
+    memset(&st, 0, sizeof(st));
+    menu_state_enter_controls(&st, MENU_PAUSE);
+
+    n = menu_layout_build(&st, 0, items, MENU_LAYOUT_MAX_ITEMS);
+    expect_int("the screen fits the command list", n <= MENU_LAYOUT_MAX_ITEMS, 1);
+    expect_int("the run row is labelled",
+               has_text(items, n, 44, 64, "RUN/SHOOT/SHIELD"), 1);
+    expect_int("the run row shows A",   has_text(items, n, 220, 64,  "A"), 1);
+    expect_int("the whip row shows B",  has_text(items, n, 220, 82,  "B"), 1);
+    expect_int("the jump row shows C",  has_text(items, n, 220, 100, "C"), 1);
+    expect_int("the shortcut shows NONE",
+               has_text(items, n, 220, 118, "NONE"), 1);
+    expect_int("the reset row is there",
+               has_text(items, n, 44, 136, "RESET DEFAULTS"), 1);
+    expect_int("the back row is there", has_text(items, n, 44, 154, "BACK"), 1);
+}
+
+static void test_controls_capture_prompt(void)
+{
+    MenuState st;
+    static MenuItem items[MENU_LAYOUT_MAX_ITEMS];
+    int n;
+
+    memset(&st, 0, sizeof(st));
+    menu_state_enter_controls(&st, MENU_PAUSE);
+    st.capturing = KEYMAP_ROW_JUMP;
+
+    n = menu_layout_build(&st, 0, items, MENU_LAYOUT_MAX_ITEMS);
+    expect_int("the captured row prompts",
+               has_text(items, n, 220, 100, "PRESS?"), 1);
+    expect_int("and the hint says how to escape",
+               has_text(items, n, 44, 176, "START CANCELS"), 1);
+}
+
+static void test_controls_reports_a_refusal(void)
+{
+    MenuState st;
+    static MenuItem items[MENU_LAYOUT_MAX_ITEMS];
+    int n;
+
+    memset(&st, 0, sizeof(st));
+    menu_state_enter_controls(&st, MENU_PAUSE);
+    st.cursor = KEYMAP_ROW_FORWARD;
+    st.mapRejected = 1;
+
+    n = menu_layout_build(&st, 0, items, MENU_LAYOUT_MAX_ITEMS);
+    expect_int("the row says IN USE", has_text(items, n, 220, 118, "IN USE"), 1);
+}
+
+static void test_controls_every_button_name_renders(void)
+{
+    MenuState st;
+    static MenuItem items[MENU_LAYOUT_MAX_ITEMS];
+    static const char *NAMES[] = { "A", "B", "C", "X", "Y", "Z", "L", "R" };
+    int b;
+    int n;
+
+    for (b = PAD_A; b <= PAD_R; b++) {
+        memset(&st, 0, sizeof(st));
+        menu_state_enter_controls(&st, MENU_PAUSE);
+        st.map.row[KEYMAP_ROW_FORWARD] = (PadButton)b;
+
+        n = menu_layout_build(&st, 0, items, MENU_LAYOUT_MAX_ITEMS);
+        expect_int("the shortcut renders its button name",
+                   has_text(items, n, 220, 118, NAMES[b - PAD_A]), 1);
+    }
+}
+
 int main(void)
 {
     test_no_spaces_are_emitted();
@@ -324,6 +425,10 @@ int main(void)
     test_build_never_exceeds_cap();
     test_slot_list_fits_the_command_list();
     test_status_text();
+    test_controls_rows_and_values();
+    test_controls_capture_prompt();
+    test_controls_reports_a_refusal();
+    test_controls_every_button_name_renders();
 
     if (g_fail != 0) {
         printf("menu_layout: %d failure(s)\n", g_fail);
