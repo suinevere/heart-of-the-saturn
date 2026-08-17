@@ -178,8 +178,11 @@ void keymap_set_active(const KeyMap *m);
  | Globals: N/A
  | Params: m -- the mapping; row -- which action; b -- the button, or PAD_NONE
  |         to clear the shortcut row
- | Returns: 1 if the mapping changed, 0 if the assignment was refused and the
- |          mapping is untouched
+ | Returns: 1 if the mapping changed. 0 otherwise, for either of two reasons:
+ |          the assignment was refused and the mapping is untouched, or b was
+ |          already row's binding and there was nothing to change. The caller
+ |          tells them apart by comparing m->row[row] to b after the call --
+ |          equal means no-op, unequal means refusal.
  ----------------------*/
 int keymap_assign(KeyMap *m, KeymapRow row, PadButton b);
 

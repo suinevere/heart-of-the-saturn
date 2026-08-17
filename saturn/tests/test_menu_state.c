@@ -469,6 +469,27 @@ static void test_a_refused_capture_reports_in_use(void)
     expect_int("the map is clean", st.mapDirty, 0);
 }
 
+static void test_capturing_the_current_button_is_a_no_op(void)
+{
+    MenuState st;
+    MenuInput in;
+
+    enter_controls_from_pause(&st);
+
+    in = none();
+    in.confirm = 1;
+    menu_state_step(&st, &in);
+
+    in = none();
+    in.captured = PAD_A;
+    menu_state_step(&st, &in);
+    expect_int("the capture ends", st.capturing, -1);
+    expect_int("run is still A", (int)st.map.row[KEYMAP_ROW_RUN], (int)PAD_A);
+    expect_int("capturing the row's own button is not IN USE", st.mapRejected, 0);
+    expect_int("capturing the row's own button does not dirty the map",
+               st.mapDirty, 0);
+}
+
 static void test_left_clears_the_shortcut(void)
 {
     MenuState st;
@@ -526,6 +547,26 @@ static void test_reset_row_restores_defaults(void)
     expect_int("reset stays on the screen", (int)st.screen, (int)MENU_CONTROLS);
 }
 
+static void test_reset_on_an_unmodified_map_does_not_dirty(void)
+{
+    MenuState st;
+    MenuInput in;
+    int i;
+
+    enter_controls_from_pause(&st);
+
+    for (i = 0; i < MENU_CONTROLS_ROW_RESET; i++) {
+        in = none();
+        in.down = 1;
+        menu_state_step(&st, &in);
+    }
+
+    in = none();
+    in.confirm = 1;
+    menu_state_step(&st, &in);
+    expect_int("reset on an unmodified map does not dirty it", st.mapDirty, 0);
+}
+
 static void test_back_saves_only_when_the_map_changed(void)
 {
     MenuState st;
@@ -574,8 +615,10 @@ int main(void)
     test_capture_binds_a_button();
     test_start_aborts_a_capture();
     test_a_refused_capture_reports_in_use();
+    test_capturing_the_current_button_is_a_no_op();
     test_left_clears_the_shortcut();
     test_reset_row_restores_defaults();
+    test_reset_on_an_unmodified_map_does_not_dirty();
     test_back_saves_only_when_the_map_changed();
 
     if (g_fail != 0) {

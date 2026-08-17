@@ -9,6 +9,7 @@
  | Dependencies: menu_state.h
  ----------------------*/
 #include "menu_state.h"
+#include <string.h>
 
 /*----------------------
  | menu_state_enter_title
@@ -314,7 +315,7 @@ static MenuAction step_controls(MenuState *st, const MenuInput *in)
         if (in->captured != PAD_NONE) {
             if (keymap_assign(&st->map, (KeymapRow)st->capturing, in->captured)) {
                 st->mapDirty = 1;
-            } else {
+            } else if (st->map.row[st->capturing] != in->captured) {
                 st->mapRejected = 1;
             }
             st->capturing = -1;
@@ -350,8 +351,11 @@ static MenuAction step_controls(MenuState *st, const MenuInput *in)
             return MENU_ACT_NONE;
         }
         if (st->cursor == MENU_CONTROLS_ROW_RESET) {
+            KeyMap before = st->map;
             keymap_defaults(&st->map);
-            st->mapDirty = 1;
+            if (memcmp(&st->map, &before, sizeof(before)) != 0) {
+                st->mapDirty = 1;
+            }
             return MENU_ACT_NONE;
         }
         return leave_controls(st);
