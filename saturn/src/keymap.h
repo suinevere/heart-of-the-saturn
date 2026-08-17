@@ -150,6 +150,28 @@ const KeyMap *keymap_active(void);
  ----------------------*/
 void keymap_set_active(const KeyMap *m);
 
+/*----------------------
+ | keymap_assign
+ | Description: Binds a button to a row, swapping with whichever row already
+ |   held it so that nothing is ever left unbound by accident and every
+ |   capture is one reversible step.
+ |
+ |   Refuses exactly two things. A core row may not be set to PAD_NONE. And a
+ |   swap may not hand a core row PAD_NONE, which is reachable only when the
+ |   shortcut row is empty and the button picked for it belongs to a core row
+ |   -- there the displaced row would have taken the shortcut's nothing and
+ |   Run, Whip or Jump would have gone dead. The caller shows IN USE and the
+ |   player moves the core row first, or picks a free button.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: m -- the mapping; row -- which action; b -- the button, or PAD_NONE
+ |         to clear the shortcut row
+ | Returns: 1 if the mapping changed, 0 if the assignment was refused and the
+ |          mapping is untouched
+ ----------------------*/
+int keymap_assign(KeyMap *m, KeymapRow row, PadButton b);
+
 #ifdef __cplusplus
 }
 #endif
