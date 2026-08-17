@@ -7,7 +7,7 @@
  |
  |   Never includes <srl.hpp>. Everything that needs VDP1, CRAM or the pad's
  |   Start button is reached through a C seam -- saturn_menuart.h and
- |   input_menu_start -- for the same reason saturn_bootart.h exists: the
+ |   input_raw_buttons -- for the same reason saturn_bootart.h exists: the
  |   engine's headers wrap SGL's C headers in extern "C", and mixing that with
  |   SRL's C++ headers in one translation unit is fragile.
  | Author: suinevere
@@ -142,28 +142,30 @@ static int s_pausePrev;
 
 /*----------------------
  | menu_key_mask
- | Description: This frame's held buttons as a bit mask. The six directional
- |   and face buttons come from the key globals check_events last wrote; Start
- |   is asked for directly, because input_srl.cxx deliberately never writes
- |   key_select.
+ | Description: This frame's held buttons as a bit mask, read straight from
+ |   port 0's raw state rather than the key globals check_events writes.
+ |   Confirm and cancel are physical A and B, and stay physical A and B
+ |   however the player remaps the game -- keymap_apply only ever touches
+ |   key_a, key_b and key_c, so a menu that read those globals would move
+ |   with the mapping and could hide the very screen that would undo it.
  | Author: suinevere
  | Dependencies: input.h
- | Globals: key_up, key_down, key_left, key_right, key_a, key_b
+ | Globals: N/A
  | Params: N/A
  | Returns: the MENU_BIT_* mask of everything held
  ----------------------*/
 static int menu_key_mask(void)
 {
+    unsigned int raw = input_raw_buttons();
     int mask = 0;
 
-    if (key_up)    mask |= MENU_BIT_UP;
-    if (key_down)  mask |= MENU_BIT_DOWN;
-    if (key_left)  mask |= MENU_BIT_LEFT;
-    if (key_right) mask |= MENU_BIT_RIGHT;
-    if (key_a)     mask |= MENU_BIT_CONFIRM;
-    if (key_b)     mask |= MENU_BIT_CANCEL;
-
-    if (input_menu_start()) mask |= MENU_BIT_PAUSE;
+    if (raw & PAD_BIT_UP)    mask |= MENU_BIT_UP;
+    if (raw & PAD_BIT_DOWN)  mask |= MENU_BIT_DOWN;
+    if (raw & PAD_BIT_LEFT)  mask |= MENU_BIT_LEFT;
+    if (raw & PAD_BIT_RIGHT) mask |= MENU_BIT_RIGHT;
+    if (raw & PAD_BIT_A)     mask |= MENU_BIT_CONFIRM;
+    if (raw & PAD_BIT_B)     mask |= MENU_BIT_CANCEL;
+    if (raw & PAD_BIT_START) mask |= MENU_BIT_PAUSE;
 
     return mask;
 }

@@ -1233,26 +1233,33 @@ static struct option options[] =
 #ifdef HOTA_SATURN
 /*----------------------
  | boot_key_mask
- | Description: Folds input.h's eight key globals into a BOOT_KEY_* mask.
+ | Description: Folds port 0's raw pad state into a BOOT_KEY_* mask. Reads
+ |   input_raw_buttons directly rather than the key globals, so a gameplay
+ |   remap through keymap_apply cannot move the boot menu's own buttons --
+ |   BOOT_KEY_A, BOOT_KEY_B and BOOT_KEY_C always answer to physical A, B and
+ |   C.
+ |
+ |   BOOT_KEY_SELECT drops out: it used to be fed by key_select, which
+ |   input_srl.cxx deliberately never writes, so it has always been dead on
+ |   this platform.
  | Author: suinevere
- | Dependencies: input.h, bootmenu.h
- | Globals: key_up, key_down, key_left, key_right, key_a, key_b, key_c,
- |          key_select
+ | Dependencies: input.h, keymap.h, bootmenu.h
+ | Globals: N/A
  | Params: N/A
  | Returns: The mask of keys currently held
  ----------------------*/
 static uint32_t boot_key_mask(void)
 {
-	uint32_t mask = 0u;
+	unsigned int raw = input_raw_buttons();
+	uint32_t mask = 0;
 
-	if (key_up)     mask |= BOOT_KEY_UP;
-	if (key_down)   mask |= BOOT_KEY_DOWN;
-	if (key_left)   mask |= BOOT_KEY_LEFT;
-	if (key_right)  mask |= BOOT_KEY_RIGHT;
-	if (key_a)      mask |= BOOT_KEY_A;
-	if (key_b)      mask |= BOOT_KEY_B;
-	if (key_c)      mask |= BOOT_KEY_C;
-	if (key_select) mask |= BOOT_KEY_SELECT;
+	if (raw & PAD_BIT_UP)    mask |= BOOT_KEY_UP;
+	if (raw & PAD_BIT_DOWN)  mask |= BOOT_KEY_DOWN;
+	if (raw & PAD_BIT_LEFT)  mask |= BOOT_KEY_LEFT;
+	if (raw & PAD_BIT_RIGHT) mask |= BOOT_KEY_RIGHT;
+	if (raw & PAD_BIT_A)     mask |= BOOT_KEY_A;
+	if (raw & PAD_BIT_B)     mask |= BOOT_KEY_B;
+	if (raw & PAD_BIT_C)     mask |= BOOT_KEY_C;
 
 	return mask;
 }

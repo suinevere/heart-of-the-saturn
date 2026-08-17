@@ -14,10 +14,12 @@
  |   src/system/input_srl.cxx is the Saturn implementation, over port 0's
  |   digital pad.
  | Author: suinevere
- | Dependencies: none
+ | Dependencies: keymap.h
  ----------------------*/
 #ifndef INPUT_H
 #define INPUT_H
+
+#include "keymap.h"
 
 /* The Saturn backend is C++; without this its definitions would get C++
    linkage and fail to satisfy the C callers. */
@@ -44,27 +46,32 @@ extern int key_reset_record;
 void check_events(void);
 
 /*----------------------
- | input_menu_start
- | Description: Whether Start is held. The menu needs it and no key_* global
- |   carries it: input_srl.cxx deliberately never writes key_select, which is
- |   host input-recording state that update_keys reads for record and replay.
- |   A ninth key global would put a Saturn-only signal into a seam both
- |   backends share, so the question is asked directly instead.
+ | input_raw_buttons
+ | Description: Port 0's physical button state this frame, before any
+ |   mapping, as a PAD_BIT_* mask.
  |
- |   Level, not edge -- menu.c owns edge detection for every button it reads,
- |   and mixing the two is what let the debug chord this replaces fire a save
- |   when the player went from Start plus B to Start plus A plus B without
- |   releasing.
+ |   Exists because the key globals stopped being raw. keymap_apply writes
+ |   key_a, key_b and key_c from whatever the player bound, and menu_key_mask
+ |   used to read key_a as confirm and key_b as cancel -- so without this,
+ |   binding Run to X would move the pause menu's confirm button to X too, and
+ |   with it the screen that would let the player undo the change. The rule
+ |   this seam exists to enforce is that the mapping writes the key globals
+ |   and every menu reads raw.
  |
- |   Saturn only. The host has no caller: menu_pause_poll is behind
- |   HOTA_SATURN, which is why input_sdl.c never defined the chord either.
+ |   Level, not edge, for the reason input_menu_start gave before it was
+ |   folded in here: menu.c owns edge detection for every button it reads, and
+ |   mixing the two is what let an earlier debug chord fire on the wrong
+ |   frame. Start is PAD_BIT_START in the mask.
+ |
+ |   Saturn only. menu_pause_poll is behind HOTA_SATURN, which is why
+ |   input_sdl.c never defined the chord this replaces either.
  | Author: suinevere
- | Dependencies: N/A
+ | Dependencies: keymap.h
  | Globals: N/A
  | Params: N/A
- | Returns: 1 while Start is held, 0 otherwise
+ | Returns: the PAD_BIT_* mask of everything held, or 0 if no pad is connected
  ----------------------*/
-int input_menu_start(void);
+unsigned int input_raw_buttons(void);
 
 #ifdef __cplusplus
 }

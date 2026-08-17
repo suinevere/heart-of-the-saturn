@@ -6,7 +6,9 @@
  |   debug toggle and input recording, all of which are host development
  |   conveniences reached by keyboard. A console has no quit, saturn_filestub.c
  |   has no filesystem to quicksave into, and the rest have no pad equivalent
- |   worth inventing, so this file maps seven buttons and nothing else.
+ |   worth inventing, so this file reads port 0 into one raw PAD_BIT_* mask
+ |   and leaves which physical button means what to keymap_apply, in
+ |   keymap.c.
  |
  |   Reads only. SRL::Core::Synchronize() already calls
  |   Input::Management::RefreshPeripherals() (srl_core.hpp), and
@@ -32,42 +34,21 @@
  |
  |   Design: docs/superpowers/specs/2026-08-05-hota-saturn-input-design.md
  | Author: suinevere
- | Dependencies: srl.hpp, input.h
+ | Dependencies: srl.hpp, input.h, keymap.h
  ----------------------*/
 
 #include <srl.hpp>
 
 #include "input.h"
+#include "keymap.h"
 
 /*----------------------
  | check_events
- | Description: Copies port 0's pad into the seven key globals the game loop
- |   reads. Port 0 only: this is a single-player game and port 0 is player 1,
- |   so a pad in another port reads as nothing pressed -- the same thing the
- |   stub did before this file had a body, which makes a mis-plugged pad
- |   degrade to known-good behaviour rather than to something new.
- |
- |   Port 0 plus the IsConnected check below is the only safe pairing, not an
- |   arbitrary choice: SRL::Input::Management::Peripherals[] (srl_input.hpp)
- |   sets only port 0's id to NotConnected; ports 1-11 default to id 0, which
- |   reads as PeripheralFamily::Digital -- connected -- with data 0, and the
- |   pad is active-low, so every button would read held. SRL::Core::
- |   Initialize() never calls RefreshPeripherals(), only Synchronize() does,
- |   so a check_events() on any other port, or without this guard, would
- |   degrade a pre-Synchronize call to "everything pressed" instead of
- |   "nothing pressed".
- |
- |   A and B and C map to key_a and key_b and key_c by label rather than by
- |   function. The Sega CD original ran on a Genesis pad whose A/B/C sit in
- |   the same bottom row as the Saturn pad's, so muscle memory transfers; any
- |   other assignment would be a guess about what each button does in play,
- |   and update_keys (main.c:285) is not clear enough to redesign a control
- |   scheme around.
- |
- |   The Digital handle is a local rather than a file-static on purpose. Its
- |   constructor is trivial, but a file-static C++ object with a constructor
- |   runs at static-init time, before SRL::Core::Initialize() -- a local
- |   costs nothing and cannot be ordered wrong.
+ | Description: Copies port 0's raw pad state into the key globals the game
+ |   loop reads. The four directions are copied straight out of
+ |   input_raw_buttons' mask; key_a, key_b and key_c go through keymap_apply
+ |   instead, so whichever buttons the player has bound to run, whip and jump
+ |   land in those three globals rather than always physical A, B and C.
  |
  |   key_select and key_reset_record are deliberately not written: both are
  |   host input-recording state, not gameplay state. key_select is written and
@@ -78,51 +59,72 @@
  |   because run()'s while (cls.quit == 0) running forever is correct on a
  |   console.
  | Author: suinevere
+ | Dependencies: input.h, keymap.h
  | Globals: key_up, key_down, key_left, key_right, key_a, key_b, key_c
  | Params: N/A
  | Returns: N/A
  ----------------------*/
 void check_events(void)
 {
-	SRL::Input::Digital pad(0);
+	unsigned int raw = input_raw_buttons();
 
-	if (!pad.IsConnected())
-	{
-		key_up = 0;
-		key_down = 0;
-		key_left = 0;
-		key_right = 0;
-		key_a = 0;
-		key_b = 0;
-		key_c = 0;
-		return;
-	}
+	key_up    = (raw & PAD_BIT_UP)    ? 1 : 0;
+	key_down  = (raw & PAD_BIT_DOWN)  ? 1 : 0;
+	key_left  = (raw & PAD_BIT_LEFT)  ? 1 : 0;
+	key_right = (raw & PAD_BIT_RIGHT) ? 1 : 0;
 
-	key_up = pad.IsHeld(SRL::Input::Digital::Button::Up) ? 1 : 0;
-	key_down = pad.IsHeld(SRL::Input::Digital::Button::Down) ? 1 : 0;
-	key_left = pad.IsHeld(SRL::Input::Digital::Button::Left) ? 1 : 0;
-	key_right = pad.IsHeld(SRL::Input::Digital::Button::Right) ? 1 : 0;
-	key_a = pad.IsHeld(SRL::Input::Digital::Button::A) ? 1 : 0;
-	key_b = pad.IsHeld(SRL::Input::Digital::Button::B) ? 1 : 0;
-	key_c = pad.IsHeld(SRL::Input::Digital::Button::C) ? 1 : 0;
+	keymap_apply(keymap_active(), raw, &key_a, &key_b, &key_c);
 }
 
 /*----------------------
- | input_menu_start
- | Description: Reports Start as a level, leaving the edge to menu.c. Port 0
- |   and the IsConnected guard for the reason check_events' banner gives: any
- |   other port, or no guard, would read every button as held before the first
- |   RefreshPeripherals.
+ | input_raw_buttons
+ | Description: Port 0's physical button state this frame, before any
+ |   mapping, as a PAD_BIT_* mask. Saturn side of the seam documented in
+ |   input.h; this banner covers only what is specific to SRL::Input::Digital.
+ |
+ |   Port 0 plus the IsConnected check below is the only safe pairing, not an
+ |   arbitrary choice: SRL::Input::Management::Peripherals[] (srl_input.hpp)
+ |   sets only port 0's id to NotConnected; ports 1-11 default to id 0, which
+ |   reads as PeripheralFamily::Digital -- connected -- with data 0, and the
+ |   pad is active-low, so every button would read held. SRL::Core::
+ |   Initialize() never calls RefreshPeripherals(), only Synchronize() does,
+ |   so an input_raw_buttons() call on any other port, or without this guard,
+ |   would degrade a pre-Synchronize call to "everything pressed" instead of
+ |   "nothing pressed".
+ |
+ |   The Digital handle is a local rather than a file-static on purpose. Its
+ |   constructor is trivial, but a file-static C++ object with a constructor
+ |   runs at static-init time, before SRL::Core::Initialize() -- a local
+ |   costs nothing and cannot be ordered wrong.
  | Author: suinevere
- | Dependencies: srl.hpp
+ | Dependencies: srl.hpp, keymap.h
  | Globals: N/A
  | Params: N/A
- | Returns: 1 while Start is held, 0 otherwise
+ | Returns: the PAD_BIT_* mask of everything held, or 0 if no pad is connected
  ----------------------*/
-extern "C" int input_menu_start(void)
+extern "C" unsigned int input_raw_buttons(void)
 {
 	SRL::Input::Digital pad(0);
+	unsigned int raw = 0;
 
-	return (pad.IsConnected()
-	        && pad.IsHeld(SRL::Input::Digital::Button::START)) ? 1 : 0;
+	if (!pad.IsConnected())
+	{
+		return 0;
+	}
+
+	if (pad.IsHeld(SRL::Input::Digital::Button::A))     raw |= PAD_BIT_A;
+	if (pad.IsHeld(SRL::Input::Digital::Button::B))     raw |= PAD_BIT_B;
+	if (pad.IsHeld(SRL::Input::Digital::Button::C))     raw |= PAD_BIT_C;
+	if (pad.IsHeld(SRL::Input::Digital::Button::X))     raw |= PAD_BIT_X;
+	if (pad.IsHeld(SRL::Input::Digital::Button::Y))     raw |= PAD_BIT_Y;
+	if (pad.IsHeld(SRL::Input::Digital::Button::Z))     raw |= PAD_BIT_Z;
+	if (pad.IsHeld(SRL::Input::Digital::Button::L))     raw |= PAD_BIT_L;
+	if (pad.IsHeld(SRL::Input::Digital::Button::R))     raw |= PAD_BIT_R;
+	if (pad.IsHeld(SRL::Input::Digital::Button::Up))    raw |= PAD_BIT_UP;
+	if (pad.IsHeld(SRL::Input::Digital::Button::Down))  raw |= PAD_BIT_DOWN;
+	if (pad.IsHeld(SRL::Input::Digital::Button::Left))  raw |= PAD_BIT_LEFT;
+	if (pad.IsHeld(SRL::Input::Digital::Button::Right)) raw |= PAD_BIT_RIGHT;
+	if (pad.IsHeld(SRL::Input::Digital::Button::START)) raw |= PAD_BIT_START;
+
+	return raw;
 }
