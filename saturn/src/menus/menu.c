@@ -552,6 +552,7 @@ static MenuAction menu_run(MenuState *st, int exclusive, int useClock,
 
         if (action == MENU_ACT_RESCAN_SLOTS)
         {
+            status = 0;
             menu_rescan(st, scratch);
             action = MENU_ACT_NONE;
         }
