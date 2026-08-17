@@ -13,8 +13,8 @@
  | Author: suinevere
  | Dependencies: menu.h, menu_state.h, menu_layout.h, menu_clock.h,
  |   saturn_menuart.h, saturn_saveslot.h, saturn_backup.h, savedata.h,
- |   saturn_compat.h, disc.h, input.h, platform.h, client.h, main.h, screen.h,
- |   video.h, fadecalc.h, vm.h
+ |   saturn_compat.h, disc.h, input.h, keymap.h, saturn_keymap.h, platform.h,
+ |   client.h, main.h, screen.h, video.h, fadecalc.h, vm.h
  ----------------------*/
 
 #include <string.h>
@@ -31,6 +31,8 @@
 #include "saturn_compat.h"
 #include "disc.h"
 #include "input.h"
+#include "keymap.h"
+#include "saturn_keymap.h"
 #include "platform.h"
 #include "client.h"
 #include "main.h"
@@ -191,6 +193,33 @@ static void menu_edges(int pressed, MenuInput *in)
     in->confirm = (pressed & MENU_BIT_CONFIRM) != 0;
     in->cancel  = (pressed & MENU_BIT_CANCEL) != 0;
     in->pause   = (pressed & MENU_BIT_PAUSE) != 0;
+}
+
+/*----------------------
+ | first_pressed
+ | Description: Which bindable button became held this frame.
+ |
+ |   A second edge is needed rather than the MENU_BIT_* one menu_run already
+ |   computes, because that mask has no bit for X, Y, Z, L or R -- it carries
+ |   roles, and a capture needs an identity. Ties go to PadButton order, which
+ |   only matters if two buttons land in the same 16 ms and either answer
+ |   would be defensible.
+ | Author: suinevere
+ | Dependencies: keymap.h
+ | Globals: N/A
+ | Params: rawPressed -- PAD_BIT_* mask of buttons that became held
+ | Returns: the button, or PAD_NONE if none of the eight did
+ ----------------------*/
+static PadButton first_pressed(unsigned int rawPressed)
+{
+    int b;
+
+    for (b = (int)PAD_A; b <= (int)PAD_R; b++) {
+        if (rawPressed & keymap_button_bit((PadButton)b)) {
+            return (PadButton)b;
+        }
+    }
+    return PAD_NONE;
 }
 
 /*----------------------
@@ -461,6 +490,9 @@ static MenuAction menu_run(MenuState *st, int exclusive, int useClock,
     int previous;
     int current;
     int pressed;
+    unsigned int previousRaw;
+    unsigned int currentRaw;
+    unsigned int pressedRaw;
     int count = 0;
     int err;
     int exclusiveNow = exclusive;
@@ -494,6 +526,7 @@ static MenuAction menu_run(MenuState *st, int exclusive, int useClock,
 
     check_events();
     previous = menu_key_mask();
+    previousRaw = input_raw_buttons();
 
     menu_rescan(st, scratch);
 
@@ -509,8 +542,12 @@ static MenuAction menu_run(MenuState *st, int exclusive, int useClock,
         current = menu_key_mask();
         pressed = current & ~previous;
         previous = current;
+        currentRaw = input_raw_buttons();
+        pressedRaw = currentRaw & ~previousRaw;
+        previousRaw = currentRaw;
 
         menu_edges(pressed, &in);
+        in.captured = first_pressed(pressedRaw);
         action = menu_state_step(st, &in);
 
         if (action == MENU_ACT_RESCAN_SLOTS)
@@ -533,6 +570,13 @@ static MenuAction menu_run(MenuState *st, int exclusive, int useClock,
             {
                 break;
             }
+            status = menu_layout_status_text(err, st->device);
+            action = MENU_ACT_NONE;
+        }
+        else if (action == MENU_ACT_SAVE_KEYMAP)
+        {
+            keymap_set_active(&st->map);
+            err = saturn_keymap_save(&st->map);
             status = menu_layout_status_text(err, st->device);
             action = MENU_ACT_NONE;
         }
@@ -582,6 +626,7 @@ static MenuAction menu_run(MenuState *st, int exclusive, int useClock,
                 disc_play_track(MENU_MUSIC_INDEX, 0);
                 check_events();
                 previous = menu_key_mask();
+                previousRaw = input_raw_buttons();
                 continue;
             }
         }
