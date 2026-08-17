@@ -70,3 +70,7 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -o run_tests_menuclock test_menu_clock.c ../src/menus/menu_clock.c \
        ../src/discfmt.c
 ./run_tests_menuclock
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src \
+    -o run_tests_keymap test_keymap.c ../src/keymap.c
+./run_tests_keymap
