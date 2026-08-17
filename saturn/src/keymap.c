@@ -98,6 +98,10 @@ int keymap_assign(KeyMap *m, KeymapRow row, PadButton b)
         return 1;
     }
 
+    if (m->row[row] == b) {
+        return 0;
+    }
+
     previous = m->row[row];
 
     for (q = 0; q < KEYMAP_ROW_COUNT; q++) {

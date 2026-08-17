@@ -176,6 +176,20 @@ static void test_swap_with_a_bound_shortcut_is_allowed(void)
     expect_int("the shortcut took run's A", (int)m.row[KEYMAP_ROW_FORWARD], (int)PAD_A);
 }
 
+static void test_reassigning_the_same_button_is_a_no_op(void)
+{
+    KeyMap m;
+    KeyMap before;
+
+    keymap_defaults(&m);
+    before = m;
+
+    expect_int("rebinding a row to the button it already holds reports no change",
+               keymap_assign(&m, KEYMAP_ROW_RUN, PAD_A), 0);
+    expect_int("and leaves the map bit-identical",
+               memcmp(&m, &before, sizeof(m)), 0);
+}
+
 int main(void)
 {
     test_defaults_match_the_current_hardwiring();
@@ -189,6 +203,7 @@ int main(void)
     test_shortcut_takes_a_free_button_and_can_be_cleared();
     test_core_rows_refuse_none();
     test_swap_with_a_bound_shortcut_is_allowed();
+    test_reassigning_the_same_button_is_a_no_op();
 
     if (g_fail == 0) {
         printf("keymap: all tests passed\n");
