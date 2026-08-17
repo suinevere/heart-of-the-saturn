@@ -49,6 +49,10 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
 ./run_tests_savebuf
 gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src -I../src/system \
+    -o run_tests_bupdevmap test_bup_devmap.c ../src/system/bup_devmap.c
+./run_tests_bupdevmap
+gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
+    -I../src -I../src/system \
     -o run_tests_savedata test_savedata.c stub_saturn_backup.c ../src/savedata.c
 ./run_tests_savedata
 gcc -std=c99 -Wall -Wextra -Werror -O1 -g \

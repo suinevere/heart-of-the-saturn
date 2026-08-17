@@ -36,6 +36,8 @@ SaturnRingLib/tools/bin/
 # .exe on Windows.
 saturn/tests/run_tests
 saturn/tests/run_tests.exe
+saturn/tests/run_tests_bupdevmap
+saturn/tests/run_tests_bupdevmap.exe
 saturn/tests/run_tests_vm
 saturn/tests/run_tests_vm.exe
 saturn/tests/run_tests_cdtoc

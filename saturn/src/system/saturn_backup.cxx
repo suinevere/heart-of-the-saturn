@@ -3,12 +3,13 @@
  | Description: The Saturn side of saturn_backup.h, over SGL's BUP vector
  |   table and SRL's RTC. The only file in the port that includes sega_bup.h.
  | Author: suinevere
- | Dependencies: srl.hpp, sega_bup.h, saturn_backup.h, savedata.h
- | Globals: s_bupWork, s_bupCfg
+ | Dependencies: srl.hpp, sega_bup.h, saturn_backup.h, bup_devmap.h, savedata.h
+ | Globals: s_bupWork, s_bupCfg, s_internalIdx, s_cartIdx
  ----------------------*/
 #include <srl.hpp>
 #include "sega_bup.h"
 #include "saturn_backup.h"
+#include "bup_devmap.h"
 #include "savedata.h"
 
 extern "C" {
@@ -28,11 +29,51 @@ static uint32_t s_bupWork[0x1000];
 
 /*----------------------
  | s_bupCfg
- | Description: BUP_Init fills one config per device. Kept alive for the
- |   lifetime of the program because the library retains the pointer.
+ | Description: Handed to BUP_Init, which retains the pointer, so it is kept
+ |   alive for the lifetime of the program. Its contents are NOT a per-device
+ |   descriptor: on hardware every entry reads back unit_id 2, partition 2,
+ |   including the entry for a slot holding nothing.
  | Author: suinevere
  ----------------------*/
 static BupConfig s_bupCfg[3];
+
+/*----------------------
+ | s_internalIdx / s_cartIdx
+ | Description: Which BIOS device index each logical device is, resolved once by
+ |   sat_bup_init from which indices answer a probe. SAT_BUP_INTERNAL and
+ |   SAT_BUP_CART are this port's logical names and carry SGL's unit id values,
+ |   which are NOT device indices -- before this existed the ids went straight
+ |   through, so every save the port wrote landed on the cartridge and the
+ |   cartridge itself probed as absent. See bup_devmap.h for the two wrong
+ |   readings of the BUP API that preceded this one.
+ |
+ |   Defaults match the measured hardware layout so a call arriving before
+ |   sat_bup_init reaches the main unit rather than nothing.
+ | Author: suinevere
+ ----------------------*/
+static int s_internalIdx = 0;
+static int s_cartIdx = 1;
+
+/*----------------------
+ | sat_bup_hw
+ | Description: Translates a logical SAT_BUP_* device into its BIOS device index.
+ | Author: suinevere
+ | Dependencies: bup_devmap.h
+ | Globals: s_internalIdx, s_cartIdx
+ | Params: device -- SAT_BUP_INTERNAL or SAT_BUP_CART
+ | Returns: the index, or BUP_DEVMAP_NONE for a device this machine lacks or a
+ |   logical id this file does not know
+ ----------------------*/
+static int sat_bup_hw(unsigned long device)
+{
+    if (device == SAT_BUP_INTERNAL) {
+        return s_internalIdx;
+    }
+    if (device == SAT_BUP_CART) {
+        return s_cartIdx;
+    }
+    return BUP_DEVMAP_NONE;
+}
 
 /*----------------------
  | sat_bup_map_error
@@ -63,16 +104,27 @@ static int sat_bup_map_error(int32_t rc)
 
 /*----------------------
  | sat_bup_init
- | Description: Brings up the BIOS backup library.
+ | Description: Brings up the BIOS backup library, then works out which device
+ |   index is which by asking each one whether it is there.
  | Author: suinevere
- | Dependencies: N/A
- | Globals: s_bupWork, s_bupCfg
+ | Dependencies: bup_devmap.h
+ | Globals: s_bupWork, s_bupCfg, s_internalIdx, s_cartIdx
  | Params: N/A
  | Returns: N/A
  ----------------------*/
 extern "C" void sat_bup_init(void)
 {
+    int present[3];
+    int i;
+
     BUP_Init((uint32_t *)BUP_LIB_ADDRESS, s_bupWork, s_bupCfg);
+
+    for (i = 0; i < 3; ++i) {
+        BupStat st;
+        int32_t rc = BUP_Stat((uint32_t)i, SAVE_MAX_BYTES, &st);
+        present[i] = (rc != BUP_NON) ? 1 : 0;
+    }
+    bupDevmapResolve(present, 3, &s_internalIdx, &s_cartIdx);
 }
 
 /*----------------------
@@ -90,7 +142,12 @@ extern "C" int sat_bup_probe(unsigned long device, SatBupDev *out)
     BupStat st;
     memset(out, 0, sizeof(*out));
 
-    int32_t rc = BUP_Stat((uint32_t)device, SAVE_MAX_BYTES, &st);
+    const int hw = sat_bup_hw(device);
+    if (hw == BUP_DEVMAP_NONE) {
+        return SAT_BUP_ERR_NONE;
+    }
+
+    int32_t rc = BUP_Stat((uint32_t)hw, SAVE_MAX_BYTES, &st);
     if (rc == BUP_NON) {
         return SAT_BUP_ERR_NONE;
     }
@@ -126,7 +183,12 @@ extern "C" int sat_bup_dir(unsigned long device, const char *name, SatBupEntry *
     memset(out, 0, sizeof(*out));
     memset(&dir, 0, sizeof(dir));
 
-    int32_t rc = BUP_Dir((uint32_t)device, (uint8_t *)name, 1, &dir);
+    const int hw = sat_bup_hw(device);
+    if (hw == BUP_DEVMAP_NONE) {
+        return SAT_BUP_ERR_NONE;
+    }
+
+    int32_t rc = BUP_Dir((uint32_t)hw, (uint8_t *)name, 1, &dir);
     if (rc < 0) {
         return sat_bup_map_error(rc);
     }
@@ -159,7 +221,12 @@ extern "C" int sat_bup_read(unsigned long device, const char *name, void *dst,
     BupDir dir;
     memset(&dir, 0, sizeof(dir));
 
-    int32_t dirRc = BUP_Dir((uint32_t)device, (uint8_t *)name, 1, &dir);
+    const int hw = sat_bup_hw(device);
+    if (hw == BUP_DEVMAP_NONE) {
+        return SAT_BUP_ERR_NONE;
+    }
+
+    int32_t dirRc = BUP_Dir((uint32_t)hw, (uint8_t *)name, 1, &dir);
     if (dirRc < 0) {
         return sat_bup_map_error(dirRc);
     }
@@ -170,7 +237,7 @@ extern "C" int sat_bup_read(unsigned long device, const char *name, void *dst,
         return SAT_BUP_ERR_BROKEN;
     }
 
-    int32_t rc = BUP_Read((uint32_t)device, (uint8_t *)name, (uint8_t *)dst);
+    int32_t rc = BUP_Read((uint32_t)hw, (uint8_t *)name, (uint8_t *)dst);
     return sat_bup_map_error(rc);
 }
 
@@ -190,6 +257,11 @@ extern "C" int sat_bup_write(unsigned long device, const char *name,
                              long size, int overwrite)
 {
     BupDir dir;
+    const int hw = sat_bup_hw(device);
+    if (hw == BUP_DEVMAP_NONE) {
+        return SAT_BUP_ERR_NONE;
+    }
+
     memset(&dir, 0, sizeof(dir));
     strncpy((char *)dir.filename, name, 11);
     strncpy((char *)dir.comment, comment, 10);
@@ -198,7 +270,7 @@ extern "C" int sat_bup_write(unsigned long device, const char *name,
     dir.datasize = (uint32_t)size;
     dir.blocksize = 0;
 
-    int32_t rc = BUP_Write((uint32_t)device, &dir, (uint8_t *)src,
+    int32_t rc = BUP_Write((uint32_t)hw, &dir, (uint8_t *)src,
                            overwrite ? 1 : 0);
     return sat_bup_map_error(rc);
 }
@@ -214,7 +286,11 @@ extern "C" int sat_bup_write(unsigned long device, const char *name,
  ----------------------*/
 extern "C" int sat_bup_delete(unsigned long device, const char *name)
 {
-    return sat_bup_map_error(BUP_Delete((uint32_t)device, (uint8_t *)name));
+    const int hw = sat_bup_hw(device);
+    if (hw == BUP_DEVMAP_NONE) {
+        return SAT_BUP_ERR_NONE;
+    }
+    return sat_bup_map_error(BUP_Delete((uint32_t)hw, (uint8_t *)name));
 }
 
 /*----------------------
