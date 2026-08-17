@@ -3,17 +3,20 @@
  | Description: The persistence described by saturn_keymap.h. Stores one
  |   KEYMAP_ENTRY_BYTES entry named HOTA_CFG, preferring SAT_BUP_INTERNAL and
  |   falling back to SAT_BUP_CART only when internal memory itself refuses.
+ |   <string.h> is wrapped below for the reason saturn_compat.cxx's banner
+ |   gives: SGL ships it unguarded, so an unwrapped include in a C++ file
+ |   declares memset with C++ linkage and the link fails on the mangled name.
+ |   saturn_backup.cxx wraps it the same way.
  | Author: suinevere
- | Dependencies: saturn_keymap.h, saturn_backup.h, keymap.h
+ | Dependencies: saturn_keymap.h, saturn_backup.h, keymap.h, string.h
  | Globals: N/A
  ----------------------*/
 extern "C" {
 #include "saturn_keymap.h"
 #include "saturn_backup.h"
 #include "keymap.h"
-}
-
 #include <string.h>
+}
 
 /*----------------------
  | KEYMAP_BUP_NAME / KEYMAP_BUP_COMMENT
