@@ -405,9 +405,9 @@ static void menu_fade_out(const MenuItem *items, int count, int music)
  |   The attract block's order is fixed. play_intro needs NBG0 and the drive,
  |   so the overlay comes down and the music stops before it runs; the volume
  |   goes back to full before it starts, or the cinematic's own tracks would
- |   play at the menu's faded-out level; and previous is re-primed from the
- |   live pad afterwards, because the button that skipped the cinematic is very
- |   likely still held.
+ |   play at the menu's faded-out level; and both edge masks are re-primed from
+ |   the live pad afterwards, because the button that skipped the cinematic is
+ |   very likely still held.
  |
  |   The clock is stepped on every frame useClock is set, but the attract is
  |   armed only while st->screen == MENU_TITLE. A player reading three slot
@@ -467,8 +467,8 @@ static void menu_fade_out(const MenuItem *items, int count, int music)
  |   so a menu never inherits one.
  | Author: suinevere
  | Dependencies: menu_state.h, menu_layout.h, menu_clock.h, saturn_menuart.h,
- |   saturn_saveslot.h, saturn_compat.h, disc.h, input.h, platform.h, client.h,
- |   main.h, video.h, fadecalc.h
+ |   saturn_saveslot.h, saturn_compat.h, disc.h, input.h, keymap.h,
+ |   saturn_keymap.h, platform.h, client.h, main.h, video.h, fadecalc.h
  | Globals: N/A
  | Params: st -- state, already positioned on its opening screen; exclusive --
  |         non-zero to hide NBG0 and draw the title card behind the menu;
@@ -578,6 +578,11 @@ static MenuAction menu_run(MenuState *st, int exclusive, int useClock,
             keymap_set_active(&st->map);
             err = saturn_keymap_save(&st->map);
             status = menu_layout_status_text(err, st->device);
+
+            if (err != SAT_BUP_OK)
+            {
+                st->screen = MENU_CONTROLS;
+            }
             action = MENU_ACT_NONE;
         }
         else if (action != MENU_ACT_NONE)

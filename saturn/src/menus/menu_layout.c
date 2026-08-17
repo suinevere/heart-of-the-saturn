@@ -553,14 +553,22 @@ static const char *button_name(PadButton b)
  | build_controls
  | Description: Lays out the controls screen: a heading, four binding rows,
  |   reset, back, and a hint line that changes with what the player is doing.
+ |
+ |   status takes the hint line's spot rather than a line of its own: the
+ |   hint sits at MENU_CTRL_HINT_Y 176 and ends at 186, and the panel interior
+ |   ends at y=194, so there is no room below it for a second line. A save
+ |   failure outranks whatever advisory hint would otherwise show, so a
+ |   non-NULL status always wins the line.
  | Author: suinevere
  | Dependencies: keymap.h
  | Globals: N/A
- | Params: st -- state to lay out; out -- destination; cap -- its capacity;
- |         n -- running item count, advanced in place
+ | Params: st -- state to lay out; status -- status line or NULL, takes the
+ |         hint line's place when set; out -- destination; cap -- its
+ |         capacity; n -- running item count, advanced in place
  | Returns: N/A
  ----------------------*/
-static void build_controls(const MenuState *st, MenuItem *out, int cap, int *n)
+static void build_controls(const MenuState *st, const char *status,
+                           MenuItem *out, int cap, int *n)
 {
     static const char *LABELS[MENU_CONTROLS_ROWS] = {
         "RUN/SHOOT/SHIELD", "WHIP", "JUMP", "JUMP FORWARD",
@@ -600,7 +608,9 @@ static void build_controls(const MenuState *st, MenuItem *out, int cap, int *n)
              MENU_CTRL_ROW0_Y + st->cursor * MENU_CTRL_ROW_DY, ">",
              MENU_RAMP_SEL);
 
-    if (st->capturing >= 0) {
+    if (status != 0) {
+        hint = status;
+    } else if (st->capturing >= 0) {
         hint = "START CANCELS";
     } else if (st->cursor == KEYMAP_ROW_FORWARD) {
         hint = "LEFT CLEARS";
@@ -634,7 +644,7 @@ int menu_layout_build(const MenuState *st, const char *status, MenuItem *out,
     case MENU_PAUSE:    build_pause(st, out, cap, &n); break;
     case MENU_SLOTS:    build_slots(st, status, out, cap, &n); break;
     case MENU_CONFIRM:  build_confirm(st, out, cap, &n); break;
-    case MENU_CONTROLS: build_controls(st, out, cap, &n); break;
+    case MENU_CONTROLS: build_controls(st, status, out, cap, &n); break;
     default: break;
     }
     return n;

@@ -380,6 +380,32 @@ static void test_controls_capture_prompt(void)
                has_text(items, n, 44, 176, "START CANCELS"), 1);
 }
 
+/*----------------------
+ | test_controls_status_replaces_hint
+ | Description: A failed keymap save has nowhere else to show on the controls
+ |   screen -- there is no room below the hint line inside the panel -- so it
+ |   must take the hint line's spot rather than share it. Pins that a non-NULL
+ |   status renders at the hint's position and that it wins outright even
+ |   while a capture is in progress, which would otherwise print
+ |   "START CANCELS" there instead.
+ ----------------------*/
+static void test_controls_status_replaces_hint(void)
+{
+    MenuState st;
+    static MenuItem items[MENU_LAYOUT_MAX_ITEMS];
+    int n;
+
+    memset(&st, 0, sizeof(st));
+    menu_state_enter_controls(&st, MENU_PAUSE);
+    st.capturing = KEYMAP_ROW_JUMP;
+
+    n = menu_layout_build(&st, "NO BACKUP DEVICE", items, MENU_LAYOUT_MAX_ITEMS);
+    expect_int("a failed save's status renders on the hint line",
+               has_text(items, n, 44, 176, "NO BACKUP DEVICE"), 1);
+    expect_int("the status replaces the capture hint rather than joining it",
+               has_text(items, n, 44, 176, "START CANCELS"), 0);
+}
+
 static void test_controls_reports_a_refusal(void)
 {
     MenuState st;
@@ -427,6 +453,7 @@ int main(void)
     test_status_text();
     test_controls_rows_and_values();
     test_controls_capture_prompt();
+    test_controls_status_replaces_hint();
     test_controls_reports_a_refusal();
     test_controls_every_button_name_renders();
 
