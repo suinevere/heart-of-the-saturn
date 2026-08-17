@@ -249,8 +249,10 @@ screen says so: `PRESS BUTTON — START CANCELS`. No new `MenuInput` field is ne
 Start already arrives as `in->pause`, which `MENU_CONTROLS` reads as "abort capture" while
 `capturing >= 0` and ignores otherwise.
 
-The four directions are likewise never reported as `captured`, so the d-pad keeps working
-as cursor movement even inside capture mode.
+The four directions are likewise never reported as `captured`. `step_controls` returns from
+the capture block before reaching the up/down handlers, though, so the cursor is locked
+while capturing rather than free to move underneath it — a d-pad that moved the cursor
+mid-capture would be confusing.
 
 ### `menu_layout.c` — the rows
 
