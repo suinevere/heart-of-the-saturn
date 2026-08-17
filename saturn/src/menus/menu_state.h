@@ -29,7 +29,8 @@ typedef enum {
     MENU_PAUSE,
     MENU_SLOTS,
     MENU_CONFIRM,
-    MENU_CONTROLS
+    MENU_CONTROLS,
+    MENU_DEATH
 } MenuScreen;
 
 /*----------------------
@@ -42,6 +43,17 @@ typedef enum {
  |   st->map as the active mapping with keymap_set_active and persist it to
  |   backup RAM, since this module never touches keymap's live state or the
  |   backup library either.
+ |
+ |   MENU_ACT_RESUME means different things to the two callers that can see it,
+ |   and both are correct: from the pause menu it means close the menu and let
+ |   the frame continue, and from the death screen it means reload the room the
+ |   player died in without resetting the VM. Only menu_gate ever sees the
+ |   second, because MENU_DEATH is only ever opened there.
+ |
+ |   MENU_ACT_SAVE_AND_RESUME is the death screen's first row: save to the
+ |   first slot and then resume as above. The save cannot happen where the
+ |   action is raised -- the state at that moment is the one the player just
+ |   died in -- so the caller defers it until after the room reload.
  | Author: suinevere
  ----------------------*/
 typedef enum {
@@ -52,7 +64,8 @@ typedef enum {
     MENU_ACT_LOAD_SLOT,
     MENU_ACT_RETURN_TO_TITLE,
     MENU_ACT_RESCAN_SLOTS,
-    MENU_ACT_SAVE_KEYMAP
+    MENU_ACT_SAVE_KEYMAP,
+    MENU_ACT_SAVE_AND_RESUME
 } MenuAction;
 
 /*----------------------
@@ -81,16 +94,17 @@ typedef struct {
  |   Callers must not read or write it, except through menu_state_enter_slots
  |   or menu_state_enter_controls.
  |
- |   map, capturing, mapDirty and mapRejected belong to the controls screen
- |   only, and are meaningless outside it. map is the screen's own working
- |   copy of the mapping, never the live one keymap_active returns -- nothing
- |   the player does to it reaches the pad until they leave and the caller
- |   installs it. capturing is the KeymapRow currently waiting for a button,
- |   or -1 when no row is capturing. mapDirty is set the moment map first
- |   diverges from what was loaded, and gates whether leaving the screen asks
- |   the caller to save. mapRejected is set for one frame when a capture is
- |   refused, which is what tells the layout to print IN USE next to the row
- |   that refused it.
+ |   map, capturing and mapDirty belong to the controls screen only, and are
+ |   meaningless outside it. map is the screen's own working copy of the
+ |   mapping, never the live one keymap_active returns -- nothing the player
+ |   does to it reaches the pad until they leave and the caller installs it.
+ |   capturing is the KeymapRow currently waiting for a button, or -1 when no
+ |   row is capturing. mapDirty is set the moment map first diverges from what
+ |   was loaded, and gates whether leaving the screen asks the caller to save.
+ |
+ |   There is no rejection state, because with every row holding a real button
+ |   keymap_assign can no longer refuse one -- the displaced row always has a
+ |   binding to receive.
  | Author: suinevere
  ----------------------*/
 typedef struct {
@@ -107,7 +121,6 @@ typedef struct {
     KeyMap     map;
     int        capturing;
     int        mapDirty;
-    int        mapRejected;
 } MenuState;
 
 /*----------------------
@@ -150,14 +163,14 @@ void menu_state_enter_slots(MenuState *st, int saving, MenuScreen back);
 
 /*----------------------
  | MENU_CONTROLS_ROWS / MENU_CONTROLS_ROW_RESET / MENU_CONTROLS_ROW_BACK
- | Description: Six rows: the four bindings in KeymapRow order, then reset,
+ | Description: Five rows: the three bindings in KeymapRow order, then reset,
  |   then back. The bindings share KeymapRow's numbering on purpose, so a
  |   cursor below KEYMAP_ROW_COUNT is a row index and needs no table.
  | Author: suinevere
  ----------------------*/
-#define MENU_CONTROLS_ROWS       6
-#define MENU_CONTROLS_ROW_RESET  4
-#define MENU_CONTROLS_ROW_BACK   5
+#define MENU_CONTROLS_ROWS       5
+#define MENU_CONTROLS_ROW_RESET  3
+#define MENU_CONTROLS_ROW_BACK   4
 
 /*----------------------
  | menu_state_enter_controls
@@ -172,6 +185,40 @@ void menu_state_enter_slots(MenuState *st, int saving, MenuScreen back);
  | Returns: N/A
  ----------------------*/
 void menu_state_enter_controls(MenuState *st, MenuScreen back);
+
+/*----------------------
+ | MENU_DEATH_ROWS / MENU_DEATH_ROW_RESUME / MENU_DEATH_ROW_SAVE /
+ | MENU_DEATH_ROW_SLOT0 / MENU_DEATH_ROW_TITLE
+ | Description: The screen a death opens. Resume, save and resume, one row per
+ |   save slot, then return to title.
+ |
+ |   The slot rows sit inline rather than behind a further screen because a
+ |   death is the one arrival where the player has not chosen to be in a menu
+ |   at all: every route out of it is one press from the row they land on.
+ |   Subtracting MENU_DEATH_ROW_SLOT0 from the cursor gives the slot index.
+ | Author: suinevere
+ ----------------------*/
+#define MENU_DEATH_ROW_RESUME 0
+#define MENU_DEATH_ROW_SAVE   1
+#define MENU_DEATH_ROW_SLOT0  2
+#define MENU_DEATH_ROW_TITLE  (MENU_DEATH_ROW_SLOT0 + SAVE_NUM_SLOTS)
+#define MENU_DEATH_ROWS       (MENU_DEATH_ROW_TITLE + 1)
+
+/*----------------------
+ | menu_state_enter_death
+ | Description: Opens the death screen on the resume row, so the press a player
+ |   is most likely already making does the least destructive thing.
+ |
+ |   Cancel resumes rather than backing out to anything, because there is
+ |   nothing behind a death to back out to -- the screen is the first thing the
+ |   player sees after dying, not something they opened.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: st -- state to initialise
+ | Returns: N/A
+ ----------------------*/
+void menu_state_enter_death(MenuState *st);
 
 /*----------------------
  | menu_state_step

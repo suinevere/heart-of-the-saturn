@@ -31,24 +31,16 @@ unsigned int keymap_button_bit(PadButton b)
 
 void keymap_defaults(KeyMap *m)
 {
-    m->row[KEYMAP_ROW_RUN]     = PAD_A;
-    m->row[KEYMAP_ROW_WHIP]    = PAD_B;
-    m->row[KEYMAP_ROW_JUMP]    = PAD_C;
-    m->row[KEYMAP_ROW_FORWARD] = PAD_NONE;
+    m->row[KEYMAP_ROW_RUN]  = PAD_A;
+    m->row[KEYMAP_ROW_WHIP] = PAD_B;
+    m->row[KEYMAP_ROW_JUMP] = PAD_C;
 }
 
 void keymap_apply(const KeyMap *m, unsigned int raw, int *a, int *b, int *c)
 {
-    unsigned int forward = keymap_button_bit(m->row[KEYMAP_ROW_FORWARD]);
-
     *a = (raw & keymap_button_bit(m->row[KEYMAP_ROW_RUN]))  ? 1 : 0;
     *b = (raw & keymap_button_bit(m->row[KEYMAP_ROW_WHIP])) ? 1 : 0;
     *c = (raw & keymap_button_bit(m->row[KEYMAP_ROW_JUMP])) ? 1 : 0;
-
-    if (forward != 0u && (raw & forward) != 0u) {
-        *a = 1;
-        *c = 1;
-    }
 }
 
 const KeyMap *keymap_active(void)
@@ -72,26 +64,16 @@ void keymap_set_active(const KeyMap *m)
  | Author: suinevere
  | Dependencies: N/A
  | Globals: N/A
- | Params: m -- the mapping; row -- which action; b -- the button, or PAD_NONE
- |         to clear the shortcut row
- | Returns: 1 if changed, 0 otherwise -- see keymap.h for how the caller tells
- |          a refusal from a no-op
+ | Params: m -- the mapping; row -- which action; b -- the button to bind
+ | Returns: 1 if changed, 0 if b was already in place or was PAD_NONE
  ----------------------*/
 int keymap_assign(KeyMap *m, KeymapRow row, PadButton b)
 {
     PadButton previous;
     int q;
 
-    if (m->row[row] == b) {
+    if (b == PAD_NONE || m->row[row] == b) {
         return 0;
-    }
-
-    if (b == PAD_NONE) {
-        if (row != KEYMAP_ROW_FORWARD) {
-            return 0;
-        }
-        m->row[row] = PAD_NONE;
-        return 1;
     }
 
     previous = m->row[row];
@@ -99,9 +81,6 @@ int keymap_assign(KeyMap *m, KeymapRow row, PadButton b)
     for (q = 0; q < KEYMAP_ROW_COUNT; q++) {
         if (q == (int)row || m->row[q] != b) {
             continue;
-        }
-        if (previous == PAD_NONE) {
-            return 0;
         }
         m->row[q] = previous;
         break;
@@ -151,12 +130,11 @@ int keymap_parse(KeyMap *m, const unsigned char *buf, int len)
     }
 
     for (i = 0; i < KEYMAP_ROW_COUNT; i++) {
-        if (i != KEYMAP_ROW_FORWARD && candidate.row[i] == PAD_NONE) {
+        if (candidate.row[i] == PAD_NONE) {
             return 0;
         }
         for (j = i + 1; j < KEYMAP_ROW_COUNT; j++) {
-            if (candidate.row[i] != PAD_NONE
-                && candidate.row[i] == candidate.row[j]) {
+            if (candidate.row[i] == candidate.row[j]) {
                 return 0;
             }
         }

@@ -440,19 +440,16 @@ static void test_start_aborts_a_capture(void)
     expect_int("the map is clean", st.mapDirty, 0);
 }
 
-static void test_a_refused_capture_reports_in_use(void)
+static void test_capturing_another_rows_button_swaps(void)
 {
     MenuState st;
     MenuInput in;
-    int i;
 
     enter_controls_from_pause(&st);
 
-    for (i = 0; i < KEYMAP_ROW_FORWARD; i++) {
-        in = none();
-        in.down = 1;
-        menu_state_step(&st, &in);
-    }
+    in = none();
+    in.down = 1;
+    menu_state_step(&st, &in);
 
     in = none();
     in.confirm = 1;
@@ -462,11 +459,10 @@ static void test_a_refused_capture_reports_in_use(void)
     in.captured = PAD_A;
     menu_state_step(&st, &in);
     expect_int("the capture ends", st.capturing, -1);
-    expect_int("the shortcut is still clear",
-               (int)st.map.row[KEYMAP_ROW_FORWARD], (int)PAD_NONE);
-    expect_int("run kept A", (int)st.map.row[KEYMAP_ROW_RUN], (int)PAD_A);
-    expect_int("the screen is told to say IN USE", st.mapRejected, 1);
-    expect_int("the map is clean", st.mapDirty, 0);
+    expect_int("whip took A", (int)st.map.row[KEYMAP_ROW_WHIP], (int)PAD_A);
+    expect_int("run took whip's old B",
+               (int)st.map.row[KEYMAP_ROW_RUN], (int)PAD_B);
+    expect_int("the map is dirty", st.mapDirty, 1);
 }
 
 static void test_capturing_the_current_button_is_a_no_op(void)
@@ -485,38 +481,27 @@ static void test_capturing_the_current_button_is_a_no_op(void)
     menu_state_step(&st, &in);
     expect_int("the capture ends", st.capturing, -1);
     expect_int("run is still A", (int)st.map.row[KEYMAP_ROW_RUN], (int)PAD_A);
-    expect_int("capturing the row's own button is not IN USE", st.mapRejected, 0);
     expect_int("capturing the row's own button does not dirty the map",
                st.mapDirty, 0);
 }
 
-static void test_left_clears_the_shortcut(void)
+static void test_controls_has_five_rows(void)
 {
     MenuState st;
     MenuInput in;
-    int i;
 
     enter_controls_from_pause(&st);
 
-    for (i = 0; i < KEYMAP_ROW_FORWARD; i++) {
-        in = none();
-        in.down = 1;
-        menu_state_step(&st, &in);
-    }
+    in = none();
+    in.up = 1;
+    menu_state_step(&st, &in);
+    expect_int("up from the first row wraps to back",
+               st.cursor, MENU_CONTROLS_ROW_BACK);
 
     in = none();
-    in.confirm = 1;
+    in.down = 1;
     menu_state_step(&st, &in);
-    in = none();
-    in.captured = PAD_Z;
-    menu_state_step(&st, &in);
-    expect_int("the shortcut is Z", (int)st.map.row[KEYMAP_ROW_FORWARD], (int)PAD_Z);
-
-    in = none();
-    in.left = 1;
-    menu_state_step(&st, &in);
-    expect_int("left clears the shortcut",
-               (int)st.map.row[KEYMAP_ROW_FORWARD], (int)PAD_NONE);
+    expect_int("and down comes back to the first binding", st.cursor, 0);
 }
 
 static void test_reset_row_restores_defaults(void)
@@ -595,6 +580,153 @@ static void test_back_saves_only_when_the_map_changed(void)
     expect_int("and returns to pause", (int)st.screen, (int)MENU_PAUSE);
 }
 
+static void enter_death_with_slots(MenuState *st, SlotState first)
+{
+    int i;
+
+    memset(st, 0, sizeof(*st));
+    menu_state_enter_death(st);
+
+    for (i = 0; i < SAVE_NUM_SLOTS; i++) {
+        st->slots[i].state = SLOT_EMPTY;
+    }
+    st->slots[0].state = first;
+}
+
+static void test_death_opens_on_resume(void)
+{
+    MenuState st;
+
+    enter_death_with_slots(&st, SLOT_OK);
+    expect_int("a death opens the death screen", (int)st.screen, (int)MENU_DEATH);
+    expect_int("on the resume row", st.cursor, MENU_DEATH_ROW_RESUME);
+}
+
+static void test_death_cancel_and_pause_resume(void)
+{
+    MenuState st;
+    MenuInput in;
+
+    enter_death_with_slots(&st, SLOT_OK);
+    in = none();
+    in.cancel = 1;
+    expect_int("cancel resumes rather than returning to the title",
+               (int)menu_state_step(&st, &in), (int)MENU_ACT_RESUME);
+
+    enter_death_with_slots(&st, SLOT_OK);
+    in = none();
+    in.pause = 1;
+    expect_int("start resumes too",
+               (int)menu_state_step(&st, &in), (int)MENU_ACT_RESUME);
+
+    enter_death_with_slots(&st, SLOT_OK);
+    in = none();
+    in.confirm = 1;
+    expect_int("confirming the resume row resumes",
+               (int)menu_state_step(&st, &in), (int)MENU_ACT_RESUME);
+}
+
+static void test_death_save_row(void)
+{
+    MenuState st;
+    MenuInput in;
+
+    enter_death_with_slots(&st, SLOT_OK);
+    in = none();
+    in.down = 1;
+    menu_state_step(&st, &in);
+    expect_int("row 1 is save and resume", st.cursor, MENU_DEATH_ROW_SAVE);
+
+    in = none();
+    in.confirm = 1;
+    expect_int("confirming it asks the caller to save and resume",
+               (int)menu_state_step(&st, &in), (int)MENU_ACT_SAVE_AND_RESUME);
+}
+
+static void test_death_slot_rows_load_only_when_usable(void)
+{
+    MenuState st;
+    MenuInput in;
+    int i;
+
+    enter_death_with_slots(&st, SLOT_OK);
+
+    for (i = 0; i < MENU_DEATH_ROW_SLOT0; i++) {
+        in = none();
+        in.down = 1;
+        menu_state_step(&st, &in);
+    }
+
+    in = none();
+    in.confirm = 1;
+    expect_int("a usable slot loads",
+               (int)menu_state_step(&st, &in), (int)MENU_ACT_LOAD_SLOT);
+    expect_int("and points the caller at the right slot", st.slotCursor, 0);
+
+    enter_death_with_slots(&st, SLOT_EMPTY);
+
+    for (i = 0; i < MENU_DEATH_ROW_SLOT0; i++) {
+        in = none();
+        in.down = 1;
+        menu_state_step(&st, &in);
+    }
+
+    in = none();
+    in.confirm = 1;
+    expect_int("an empty slot does nothing",
+               (int)menu_state_step(&st, &in), (int)MENU_ACT_NONE);
+
+    enter_death_with_slots(&st, SLOT_DAMAGED);
+
+    for (i = 0; i < MENU_DEATH_ROW_SLOT0; i++) {
+        in = none();
+        in.down = 1;
+        menu_state_step(&st, &in);
+    }
+
+    in = none();
+    in.confirm = 1;
+    expect_int("a damaged slot does nothing either",
+               (int)menu_state_step(&st, &in), (int)MENU_ACT_NONE);
+}
+
+static void test_death_title_row_shows_the_title_card(void)
+{
+    MenuState st;
+    MenuInput in;
+    int i;
+
+    enter_death_with_slots(&st, SLOT_OK);
+
+    for (i = 0; i < MENU_DEATH_ROW_TITLE; i++) {
+        in = none();
+        in.down = 1;
+        menu_state_step(&st, &in);
+    }
+    expect_int("the last row is return to title",
+               st.cursor, MENU_DEATH_ROW_TITLE);
+
+    in = none();
+    in.confirm = 1;
+    expect_int("confirming it stays inside the menu",
+               (int)menu_state_step(&st, &in), (int)MENU_ACT_NONE);
+    expect_int("and lands on the sub-title card",
+               (int)st.screen, (int)MENU_TITLE);
+}
+
+static void test_death_cursor_wraps(void)
+{
+    MenuState st;
+    MenuInput in;
+
+    enter_death_with_slots(&st, SLOT_OK);
+    in = none();
+    in.up = 1;
+    menu_state_step(&st, &in);
+    expect_int("up from resume wraps to return to title",
+               st.cursor, MENU_DEATH_ROW_TITLE);
+}
+
 int main(void)
 {
     test_title_cursor_and_start();
@@ -614,12 +746,18 @@ int main(void)
     test_title_has_a_controls_row();
     test_capture_binds_a_button();
     test_start_aborts_a_capture();
-    test_a_refused_capture_reports_in_use();
+    test_capturing_another_rows_button_swaps();
     test_capturing_the_current_button_is_a_no_op();
-    test_left_clears_the_shortcut();
+    test_controls_has_five_rows();
     test_reset_row_restores_defaults();
     test_reset_on_an_unmodified_map_does_not_dirty();
     test_back_saves_only_when_the_map_changed();
+    test_death_opens_on_resume();
+    test_death_cancel_and_pause_resume();
+    test_death_save_row();
+    test_death_slot_rows_load_only_when_usable();
+    test_death_title_row_shows_the_title_card();
+    test_death_cursor_wraps();
 
     if (g_fail != 0) {
         printf("menu_state: %d failure(s)\n", g_fail);

@@ -96,8 +96,8 @@
  | MENU_CTRL_*
  | Description: The controls screen's geometry, on MENU_PANEL_SLOTS. That
  |   panel is 272x168 at (24, 28), so its interior after the art tool's 2 px
- |   border is x 26..294 and y 30..194. Six rows at MENU_CTRL_ROW_DY from
- |   MENU_CTRL_ROW0_Y end at 164 and the hint ends at 186, both inside it.
+ |   border is x 26..294 and y 30..194. Five rows at MENU_CTRL_ROW_DY from
+ |   MENU_CTRL_ROW0_Y end at 146 and the hint ends at 186, both inside it.
  |
  |   MENU_CTRL_VALUE_X is where the longest value has to fit: "PRESS?" is six
  |   cells, ending at 220 + 48 = 268, inside 294. That is why the capture
@@ -106,6 +106,27 @@
  |   the screen.
  | Author: suinevere
  ----------------------*/
+/*----------------------
+ | MENU_DEATH_*
+ | Description: The death screen's geometry, on MENU_PANEL_SLOTS beside the
+ |   slot list's. Six rows at MENU_DEATH_ROW_DY from MENU_DEATH_ROW0_Y end at
+ |   166 and the status line ends at 186, both inside that panel's interior of
+ |   y 30..194.
+ |
+ |   The rows share the slot list's x and step so the three slot rows in the
+ |   middle of this screen land exactly where the same text lands there, and
+ |   menu_layout_slot_row's panel-fit reasoning carries over unchanged.
+ | Author: suinevere
+ ----------------------*/
+#define MENU_DEATH_HEAD_Y    40
+#define MENU_DEATH_DEVICE_X  52
+#define MENU_DEATH_DEVICE_Y  56
+#define MENU_DEATH_ROW_X     60
+#define MENU_DEATH_ROW0_Y    76
+#define MENU_DEATH_ROW_DY    16
+#define MENU_DEATH_CURSOR_X  44
+#define MENU_DEATH_STATUS_Y  176
+
 #define MENU_CTRL_HEADING_Y 40
 #define MENU_CTRL_LABEL_X   44
 #define MENU_CTRL_VALUE_X   220
@@ -571,8 +592,7 @@ static void build_controls(const MenuState *st, const char *status,
                            MenuItem *out, int cap, int *n)
 {
     static const char *LABELS[MENU_CONTROLS_ROWS] = {
-        "RUN/SHOOT/SHIELD", "WHIP", "JUMP", "JUMP FORWARD",
-        "RESET DEFAULTS", "BACK"
+        "RUN/SHOOT/SHIELD", "WHIP", "JUMP", "RESET DEFAULTS", "BACK"
     };
     const char *hint;
     int i;
@@ -594,9 +614,6 @@ static void build_controls(const MenuState *st, const char *status,
         if (st->capturing == i) {
             put_text(out, cap, n, MENU_CTRL_VALUE_X, y, "PRESS?",
                      MENU_RAMP_SEL);
-        } else if (st->mapRejected && st->cursor == i) {
-            put_text(out, cap, n, MENU_CTRL_VALUE_X, y, "IN USE",
-                     MENU_RAMP_SEL);
         } else {
             put_text(out, cap, n, MENU_CTRL_VALUE_X, y,
                      button_name(st->map.row[i]),
@@ -612,14 +629,75 @@ static void build_controls(const MenuState *st, const char *status,
         hint = status;
     } else if (st->capturing >= 0) {
         hint = "START CANCELS";
-    } else if (st->cursor == KEYMAP_ROW_FORWARD) {
-        hint = "LEFT CLEARS";
     } else {
         hint = "";
     }
 
     if (hint[0] != '\0') {
         put_text(out, cap, n, MENU_CTRL_LABEL_X, MENU_CTRL_HINT_Y, hint,
+                 MENU_RAMP_DIM);
+    }
+}
+
+/*----------------------
+ | build_death
+ | Description: Lays out the screen a death opens: resume, save and resume, one
+ |   row per slot, and return to title.
+ |
+ |   The device is shown but not selectable. A death is not the moment to make
+ |   the player hunt for their saves on another device, and the slot rows would
+ |   be a lie without it -- they describe whichever device menu_rescan probed.
+ | Author: suinevere
+ | Dependencies: savedata.h, saturn_backup.h
+ | Globals: N/A
+ | Params: st -- state to lay out; status -- status line, or NULL for none;
+ |         out -- destination; cap -- its capacity; n -- running item count,
+ |         advanced in place
+ | Returns: N/A
+ ----------------------*/
+static void build_death(const MenuState *st, const char *status, MenuItem *out,
+                        int cap, int *n)
+{
+    char row[MENU_ROW_CHARS];
+    int i;
+    int y;
+
+    put_panel(out, cap, n, MENU_PANEL_SLOTS, MENU_SLOTS_PANEL_X,
+              MENU_SLOTS_PANEL_Y);
+    put_text(out, cap, n, centre_x("YOU DIED"), MENU_DEATH_HEAD_Y,
+             "YOU DIED", MENU_RAMP_DIM);
+    put_text(out, cap, n, MENU_DEATH_DEVICE_X, MENU_DEATH_DEVICE_Y,
+             st->device == SAT_BUP_CART ? "CARTRIDGE"
+                                        : "INTERNAL MEMORY",
+             MENU_RAMP_DIM);
+
+    for (i = 0; i < MENU_DEATH_ROWS; i++) {
+        y = MENU_DEATH_ROW0_Y + i * MENU_DEATH_ROW_DY;
+
+        if (i == MENU_DEATH_ROW_RESUME) {
+            put_text(out, cap, n, MENU_DEATH_ROW_X, y, "RESUME",
+                     st->cursor == i ? MENU_RAMP_SEL : MENU_RAMP_DIM);
+        } else if (i == MENU_DEATH_ROW_SAVE) {
+            put_text(out, cap, n, MENU_DEATH_ROW_X, y, "SAVE AND RESUME",
+                     st->cursor == i ? MENU_RAMP_SEL : MENU_RAMP_DIM);
+        } else if (i == MENU_DEATH_ROW_TITLE) {
+            put_text(out, cap, n, MENU_DEATH_ROW_X, y, "RETURN TO TITLE",
+                     st->cursor == i ? MENU_RAMP_SEL : MENU_RAMP_DIM);
+        } else {
+            menu_layout_slot_row(row, MENU_ROW_CHARS,
+                                 i - MENU_DEATH_ROW_SLOT0,
+                                 &st->slots[i - MENU_DEATH_ROW_SLOT0]);
+            put_text(out, cap, n, MENU_DEATH_ROW_X, y, row,
+                     st->cursor == i ? MENU_RAMP_SEL : MENU_RAMP_DIM);
+        }
+    }
+
+    put_text(out, cap, n, MENU_DEATH_CURSOR_X,
+             MENU_DEATH_ROW0_Y + st->cursor * MENU_DEATH_ROW_DY, ">",
+             MENU_RAMP_SEL);
+
+    if (status != 0) {
+        put_text(out, cap, n, MENU_SLOTS_STATUS_X, MENU_DEATH_STATUS_Y, status,
                  MENU_RAMP_DIM);
     }
 }
@@ -645,6 +723,7 @@ int menu_layout_build(const MenuState *st, const char *status, MenuItem *out,
     case MENU_SLOTS:    build_slots(st, status, out, cap, &n); break;
     case MENU_CONFIRM:  build_confirm(st, out, cap, &n); break;
     case MENU_CONTROLS: build_controls(st, status, out, cap, &n); break;
+    case MENU_DEATH:    build_death(st, status, out, cap, &n); break;
     default: break;
     }
     return n;

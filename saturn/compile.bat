@@ -12,6 +12,7 @@ REM
 REM Usage: compile.bat [debug|release|clean]   (default: debug)
 REM Output: BuildDrop/<CD_NAME>.{elf,iso,bin,cue,map} -- CD_NAME is set in the makefile.
 SETLOCAL
+SET "HOTA_PART1=1"
 IF "%~1"=="" (SET "TGT=debug") ELSE (SET "TGT=%~1")
 SET "SRL_INSTALL_ROOT=../SaturnRingLib"
 SET "CDIR=%~dp0..\SaturnRingLib\Compiler"

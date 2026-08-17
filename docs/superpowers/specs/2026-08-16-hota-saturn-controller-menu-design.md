@@ -1,8 +1,31 @@
 # Heart of The Alien → Sega Saturn — Controller Menu Design Spec
 
 **Date:** 2026-08-16
-**Status:** Draft, pending review
+**Status:** Implemented, then revised — see Revisions below
 **Target engine:** SaturnRingLib (SRL)
+
+## Revisions, 2026-08-16
+
+Three changes landed after the design below was implemented. **Where this document and
+the code disagree, the code is right and these notes say why.** The body is left as the
+record of the original reasoning rather than rewritten around it.
+
+1. **The jump-forward row is gone.** It was redundant: the chord is emergent, so a row
+   naming one button for it was a second route to a move the other two rows already
+   produce. `KeymapRow` is three rows, all always bound. The cascade is larger than the
+   deletion — the shortcut row was the only row allowed to hold `PAD_NONE`, and that was
+   the only reason `keymap_assign` could refuse anything, so the rejection case, the
+   `IN USE` state, `MenuState.mapRejected` and the `LEFT CLEARS` hint all went with it.
+   Every section below about the shortcut row, its rejection case, or Left clearing it
+   describes code that no longer exists.
+2. **`KEYMAP_FORMAT_VERSION` is 2**, carrying three bindings at bytes 6..8. A stored v1
+   entry is refused and falls back to defaults rather than being read short.
+3. **A and C both confirm in every menu.** `menu_key_mask` sets `MENU_BIT_CONFIRM` from
+   `PAD_BIT_A | PAD_BIT_C`. The boot menu already accepted A, B or C
+   (`BOOT_KEY_CONFIRM`), so this makes the rest of the game agree with it.
+
+A fourth change, the death screen, is a separate feature and is documented in its own
+section at the end of this file.
 
 ## Goal
 
@@ -311,22 +334,33 @@ and the capture prompt; item count under `MENU_LAYOUT_MAX_ITEMS`; no row exceedi
 
 ## Acceptance criteria
 
-1. With no `HOTA_CFG` entry present, the game plays exactly as the current build does.
+Revised for the changes above. This is the list to run on hardware.
+
+1. With no `HOTA_CFG` entry present, the game plays exactly as the previous build does.
 2. *CONTROLS* opens from the pause menu and from the sub-title card, and cancelling from
-   each returns to the one it was opened from.
+   each returns to the one it was opened from. It shows **five** rows.
 3. Binding Jump to Z and pressing Z jumps.
-4. With Run on X and Jump on Y and the shortcut NONE, holding X and Y performs jump
-   forward.
-5. Binding the shortcut to Z and pressing Z alone performs jump forward.
-6. Capturing a button another row holds swaps the two rows; capturing a core row's button
-   for a NONE shortcut changes nothing and shows `IN USE`.
-7. Start aborts a capture and leaves the row unchanged.
-8. After remapping Run to X, the pause menu's confirm is still A, and the boot menu is
+4. With Run on X and Jump on Y, holding X and Y performs jump forward — the move survives
+   remapping with no row of its own.
+5. Capturing a button another row holds swaps the two rows, and nothing is ever refused.
+6. Start aborts a capture and leaves the row unchanged.
+7. After remapping Run to X, the pause menu's confirm is still A, and the boot menu is
    unaffected.
-9. Power-cycling the console preserves the mapping; Reset To Defaults restores A/B/C/NONE
-   and that also survives a power cycle.
-10. With backup RAM unavailable, the screen still works, reports the failure, and the
-    mapping applies for the session.
+8. **A and C both select** on the boot menu, the sub-title card, the pause menu, the slot
+   list and the controls screen. B still cancels.
+9. Power-cycling preserves the mapping; Reset To Defaults restores A/B/C and that survives
+   a power cycle too. A console holding a v1 entry from the previous build comes up on the
+   defaults rather than a misread mapping.
+10. With backup RAM unavailable, the controls screen still works, reports the failure on
+    its hint line, and the mapping applies for the session.
+11. **Dying opens the death screen** over the frame you died on, cursor on RESUME.
+12. RESUME, cancel and Start each reload the room you died in with your progress intact —
+    not the title screen, and not a new game.
+13. SAVE AND RESUME writes slot 1 and then resumes. Loading that slot afterwards puts you
+    at the restarted room, **not** back into the death.
+14. A slot row loads it; an empty or damaged slot row does nothing.
+15. RETURN TO TITLE reaches the sub-title card, from which START GAME and LOAD GAME both
+    still work.
 
 ## Out of scope
 
@@ -346,3 +380,43 @@ and the capture prompt; item count under `MENU_LAYOUT_MAX_ITEMS`; no row exceedi
   someone asks.
 - **Remapping Start.** It is the pause button and the capture escape hatch; it must be the
   one fixed point.
+
+## The death screen
+
+Added 2026-08-16, after the controller menu. A death used to open the load screen, which
+meant every death — not just a terminal one — pushed the player into a menu whose only
+exits were loading a save or starting over.
+
+`MENU_DEATH` replaces it: **RESUME**, **SAVE AND RESUME**, one row per save slot, then
+**RETURN TO TITLE**. Cancel and Start both resume, and the cursor starts on RESUME, so the
+stray press a player is probably already making does the least destructive thing.
+
+### Why resume reloads the room rather than continuing the script
+
+`decode.c`'s `0x21` handler sets `next_script = 7; leave = 1` when `death_played` — that
+`leave` unwinds the room script, and it is what routes a death to the gate at all. Without
+it the script would carry on, which is the engine's own checkpoint restart. By the time
+`menu_gate` runs, that script is already gone, so "keep playing" cannot mean "continue
+where it left off" from there.
+
+So RESUME returns `current_room` and, deliberately, **does not** call `vm_reset()`.
+`run()`'s existing block reloads the room over the surviving variables. A death now costs
+the room rather than the playthrough. Reaching for the script instead would have meant
+running the menu inside the task loop, where `quicksave`'s no-active-thread precondition
+does not hold.
+
+### Why the save is deferred a frame
+
+At the moment SAVE AND RESUME is chosen, the running state is the one the player just died
+in — task program counters sitting just past the death opcode. A save taken there would
+restore them into the death they just escaped. So the gate sets a pending flag,
+`run()` reloads the room, and `menu_deferred_save_poll` writes slot 1 at the next frame
+top, beside `menu_pause_poll` and for the same reason: it is the one point where a save is
+legal. The device is the one the death screen was showing, carried alongside the flag, so
+the save lands where the slot rows the player was looking at came from.
+
+### Out of scope here
+
+The death screen's slot rows **load** only. Saving to a chosen slot is what the pause
+menu is for, and SAVE AND RESUME covers the one-press case. The device is shown but not
+selectable — a death is not the moment to make someone hunt for their saves.

@@ -55,25 +55,27 @@ typedef enum {
 
 /*----------------------
  | KeymapRow
- | Description: The four bindable actions, in screen order. KEYMAP_ROW_FORWARD
- |   is the only one that may hold PAD_NONE: it is a shortcut for run and jump
- |   together, not the only route to the move, so losing it costs convenience
- |   and never the move itself.
+ | Description: The three bindable actions, in screen order. Every row always
+ |   holds a real button; PAD_NONE is never a legal binding.
+ |
+ |   There is deliberately no jump-forward row. Jump forward is run and jump
+ |   held together, and keymap_apply reproduces that from the two rows below
+ |   whatever they are bound to, so a fourth row naming one button for it
+ |   would have been a second route to a move that already has one.
  | Author: suinevere
  ----------------------*/
 typedef enum {
     KEYMAP_ROW_RUN,
     KEYMAP_ROW_WHIP,
     KEYMAP_ROW_JUMP,
-    KEYMAP_ROW_FORWARD,
     KEYMAP_ROW_COUNT
 } KeymapRow;
 
 /*----------------------
  | KeyMap
- | Description: One binding per row. No two rows may hold the same non-NONE
- |   button; keymap_assign and keymap_parse are the only things that write
- |   one, and both enforce that.
+ | Description: One binding per row. No two rows may hold the same button, and
+ |   no row may hold PAD_NONE; keymap_assign and keymap_parse are the only
+ |   things that write one, and both enforce that.
  | Author: suinevere
  ----------------------*/
 typedef struct {
@@ -83,13 +85,18 @@ typedef struct {
 /*----------------------
  | KEYMAP_ENTRY_BYTES / KEYMAP_FORMAT_VERSION
  | Description: The size of the stored entry and the format version it must
- |   carry, following savedata.h's convention. Sixteen bytes for ten used and
- |   six of room, because the backup RAM cost of the slack is nothing next to
+ |   carry, following savedata.h's convention. Sixteen bytes for nine used and
+ |   seven of room, because the backup RAM cost of the slack is nothing next to
  |   a format bump.
+ |
+ |   Version 2 dropped the fourth binding when the jump-forward row went away.
+ |   A stored version 1 entry is refused rather than read short, so a console
+ |   carrying one falls back to the defaults instead of loading a row that no
+ |   longer exists into one that does.
  | Author: suinevere
  ----------------------*/
 #define KEYMAP_ENTRY_BYTES    16
-#define KEYMAP_FORMAT_VERSION 1
+#define KEYMAP_FORMAT_VERSION 2
 
 /*----------------------
  | keymap_button_bit
@@ -105,9 +112,9 @@ unsigned int keymap_button_bit(PadButton b);
 
 /*----------------------
  | keymap_defaults
- | Description: A, B, C and no shortcut -- exactly what input_srl.cxx
- |   hardwired before this module existed, so a console with no stored config
- |   plays identically to the previous build.
+ | Description: A, B and C -- exactly what input_srl.cxx hardwired before this
+ |   module existed, so a console with no stored config plays identically to
+ |   the previous build.
  | Author: suinevere
  | Dependencies: N/A
  | Globals: N/A
@@ -124,8 +131,9 @@ void keymap_defaults(KeyMap *m);
  |   There is no chord to implement. The engine reads level state from
  |   independent globals, so run and jump held together is jump forward
  |   whatever the two buttons are -- this function reproduces it by writing
- |   each global from its own binding and nothing else. The shortcut row is
- |   the only special case, and it only ever sets bits.
+ |   each global from its own binding and nothing else. That is also why there
+ |   is no fourth row naming one button for the move: it would be a second
+ |   route to something the first two already produce.
  | Author: suinevere
  | Dependencies: N/A
  | Globals: N/A
@@ -164,25 +172,21 @@ void keymap_set_active(const KeyMap *m);
 /*----------------------
  | keymap_assign
  | Description: Binds a button to a row, swapping with whichever row already
- |   held it so that nothing is ever left unbound by accident and every
- |   capture is one reversible step.
+ |   held it so that nothing is ever left unbound and every capture is one
+ |   reversible step.
  |
- |   Refuses exactly two things. A core row may not be set to PAD_NONE. And a
- |   swap may not hand a core row PAD_NONE, which is reachable only when the
- |   shortcut row is empty and the button picked for it belongs to a core row
- |   -- there the displaced row would have taken the shortcut's nothing and
- |   Run, Whip or Jump would have gone dead. The caller shows IN USE and the
- |   player moves the core row first, or picks a free button.
+ |   With the shortcut row gone this can no longer refuse a real button. Every
+ |   row holds one, so the displaced row always receives one, and the swap
+ |   always succeeds -- which is why the caller has no rejection state to show.
+ |   The only zero returns are a button already in place and a PAD_NONE the
+ |   caller should never send.
  | Author: suinevere
  | Dependencies: N/A
  | Globals: N/A
- | Params: m -- the mapping; row -- which action; b -- the button, or PAD_NONE
- |         to clear the shortcut row
- | Returns: 1 if the mapping changed. 0 otherwise, for either of two reasons:
- |          the assignment was refused and the mapping is untouched, or b was
- |          already row's binding and there was nothing to change. The caller
- |          tells them apart by comparing m->row[row] to b after the call --
- |          equal means no-op, unequal means refusal.
+ | Params: m -- the mapping; row -- which action; b -- the button to bind
+ | Returns: 1 if the mapping changed, 0 if it did not -- either b was already
+ |          row's binding, or b was PAD_NONE, which is not a legal binding for
+ |          any row. The mapping is untouched on both.
  ----------------------*/
 int keymap_assign(KeyMap *m, KeymapRow row, PadButton b);
 

@@ -28,7 +28,7 @@ static void test_defaults_match_the_current_hardwiring(void)
     expect_int("run defaults to A",      (int)m.row[KEYMAP_ROW_RUN],     (int)PAD_A);
     expect_int("whip defaults to B",     (int)m.row[KEYMAP_ROW_WHIP],    (int)PAD_B);
     expect_int("jump defaults to C",     (int)m.row[KEYMAP_ROW_JUMP],    (int)PAD_C);
-    expect_int("shortcut defaults off",  (int)m.row[KEYMAP_ROW_FORWARD], (int)PAD_NONE);
+    expect_int("and there are exactly three rows", (int)KEYMAP_ROW_COUNT, 3);
 }
 
 static void test_apply_routes_each_button(void)
@@ -58,20 +58,6 @@ static void test_apply_routes_each_button(void)
 
     keymap_apply(&m, PAD_BIT_X | PAD_BIT_START | PAD_BIT_UP, &a, &b, &c);
     expect_int("unbound buttons set nothing", a + b + c, 0);
-}
-
-static void test_shortcut_sets_both_globals(void)
-{
-    KeyMap m;
-    int a, b, c;
-
-    keymap_defaults(&m);
-    m.row[KEYMAP_ROW_FORWARD] = PAD_Z;
-
-    keymap_apply(&m, PAD_BIT_Z, &a, &b, &c);
-    expect_int("shortcut sets key_a", a, 1);
-    expect_int("shortcut sets key_c", c, 1);
-    expect_int("shortcut leaves key_b", b, 0);
 }
 
 static void test_chord_emerges_from_remapped_buttons(void)
@@ -125,69 +111,41 @@ static void test_swap_is_reversible(void)
     expect_int("run is back on A",  (int)m.row[KEYMAP_ROW_RUN],  (int)PAD_A);
 }
 
-static void test_shortcut_may_not_steal_a_core_button(void)
+static void test_every_row_refuses_none(void)
 {
     KeyMap m;
     KeyMap before;
+    int r;
 
     keymap_defaults(&m);
     before = m;
 
-    expect_int("a swap that would unbind run is refused",
-               keymap_assign(&m, KEYMAP_ROW_FORWARD, PAD_A), 0);
-    expect_int("the map is bit-identical after a refusal",
+    for (r = 0; r < KEYMAP_ROW_COUNT; r++) {
+        expect_int("a row refuses PAD_NONE",
+                   keymap_assign(&m, (KeymapRow)r, PAD_NONE), 0);
+    }
+    expect_int("and the map is bit-identical after every refusal",
                memcmp(&m, &before, sizeof(m)), 0);
 }
 
-static void test_shortcut_takes_a_free_button_and_can_be_cleared(void)
+static void test_no_swap_can_be_refused(void)
 {
     KeyMap m;
+    int r;
+    int q;
 
-    keymap_defaults(&m);
-    expect_int("the shortcut accepts a free button",
-               keymap_assign(&m, KEYMAP_ROW_FORWARD, PAD_Z), 1);
-    expect_int("the shortcut is Z", (int)m.row[KEYMAP_ROW_FORWARD], (int)PAD_Z);
-
-    expect_int("the shortcut accepts NONE",
-               keymap_assign(&m, KEYMAP_ROW_FORWARD, PAD_NONE), 1);
-    expect_int("the shortcut is clear",
-               (int)m.row[KEYMAP_ROW_FORWARD], (int)PAD_NONE);
-}
-
-static void test_core_rows_refuse_none(void)
-{
-    KeyMap m;
-
-    keymap_defaults(&m);
-    expect_int("run refuses NONE", keymap_assign(&m, KEYMAP_ROW_RUN, PAD_NONE), 0);
-    expect_int("run kept A",       (int)m.row[KEYMAP_ROW_RUN], (int)PAD_A);
-}
-
-static void test_swap_with_a_bound_shortcut_is_allowed(void)
-{
-    KeyMap m;
-
-    keymap_defaults(&m);
-    keymap_assign(&m, KEYMAP_ROW_FORWARD, PAD_Z);
-
-    expect_int("run may take the shortcut's button",
-               keymap_assign(&m, KEYMAP_ROW_RUN, PAD_Z), 1);
-    expect_int("run is Z",                (int)m.row[KEYMAP_ROW_RUN],     (int)PAD_Z);
-    expect_int("the shortcut took run's A", (int)m.row[KEYMAP_ROW_FORWARD], (int)PAD_A);
-}
-
-static void test_clearing_an_already_clear_shortcut_is_a_no_op(void)
-{
-    KeyMap m;
-    KeyMap before;
-
-    keymap_defaults(&m);
-    before = m;
-
-    expect_int("clearing an already-clear shortcut reports no change",
-               keymap_assign(&m, KEYMAP_ROW_FORWARD, PAD_NONE), 0);
-    expect_int("and leaves the map bit-identical",
-               memcmp(&m, &before, sizeof(m)), 0);
+    for (r = 0; r < KEYMAP_ROW_COUNT; r++) {
+        for (q = 0; q < KEYMAP_ROW_COUNT; q++) {
+            if (r == q) {
+                continue;
+            }
+            keymap_defaults(&m);
+            expect_int("taking another row's button always succeeds",
+                       keymap_assign(&m, (KeymapRow)r, m.row[q]), 1);
+            expect_int("the displaced row is never left unbound",
+                       (int)m.row[q] != (int)PAD_NONE, 1);
+        }
+    }
 }
 
 static void test_reassigning_the_same_button_is_a_no_op(void)
@@ -212,7 +170,7 @@ static void test_round_trip(void)
 
     keymap_defaults(&out);
     keymap_assign(&out, KEYMAP_ROW_JUMP, PAD_X);
-    keymap_assign(&out, KEYMAP_ROW_FORWARD, PAD_Z);
+    keymap_assign(&out, KEYMAP_ROW_WHIP, PAD_Z);
 
     keymap_serialise(&out, buf);
     memset(&in, 0, sizeof(in));
@@ -267,16 +225,12 @@ int main(void)
 {
     test_defaults_match_the_current_hardwiring();
     test_apply_routes_each_button();
-    test_shortcut_sets_both_globals();
     test_chord_emerges_from_remapped_buttons();
     test_assign_to_a_free_button();
     test_assign_swaps_with_the_row_that_held_it();
     test_swap_is_reversible();
-    test_shortcut_may_not_steal_a_core_button();
-    test_shortcut_takes_a_free_button_and_can_be_cleared();
-    test_core_rows_refuse_none();
-    test_swap_with_a_bound_shortcut_is_allowed();
-    test_clearing_an_already_clear_shortcut_is_a_no_op();
+    test_every_row_refuses_none();
+    test_no_swap_can_be_refused();
     test_reassigning_the_same_button_is_a_no_op();
     test_round_trip();
     test_parse_refuses_damaged_entries();

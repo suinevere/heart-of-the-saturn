@@ -356,11 +356,11 @@ static void test_controls_rows_and_values(void)
     expect_int("the run row shows A",   has_text(items, n, 220, 64,  "A"), 1);
     expect_int("the whip row shows B",  has_text(items, n, 220, 82,  "B"), 1);
     expect_int("the jump row shows C",  has_text(items, n, 220, 100, "C"), 1);
-    expect_int("the shortcut shows NONE",
-               has_text(items, n, 220, 118, "NONE"), 1);
     expect_int("the reset row is there",
-               has_text(items, n, 44, 136, "RESET DEFAULTS"), 1);
-    expect_int("the back row is there", has_text(items, n, 44, 154, "BACK"), 1);
+               has_text(items, n, 44, 118, "RESET DEFAULTS"), 1);
+    expect_int("the back row is there", has_text(items, n, 44, 136, "BACK"), 1);
+    expect_int("and there is no fourth binding row",
+               has_text(items, n, 220, 118, "NONE"), 0);
 }
 
 static void test_controls_capture_prompt(void)
@@ -406,21 +406,6 @@ static void test_controls_status_replaces_hint(void)
                has_text(items, n, 44, 176, "START CANCELS"), 0);
 }
 
-static void test_controls_reports_a_refusal(void)
-{
-    MenuState st;
-    static MenuItem items[MENU_LAYOUT_MAX_ITEMS];
-    int n;
-
-    memset(&st, 0, sizeof(st));
-    menu_state_enter_controls(&st, MENU_PAUSE);
-    st.cursor = KEYMAP_ROW_FORWARD;
-    st.mapRejected = 1;
-
-    n = menu_layout_build(&st, 0, items, MENU_LAYOUT_MAX_ITEMS);
-    expect_int("the row says IN USE", has_text(items, n, 220, 118, "IN USE"), 1);
-}
-
 static void test_controls_every_button_name_renders(void)
 {
     MenuState st;
@@ -432,12 +417,57 @@ static void test_controls_every_button_name_renders(void)
     for (b = PAD_A; b <= PAD_R; b++) {
         memset(&st, 0, sizeof(st));
         menu_state_enter_controls(&st, MENU_PAUSE);
-        st.map.row[KEYMAP_ROW_FORWARD] = (PadButton)b;
+        st.map.row[KEYMAP_ROW_JUMP] = (PadButton)b;
 
         n = menu_layout_build(&st, 0, items, MENU_LAYOUT_MAX_ITEMS);
-        expect_int("the shortcut renders its button name",
-                   has_text(items, n, 220, 118, NAMES[b - PAD_A]), 1);
+        expect_int("the jump row renders its button name",
+                   has_text(items, n, 220, 100, NAMES[b - PAD_A]), 1);
     }
+}
+
+static void test_death_screen_rows(void)
+{
+    MenuState st;
+    static MenuItem items[MENU_LAYOUT_MAX_ITEMS];
+    int n;
+    int i;
+
+    memset(&st, 0, sizeof(st));
+    menu_state_enter_death(&st);
+
+    for (i = 0; i < SAVE_NUM_SLOTS; i++) {
+        st.slots[i].state = SLOT_EMPTY;
+    }
+
+    n = menu_layout_build(&st, 0, items, MENU_LAYOUT_MAX_ITEMS);
+    expect_int("the death screen fits the command list",
+               n <= MENU_LAYOUT_MAX_ITEMS, 1);
+    expect_int("it names the death", has_text(items, n, 128, 40, "YOU DIED"), 1);
+    expect_int("resume is the first row",
+               has_text(items, n, 60, 76, "RESUME"), 1);
+    expect_int("save and resume is the second",
+               has_text(items, n, 60, 92, "SAVE AND RESUME"), 1);
+    expect_int("the first slot row follows",
+               has_text(items, n, 60, 108, "SLOT 1"), 1);
+    expect_int("return to title is last",
+               has_text(items, n, 60, 156, "RETURN TO TITLE"), 1);
+}
+
+static void test_death_screen_status(void)
+{
+    MenuState st;
+    static MenuItem items[MENU_LAYOUT_MAX_ITEMS];
+    int n;
+
+    memset(&st, 0, sizeof(st));
+    menu_state_enter_death(&st);
+
+    n = menu_layout_build(&st, "CARTRIDGE WRITE PROTECTED", items,
+                          MENU_LAYOUT_MAX_ITEMS);
+    expect_int("a failed autosave reports on the death screen",
+               has_text(items, n, 44, 176, "CARTRIDGE WRITE PROTECTED"), 1);
+    expect_int("and it still fits the command list",
+               n <= MENU_LAYOUT_MAX_ITEMS, 1);
 }
 
 int main(void)
@@ -454,8 +484,9 @@ int main(void)
     test_controls_rows_and_values();
     test_controls_capture_prompt();
     test_controls_status_replaces_hint();
-    test_controls_reports_a_refusal();
     test_controls_every_button_name_renders();
+    test_death_screen_rows();
+    test_death_screen_status();
 
     if (g_fail != 0) {
         printf("menu_layout: %d failure(s)\n", g_fail);

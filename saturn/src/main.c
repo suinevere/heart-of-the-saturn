@@ -903,6 +903,7 @@ void play_intro(void)
 #ifdef HOTA_SATURN
 static void saturn_save_poll(void)
 {
+	menu_deferred_save_poll();
 	menu_pause_poll();
 }
 #endif

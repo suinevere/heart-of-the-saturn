@@ -87,6 +87,28 @@ int  menu_gate(void);
  ----------------------*/
 void menu_pause_poll(void);
 
+/*----------------------
+ | menu_deferred_save_poll
+ | Description: Performs the save the death screen's save-and-resume row asked
+ |   for, and does nothing on every other frame.
+ |
+ |   Separate from the request because of when the two are legal. The row is
+ |   chosen inside the gate, where the running state is still the one the
+ |   player died in -- a save taken there would restore them into the death.
+ |   By the time this runs, run() has reloaded the room over the surviving
+ |   variables and there is a state worth writing.
+ |
+ |   Same frame-boundary requirement as menu_pause_poll, and for the same
+ |   reason: quicksave asserts no active thread. Call it beside that function
+ |   and nowhere else.
+ | Author: suinevere
+ | Dependencies: saturn_saveslot.h
+ | Globals: N/A
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void menu_deferred_save_poll(void);
+
 #ifdef __cplusplus
 }
 #endif

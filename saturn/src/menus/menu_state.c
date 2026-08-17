@@ -76,9 +76,23 @@ void menu_state_enter_controls(MenuState *st, MenuScreen back)
     st->cursor       = 0;
     st->capturing    = -1;
     st->mapDirty     = 0;
-    st->mapRejected  = 0;
     st->map          = *keymap_active();
     st->returnScreen = back;
+}
+
+/*----------------------
+ | menu_state_enter_death
+ | Description: See menu_state.h.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: st -- state to initialise
+ | Returns: N/A
+ ----------------------*/
+void menu_state_enter_death(MenuState *st)
+{
+    st->screen = MENU_DEATH;
+    st->cursor = MENU_DEATH_ROW_RESUME;
 }
 
 /*----------------------
@@ -289,8 +303,7 @@ static MenuAction leave_controls(MenuState *st)
 /*----------------------
  | step_controls
  | Description: Handles the controls screen: capturing a button for whichever
- |   row is selected, clearing the shortcut row with left, resetting to
- |   defaults, and leaving.
+ |   row is selected, resetting to defaults, and leaving.
  |
  |   While a row is capturing, Start is the only button that aborts it. Every
  |   one of the eight bindable buttons -- including B, which is Cancel on
@@ -315,8 +328,6 @@ static MenuAction step_controls(MenuState *st, const MenuInput *in)
         if (in->captured != PAD_NONE) {
             if (keymap_assign(&st->map, (KeymapRow)st->capturing, in->captured)) {
                 st->mapDirty = 1;
-            } else if (st->map.row[st->capturing] != in->captured) {
-                st->mapRejected = 1;
             }
             st->capturing = -1;
         }
@@ -325,27 +336,16 @@ static MenuAction step_controls(MenuState *st, const MenuInput *in)
 
     if (in->up) {
         st->cursor = (st->cursor + MENU_CONTROLS_ROWS - 1) % MENU_CONTROLS_ROWS;
-        st->mapRejected = 0;
         return MENU_ACT_NONE;
     }
     if (in->down) {
         st->cursor = (st->cursor + 1) % MENU_CONTROLS_ROWS;
-        st->mapRejected = 0;
-        return MENU_ACT_NONE;
-    }
-    if (in->left && st->cursor == KEYMAP_ROW_FORWARD) {
-        if (keymap_assign(&st->map, KEYMAP_ROW_FORWARD, PAD_NONE)) {
-            st->mapDirty = 1;
-        }
-        st->mapRejected = 0;
         return MENU_ACT_NONE;
     }
     if (in->cancel) {
         return leave_controls(st);
     }
     if (in->confirm) {
-        st->mapRejected = 0;
-
         if (st->cursor < KEYMAP_ROW_COUNT) {
             st->capturing = st->cursor;
             return MENU_ACT_NONE;
@@ -359,6 +359,59 @@ static MenuAction step_controls(MenuState *st, const MenuInput *in)
             return MENU_ACT_NONE;
         }
         return leave_controls(st);
+    }
+    return MENU_ACT_NONE;
+}
+
+/*----------------------
+ | step_death
+ | Description: Handles the screen a death opens: resume, save and resume, the
+ |   slot rows, and return to title.
+ |
+ |   Cancel and the pause button both resume, for the reason the pause screen
+ |   treats them the same way: a player who has just died is very likely still
+ |   holding something, and the least destructive thing is the one that should
+ |   answer a stray press.
+ |
+ |   Returning to the title is a screen change rather than an action, exactly
+ |   as the slot list's cancel is, so the sub-title card comes up inside the
+ |   same menu run and the player can still start or load from it.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: st -- state; in -- this frame's input
+ | Returns: the action for this frame
+ ----------------------*/
+static MenuAction step_death(MenuState *st, const MenuInput *in)
+{
+    if (in->cancel || in->pause) {
+        return MENU_ACT_RESUME;
+    }
+    if (in->up) {
+        st->cursor = (st->cursor + MENU_DEATH_ROWS - 1) % MENU_DEATH_ROWS;
+        return MENU_ACT_NONE;
+    }
+    if (in->down) {
+        st->cursor = (st->cursor + 1) % MENU_DEATH_ROWS;
+        return MENU_ACT_NONE;
+    }
+    if (in->confirm) {
+        if (st->cursor == MENU_DEATH_ROW_RESUME) {
+            return MENU_ACT_RESUME;
+        }
+        if (st->cursor == MENU_DEATH_ROW_SAVE) {
+            return MENU_ACT_SAVE_AND_RESUME;
+        }
+        if (st->cursor == MENU_DEATH_ROW_TITLE) {
+            menu_state_enter_title(st);
+            return MENU_ACT_NONE;
+        }
+        st->slotCursor = st->cursor - MENU_DEATH_ROW_SLOT0;
+
+        if (st->slots[st->slotCursor].state == SLOT_OK) {
+            return MENU_ACT_LOAD_SLOT;
+        }
+        return MENU_ACT_NONE;
     }
     return MENU_ACT_NONE;
 }
@@ -380,6 +433,7 @@ MenuAction menu_state_step(MenuState *st, const MenuInput *in)
     case MENU_SLOTS:    return step_slots(st, in);
     case MENU_CONFIRM:  return step_confirm(st, in);
     case MENU_CONTROLS: return step_controls(st, in);
+    case MENU_DEATH:    return step_death(st, in);
     default:            return MENU_ACT_NONE;
     }
 }

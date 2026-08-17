@@ -42,8 +42,8 @@
 #include "vm.h"
 
 /*----------------------
- | next_script / ending_played / death_played
- | Description: The three engine globals this file writes and reads.
+ | next_script / ending_played / death_played / current_room
+ | Description: The four engine globals this file writes and reads.
  |
  |   Setting next_script to MENU_PASSWORD_ROOM is how Return to Title re-enters
  |   the gate: it is the one value run()'s loop routes through menu_gate, so
@@ -53,14 +53,23 @@
  |   death_played animation.c's that a death has. Neither arrival can be
  |   inferred here: they reach this room by the same route and look identical
  |   from it, and a death does not change room at all -- decode.c only asks for
- |   this one because death_played told it to. All three are defined in main.c
- |   and declared here rather than reached through a new header, because one int
- |   each is not an interface.
+ |   this one because death_played told it to.
+ |
+ |   current_room is the room the player is in, and the gate returns it to
+ |   resume from a death: run()'s own block then reloads that room over the
+ |   VM's existing state, which is what makes a death cost the room rather than
+ |   the playthrough. Deliberately without vm_reset -- resetting is what the
+ |   start-a-new-game path does, and doing it here would throw away the
+ |   variables the player died holding.
+ |
+ |   All four are defined in main.c and declared here rather than reached
+ |   through a new header, because one int each is not an interface.
  | Author: suinevere
  ----------------------*/
 extern int next_script;
 extern int ending_played;
 extern int death_played;
+extern int current_room;
 
 /*----------------------
  | rest
@@ -118,6 +127,25 @@ void rest(int fps);
 static int s_gateMode = MENU_GATE_SUBTITLE;
 
 /*----------------------
+ | s_pendingSave
+ | Description: Set when the death screen's save-and-resume row is chosen, and
+ |   consumed by menu_deferred_save_poll one frame later.
+ |
+ |   The delay is the whole point. At the moment the row is chosen the running
+ |   state is the one the player just died in, and quicksave would capture task
+ |   program counters sitting just past the death -- loading that slot would
+ |   drop them straight back into it. The gate returns current_room, run()
+ |   reloads the room over the surviving variables, and only then is there a
+ |   state worth writing.
+ |   s_pendingDevice carries the device the death screen was showing, so the
+ |   save lands where the slot rows the player was just looking at came from
+ |   rather than wherever a fresh probe would have chosen.
+ | Author: suinevere
+ ----------------------*/
+static int           s_pendingSave;
+static unsigned long s_pendingDevice;
+
+/*----------------------
  | s_pausePrev
  | Description: Last frame's button mask as menu_pause_poll saw it, so Start
  |   held across frames opens the pause menu once. Re-primed from the live pad
@@ -146,10 +174,14 @@ static int s_pausePrev;
  | menu_key_mask
  | Description: This frame's held buttons as a bit mask, read straight from
  |   port 0's raw state rather than the key globals check_events writes.
- |   Confirm and cancel are physical A and B, and stay physical A and B
- |   however the player remaps the game -- keymap_apply only ever touches
+ |   Confirm is physical A or C and cancel is physical B, and they stay that
+ |   way however the player remaps the game -- keymap_apply only ever touches
  |   key_a, key_b and key_c, so a menu that read those globals would move
  |   with the mapping and could hide the very screen that would undo it.
+ |
+ |   A and C both confirm because the boot menu already accepts either
+ |   (BOOT_KEY_CONFIRM in bootmenu.h is A, B and C together), and a player who
+ |   learned to select with C there should not find it dead one screen later.
  | Author: suinevere
  | Dependencies: input.h, keymap.h
  | Globals: N/A
@@ -165,7 +197,7 @@ static int menu_key_mask(void)
     if (raw & PAD_BIT_DOWN)  mask |= MENU_BIT_DOWN;
     if (raw & PAD_BIT_LEFT)  mask |= MENU_BIT_LEFT;
     if (raw & PAD_BIT_RIGHT) mask |= MENU_BIT_RIGHT;
-    if (raw & PAD_BIT_A)     mask |= MENU_BIT_CONFIRM;
+    if (raw & (PAD_BIT_A | PAD_BIT_C)) mask |= MENU_BIT_CONFIRM;
     if (raw & PAD_BIT_B)     mask |= MENU_BIT_CANCEL;
     if (raw & PAD_BIT_START) mask |= MENU_BIT_PAUSE;
 
@@ -805,7 +837,11 @@ int menu_gate(void)
 
     memset(&st, 0, sizeof(st));
 
-    if (s_gateMode == MENU_GATE_LOAD)
+    if (overDeath)
+    {
+        menu_state_enter_death(&st);
+    }
+    else if (s_gateMode == MENU_GATE_LOAD)
     {
         menu_state_enter_slots(&st, 0, MENU_TITLE);
     }
@@ -822,6 +858,19 @@ int menu_gate(void)
         s_gateMode = MENU_GATE_LOAD;
         screen_arm_fade_in();
         return 0;
+    }
+
+    if (action == MENU_ACT_SAVE_AND_RESUME)
+    {
+        s_pendingSave = 1;
+        s_pendingDevice = st.device;
+    }
+
+    if (action == MENU_ACT_RESUME || action == MENU_ACT_SAVE_AND_RESUME)
+    {
+        s_gateMode = MENU_GATE_LOAD;
+        screen_arm_fade_in();
+        return current_room;
     }
 
     s_gateMode = MENU_GATE_LOAD;
@@ -853,6 +902,26 @@ int menu_gate(void)
  | Params: N/A
  | Returns: N/A
  ----------------------*/
+/*----------------------
+ | menu_deferred_save_poll
+ | Description: See menu.h.
+ | Author: suinevere
+ | Dependencies: saturn_saveslot.h
+ | Globals: s_pendingSave, s_pendingDevice
+ | Params: N/A
+ | Returns: N/A
+ ----------------------*/
+void menu_deferred_save_poll(void)
+{
+    if (!s_pendingSave)
+    {
+        return;
+    }
+    s_pendingSave = 0;
+
+    saturn_saveslot_save(s_pendingDevice, 0);
+}
+
 void menu_pause_poll(void)
 {
     MenuState st;
