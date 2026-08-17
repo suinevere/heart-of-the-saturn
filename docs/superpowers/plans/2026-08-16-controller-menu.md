@@ -1487,7 +1487,9 @@ Reuses `MENU_PANEL_SLOTS`. `MENUPANS.ART` is 272×168 at (24, 28), so the interi
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `saturn/tests/test_menu_layout.c`. Reuse whatever helper that file already has for finding text in a `MenuItem` array; if it has none, add this one:
+Add to `saturn/tests/test_menu_layout.c`. That file has `expect_int`, `expect_str`, `count_kind` and `ramp_of` but nothing that matches a run of text, so add this helper — the name is free.
+
+**It must skip spaces.** `put_text` (`menu_layout.c:139-152`) emits no glyph for `' '` but still advances `x` by `MENU_GLYPH_W`, which the existing `test_no_spaces_are_emitted` case pins down. A helper that looked for a space glyph would fail on `JUMP FORWARD`, `RESET DEFAULTS`, `START CANCELS` and `IN USE`. The literal 8 below is `MENU_GLYPH_W`, which is private to `menu_layout.c`; the cell width is already fixed at 8 by `MENU_ROW_CHARS`' reasoning in `menu_layout.h`.
 
 ```c
 static int has_text(const MenuItem *items, int n, int x, int y, const char *s)
@@ -1497,6 +1499,10 @@ static int has_text(const MenuItem *items, int n, int x, int y, const char *s)
 
     for (k = 0; s[k] != '\0'; k++) {
         int found = 0;
+
+        if (s[k] == ' ') {
+            continue;
+        }
         for (i = 0; i < n; i++) {
             if (items[i].kind == MENU_ITEM_GLYPH
                 && items[i].x == (short)(x + k * 8)
