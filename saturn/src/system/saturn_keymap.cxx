@@ -13,6 +13,8 @@ extern "C" {
 #include "keymap.h"
 }
 
+#include <string.h>
+
 /*----------------------
  | KEYMAP_BUP_NAME / KEYMAP_BUP_COMMENT
  | Description: The backup RAM filename and the comment shown by the
@@ -38,6 +40,7 @@ extern "C" void saturn_keymap_load(void)
     KeyMap m;
     int rc;
 
+    memset(buf, 0, sizeof buf);
     rc = sat_bup_read(SAT_BUP_INTERNAL, KEYMAP_BUP_NAME, buf, KEYMAP_ENTRY_BYTES);
     if (rc == SAT_BUP_ERR_NOT_FOUND || rc == SAT_BUP_ERR_UNFORMAT) {
         rc = sat_bup_read(SAT_BUP_CART, KEYMAP_BUP_NAME, buf, KEYMAP_ENTRY_BYTES);
