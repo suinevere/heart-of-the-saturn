@@ -9,6 +9,7 @@
  | Dependencies: keymap.h
  ----------------------*/
 #include "keymap.h"
+#include <string.h>
 
 /*----------------------
  | g_active / g_activeInit
@@ -116,5 +117,60 @@ int keymap_assign(KeyMap *m, KeymapRow row, PadButton b)
     }
 
     m->row[row] = b;
+    return 1;
+}
+
+void keymap_serialise(const KeyMap *m, unsigned char *buf)
+{
+    int i;
+
+    memset(buf, 0, KEYMAP_ENTRY_BYTES);
+    buf[0] = 'H';
+    buf[1] = 'O';
+    buf[2] = 'T';
+    buf[3] = 'C';
+    buf[4] = KEYMAP_FORMAT_VERSION;
+
+    for (i = 0; i < KEYMAP_ROW_COUNT; i++) {
+        buf[6 + i] = (unsigned char)m->row[i];
+    }
+}
+
+int keymap_parse(KeyMap *m, const unsigned char *buf, int len)
+{
+    KeyMap candidate;
+    int i;
+    int j;
+
+    if (len < KEYMAP_ENTRY_BYTES) {
+        return 0;
+    }
+    if (buf[0] != 'H' || buf[1] != 'O' || buf[2] != 'T' || buf[3] != 'C') {
+        return 0;
+    }
+    if (buf[4] != KEYMAP_FORMAT_VERSION) {
+        return 0;
+    }
+
+    for (i = 0; i < KEYMAP_ROW_COUNT; i++) {
+        if (buf[6 + i] > (unsigned char)PAD_R) {
+            return 0;
+        }
+        candidate.row[i] = (PadButton)buf[6 + i];
+    }
+
+    for (i = 0; i < KEYMAP_ROW_COUNT; i++) {
+        if (i != KEYMAP_ROW_FORWARD && candidate.row[i] == PAD_NONE) {
+            return 0;
+        }
+        for (j = i + 1; j < KEYMAP_ROW_COUNT; j++) {
+            if (candidate.row[i] != PAD_NONE
+                && candidate.row[i] == candidate.row[j]) {
+                return 0;
+            }
+        }
+    }
+
+    *m = candidate;
     return 1;
 }

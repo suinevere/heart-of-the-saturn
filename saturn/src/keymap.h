@@ -81,6 +81,17 @@ typedef struct {
 } KeyMap;
 
 /*----------------------
+ | KEYMAP_ENTRY_BYTES / KEYMAP_FORMAT_VERSION
+ | Description: The size of the stored entry and the format version it must
+ |   carry, following savedata.h's convention. Sixteen bytes for ten used and
+ |   six of room, because the backup RAM cost of the slack is nothing next to
+ |   a format bump.
+ | Author: suinevere
+ ----------------------*/
+#define KEYMAP_ENTRY_BYTES    16
+#define KEYMAP_FORMAT_VERSION 1
+
+/*----------------------
  | keymap_button_bit
  | Description: The PAD_BIT_* for a button.
  | Author: suinevere
@@ -171,6 +182,35 @@ void keymap_set_active(const KeyMap *m);
  |          mapping is untouched
  ----------------------*/
 int keymap_assign(KeyMap *m, KeymapRow row, PadButton b);
+
+/*----------------------
+ | keymap_serialise
+ | Description: Packs a mapping into KEYMAP_ENTRY_BYTES. Layout: 0 magic
+ |   'HOTC', 4 version, 5 reserved, 6..9 the four bindings, 10..15 zero.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: m -- the mapping; buf -- destination, must hold KEYMAP_ENTRY_BYTES
+ | Returns: N/A
+ ----------------------*/
+void keymap_serialise(const KeyMap *m, unsigned char *buf);
+
+/*----------------------
+ | keymap_parse
+ | Description: Reads a stored entry, validating everything before it writes
+ |   anything: the magic, the version, the length, every button's range, that
+ |   no two rows share a button, and that no core row is unbound. A corrupt
+ |   config must never be worse than a fresh one, so the caller's response to
+ |   a 0 is keymap_defaults.
+ | Author: suinevere
+ | Dependencies: N/A
+ | Globals: N/A
+ | Params: m -- filled in only on success; buf -- the stored bytes; len --
+ |         how many there are
+ | Returns: 1 if the entry was valid and m was written, 0 otherwise with m
+ |          untouched
+ ----------------------*/
+int keymap_parse(KeyMap *m, const unsigned char *buf, int len);
 
 #ifdef __cplusplus
 }

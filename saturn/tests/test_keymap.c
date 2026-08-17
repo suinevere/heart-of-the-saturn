@@ -190,6 +190,65 @@ static void test_reassigning_the_same_button_is_a_no_op(void)
                memcmp(&m, &before, sizeof(m)), 0);
 }
 
+static void test_round_trip(void)
+{
+    KeyMap out;
+    KeyMap in;
+    unsigned char buf[KEYMAP_ENTRY_BYTES];
+
+    keymap_defaults(&out);
+    keymap_assign(&out, KEYMAP_ROW_JUMP, PAD_X);
+    keymap_assign(&out, KEYMAP_ROW_FORWARD, PAD_Z);
+
+    keymap_serialise(&out, buf);
+    memset(&in, 0, sizeof(in));
+
+    expect_int("a serialised map parses", keymap_parse(&in, buf, sizeof(buf)), 1);
+    expect_int("the round trip is exact", memcmp(&in, &out, sizeof(in)), 0);
+}
+
+static void test_parse_refuses_damaged_entries(void)
+{
+    KeyMap m;
+    KeyMap untouched;
+    unsigned char buf[KEYMAP_ENTRY_BYTES];
+    unsigned char bad[KEYMAP_ENTRY_BYTES];
+
+    keymap_defaults(&m);
+    keymap_serialise(&m, buf);
+    keymap_defaults(&untouched);
+
+    expect_int("a short buffer is refused",
+               keymap_parse(&m, buf, KEYMAP_ENTRY_BYTES - 1), 0);
+
+    memcpy(bad, buf, sizeof(bad));
+    bad[0] = 'X';
+    expect_int("a bad magic is refused", keymap_parse(&m, bad, sizeof(bad)), 0);
+
+    memcpy(bad, buf, sizeof(bad));
+    bad[4] = KEYMAP_FORMAT_VERSION + 1;
+    expect_int("an unknown version is refused",
+               keymap_parse(&m, bad, sizeof(bad)), 0);
+
+    memcpy(bad, buf, sizeof(bad));
+    bad[6] = (unsigned char)(PAD_R + 1);
+    expect_int("an out-of-range button is refused",
+               keymap_parse(&m, bad, sizeof(bad)), 0);
+
+    memcpy(bad, buf, sizeof(bad));
+    bad[7] = bad[6];
+    expect_int("a duplicate binding is refused",
+               keymap_parse(&m, bad, sizeof(bad)), 0);
+
+    memcpy(bad, buf, sizeof(bad));
+    bad[6] = (unsigned char)PAD_NONE;
+    expect_int("an unbound core row is refused",
+               keymap_parse(&m, bad, sizeof(bad)), 0);
+
+    expect_int("every refusal left the map alone",
+               memcmp(&m, &untouched, sizeof(m)), 0);
+}
+
 int main(void)
 {
     test_defaults_match_the_current_hardwiring();
@@ -204,6 +263,8 @@ int main(void)
     test_core_rows_refuse_none();
     test_swap_with_a_bound_shortcut_is_allowed();
     test_reassigning_the_same_button_is_a_no_op();
+    test_round_trip();
+    test_parse_refuses_damaged_entries();
 
     if (g_fail == 0) {
         printf("keymap: all tests passed\n");
