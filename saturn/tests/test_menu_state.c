@@ -242,7 +242,7 @@ static void test_a_confirmed_overwrite_lands_on_the_slot_list(void)
 
     memset(&st, 0, sizeof(st));
     menu_state_enter_pause(&st);
-    st.cursor = 3;
+    st.cursor = 4;
     in = none();
     in.confirm = 1;
     menu_state_step(&st, &in);
@@ -275,7 +275,7 @@ static void test_pause_resume_and_return_to_title(void)
     in = none();
     in.up = 1;
     menu_state_step(&st, &in);
-    expect_int("up from resume wraps to return to title", st.cursor, 3);
+    expect_int("up from resume wraps to return to title", st.cursor, 4);
 
     in = none();
     in.confirm = 1;
@@ -301,7 +301,7 @@ static void test_confirm_cancel_goes_back_where_it_came_from(void)
 
     memset(&st, 0, sizeof(st));
     menu_state_enter_pause(&st);
-    st.cursor = 3;
+    st.cursor = 4;
     in = none();
     in.confirm = 1;
     menu_state_step(&st, &in);
@@ -311,6 +311,247 @@ static void test_confirm_cancel_goes_back_where_it_came_from(void)
     menu_state_step(&st, &in);
     expect_int("cancelling a return-to-title prompt goes back to the pause menu",
                (int)st.screen, (int)MENU_PAUSE);
+}
+
+static void enter_controls_from_pause(MenuState *st)
+{
+    MenuInput in;
+    int i;
+
+    memset(st, 0, sizeof(*st));
+    menu_state_enter_pause(st);
+
+    for (i = 0; i < 3; i++) {
+        in = none();
+        in.down = 1;
+        menu_state_step(st, &in);
+    }
+
+    in = none();
+    in.confirm = 1;
+    menu_state_step(st, &in);
+}
+
+static void test_pause_has_a_controls_row(void)
+{
+    MenuState st;
+
+    enter_controls_from_pause(&st);
+    expect_int("pause row 3 opens controls", (int)st.screen, (int)MENU_CONTROLS);
+    expect_int("controls opens on the first binding row", st.cursor, 0);
+    expect_int("controls opens not capturing", st.capturing, -1);
+    expect_int("controls remembers where it came from",
+               (int)st.returnScreen, (int)MENU_PAUSE);
+}
+
+static void test_pause_return_to_title_moved_to_row_four(void)
+{
+    MenuState st;
+    MenuInput in;
+    int i;
+
+    memset(&st, 0, sizeof(st));
+    menu_state_enter_pause(&st);
+
+    for (i = 0; i < 4; i++) {
+        in = none();
+        in.down = 1;
+        menu_state_step(&st, &in);
+    }
+
+    in = none();
+    in.confirm = 1;
+    menu_state_step(&st, &in);
+    expect_int("pause row 4 is still return to title",
+               (int)st.screen, (int)MENU_CONFIRM);
+}
+
+static void test_pause_cursor_wraps_over_five_rows(void)
+{
+    MenuState st;
+    MenuInput in;
+
+    memset(&st, 0, sizeof(st));
+    menu_state_enter_pause(&st);
+
+    in = none();
+    in.up = 1;
+    menu_state_step(&st, &in);
+    expect_int("up from row 0 wraps to row 4", st.cursor, 4);
+}
+
+static void test_title_has_a_controls_row(void)
+{
+    MenuState st;
+    MenuInput in;
+
+    memset(&st, 0, sizeof(st));
+    menu_state_enter_title(&st);
+
+    in = none();
+    in.up = 1;
+    menu_state_step(&st, &in);
+    expect_int("up from row 0 wraps to row 2", st.cursor, 2);
+
+    in = none();
+    in.confirm = 1;
+    menu_state_step(&st, &in);
+    expect_int("title row 2 opens controls", (int)st.screen, (int)MENU_CONTROLS);
+    expect_int("and cancels back to the title",
+               (int)st.returnScreen, (int)MENU_TITLE);
+}
+
+static void test_capture_binds_a_button(void)
+{
+    MenuState st;
+    MenuInput in;
+
+    enter_controls_from_pause(&st);
+
+    in = none();
+    in.confirm = 1;
+    menu_state_step(&st, &in);
+    expect_int("confirm on a binding row starts a capture", st.capturing, 0);
+
+    in = none();
+    in.captured = PAD_X;
+    menu_state_step(&st, &in);
+    expect_int("the capture ends", st.capturing, -1);
+    expect_int("run is now X", (int)st.map.row[KEYMAP_ROW_RUN], (int)PAD_X);
+    expect_int("the map is dirty", st.mapDirty, 1);
+}
+
+static void test_start_aborts_a_capture(void)
+{
+    MenuState st;
+    MenuInput in;
+
+    enter_controls_from_pause(&st);
+
+    in = none();
+    in.confirm = 1;
+    menu_state_step(&st, &in);
+
+    in = none();
+    in.pause = 1;
+    menu_state_step(&st, &in);
+    expect_int("start ends the capture", st.capturing, -1);
+    expect_int("run is untouched", (int)st.map.row[KEYMAP_ROW_RUN], (int)PAD_A);
+    expect_int("the map is clean", st.mapDirty, 0);
+}
+
+static void test_a_refused_capture_reports_in_use(void)
+{
+    MenuState st;
+    MenuInput in;
+    int i;
+
+    enter_controls_from_pause(&st);
+
+    for (i = 0; i < KEYMAP_ROW_FORWARD; i++) {
+        in = none();
+        in.down = 1;
+        menu_state_step(&st, &in);
+    }
+
+    in = none();
+    in.confirm = 1;
+    menu_state_step(&st, &in);
+
+    in = none();
+    in.captured = PAD_A;
+    menu_state_step(&st, &in);
+    expect_int("the capture ends", st.capturing, -1);
+    expect_int("the shortcut is still clear",
+               (int)st.map.row[KEYMAP_ROW_FORWARD], (int)PAD_NONE);
+    expect_int("run kept A", (int)st.map.row[KEYMAP_ROW_RUN], (int)PAD_A);
+    expect_int("the screen is told to say IN USE", st.mapRejected, 1);
+    expect_int("the map is clean", st.mapDirty, 0);
+}
+
+static void test_left_clears_the_shortcut(void)
+{
+    MenuState st;
+    MenuInput in;
+    int i;
+
+    enter_controls_from_pause(&st);
+
+    for (i = 0; i < KEYMAP_ROW_FORWARD; i++) {
+        in = none();
+        in.down = 1;
+        menu_state_step(&st, &in);
+    }
+
+    in = none();
+    in.confirm = 1;
+    menu_state_step(&st, &in);
+    in = none();
+    in.captured = PAD_Z;
+    menu_state_step(&st, &in);
+    expect_int("the shortcut is Z", (int)st.map.row[KEYMAP_ROW_FORWARD], (int)PAD_Z);
+
+    in = none();
+    in.left = 1;
+    menu_state_step(&st, &in);
+    expect_int("left clears the shortcut",
+               (int)st.map.row[KEYMAP_ROW_FORWARD], (int)PAD_NONE);
+}
+
+static void test_reset_row_restores_defaults(void)
+{
+    MenuState st;
+    MenuInput in;
+    int i;
+
+    enter_controls_from_pause(&st);
+
+    in = none();
+    in.confirm = 1;
+    menu_state_step(&st, &in);
+    in = none();
+    in.captured = PAD_X;
+    menu_state_step(&st, &in);
+
+    for (i = 0; i < MENU_CONTROLS_ROW_RESET; i++) {
+        in = none();
+        in.down = 1;
+        menu_state_step(&st, &in);
+    }
+
+    in = none();
+    in.confirm = 1;
+    menu_state_step(&st, &in);
+    expect_int("reset restores run to A", (int)st.map.row[KEYMAP_ROW_RUN], (int)PAD_A);
+    expect_int("reset stays on the screen", (int)st.screen, (int)MENU_CONTROLS);
+}
+
+static void test_back_saves_only_when_the_map_changed(void)
+{
+    MenuState st;
+    MenuInput in;
+
+    enter_controls_from_pause(&st);
+
+    in = none();
+    in.cancel = 1;
+    expect_int("an unchanged map does not ask to be saved",
+               (int)menu_state_step(&st, &in), (int)MENU_ACT_NONE);
+    expect_int("cancel returns to pause", (int)st.screen, (int)MENU_PAUSE);
+
+    enter_controls_from_pause(&st);
+    in = none();
+    in.confirm = 1;
+    menu_state_step(&st, &in);
+    in = none();
+    in.captured = PAD_X;
+    menu_state_step(&st, &in);
+
+    in = none();
+    in.cancel = 1;
+    expect_int("a changed map asks to be saved",
+               (int)menu_state_step(&st, &in), (int)MENU_ACT_SAVE_KEYMAP);
+    expect_int("and returns to pause", (int)st.screen, (int)MENU_PAUSE);
 }
 
 int main(void)
@@ -326,6 +567,16 @@ int main(void)
     test_a_confirmed_overwrite_lands_on_the_slot_list();
     test_pause_resume_and_return_to_title();
     test_confirm_cancel_goes_back_where_it_came_from();
+    test_pause_has_a_controls_row();
+    test_pause_return_to_title_moved_to_row_four();
+    test_pause_cursor_wraps_over_five_rows();
+    test_title_has_a_controls_row();
+    test_capture_binds_a_button();
+    test_start_aborts_a_capture();
+    test_a_refused_capture_reports_in_use();
+    test_left_clears_the_shortcut();
+    test_reset_row_restores_defaults();
+    test_back_saves_only_when_the_map_changed();
 
     if (g_fail != 0) {
         printf("menu_state: %d failure(s)\n", g_fail);

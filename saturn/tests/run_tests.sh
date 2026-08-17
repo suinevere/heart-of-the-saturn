@@ -58,12 +58,14 @@ gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
 ./run_tests_savegame
 gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src -I../src/system -I../src/menus \
-    -o run_tests_menustate test_menu_state.c ../src/menus/menu_state.c
+    -o run_tests_menustate test_menu_state.c ../src/menus/menu_state.c \
+       ../src/keymap.c
 ./run_tests_menustate
 gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src -I../src/system -I../src/menus \
     -o run_tests_menulayout test_menu_layout.c stub_saturn_backup.c \
-       ../src/menus/menu_layout.c ../src/menus/menu_state.c ../src/savedata.c
+       ../src/menus/menu_layout.c ../src/menus/menu_state.c ../src/savedata.c \
+       ../src/keymap.c
 ./run_tests_menulayout
 gcc -std=c99 -Wall -Wextra -Werror -O1 -g \
     -I../src -I../src/menus \
