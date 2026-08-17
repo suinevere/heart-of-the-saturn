@@ -1,7 +1,7 @@
 /*----------------------
  | menu_state.c
- | Description: Implements the sub-title, pause, slot-list and confirm
- |   screens as a pure state machine, ported from Another-Saturn's
+ | Description: Implements the sub-title, pause, slot-list, confirm and
+ |   controls screens as a pure state machine, ported from Another-Saturn's
  |   menu_state.cxx and retargeted at this port's savedata.h. No drawing, no
  |   backup RAM calls, no engine references -- callers act on the returned
  |   MenuAction and feed slot data back in through st->slots.

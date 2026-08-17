@@ -5,8 +5,8 @@
  |   from, the backup RAM probing they refuse to do themselves, and the two
  |   entry points main.c calls.
  |
- |   Never includes <srl.hpp>. Everything that needs VDP1, CRAM or the pad's
- |   Start button is reached through a C seam -- saturn_menuart.h and
+ |   Never includes <srl.hpp>. Everything that needs VDP1, CRAM or port 0's
+ |   pad state is reached through a C seam -- saturn_menuart.h and
  |   input_raw_buttons -- for the same reason saturn_bootart.h exists: the
  |   engine's headers wrap SGL's C headers in extern "C", and mixing that with
  |   SRL's C++ headers in one translation unit is fragile.
@@ -151,7 +151,7 @@ static int s_pausePrev;
  |   key_a, key_b and key_c, so a menu that read those globals would move
  |   with the mapping and could hide the very screen that would undo it.
  | Author: suinevere
- | Dependencies: input.h
+ | Dependencies: input.h, keymap.h
  | Globals: N/A
  | Params: N/A
  | Returns: the MENU_BIT_* mask of everything held
