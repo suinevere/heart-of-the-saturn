@@ -47,6 +47,7 @@
 #include "system/saturn_bootart.h"
 #include "system/saturn_backup.h"
 #include "system/saturn_saveslot.h"
+#include "system/saturn_keymap.h"
 #include "menus/menu.h"
 #include "chainload.h"
 #endif
@@ -1569,6 +1570,7 @@ int main(int argc, char **argv)
 	{
 		printf("saveslot: LWRAM allocation failed, saves disabled\n");
 	}
+	saturn_keymap_load();
 #endif
 
 	if (!disc_open(cue_path))
