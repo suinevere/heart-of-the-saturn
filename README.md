@@ -72,11 +72,11 @@ This runs three installs, because a two-game disc has three sources:
 
 1. Part II's blobs and music, extracted from your Sega CD rip
 2. Part I's program, fetched from Another-Saturn's published release
-3. Part I's bank files, from the DOS release
+3. A check that Part I's bank files from the DOS release are in `saturn/cd/data`
 
 Each step is a no-op once its own files are present, so the script is safe to run before every build. Pass `-f` to force all three to refresh.
 
-Step 1 looks for your rip in `tools/assets/assets`, then in `cd/` at the repository root. Step 3 is the optional one: if it finds no DOS data it says so and carries on, leaving you a Part II disc.
+Step 1 looks for your rip in `tools/assets/assets`, then in `cd/` at the repository root. Step 3 is the optional one: copy `bank01` through `bank0d` and `memlist.bin` into `saturn/cd/data` yourself; if they are missing it says so and carries on, leaving you a Part II disc.
 
 Paths are configured in `tools/assets/CONFIG.ME`, one `KEY=VALUE` per line. Relative paths there resolve against that file rather than your working directory. Its `GAME_URL` and `GAME_MD5` ship blank: this repository names no game data and downloads none, so step 1 reads the rip you put in one of those two directories or stops and tells you it found nothing.
 

@@ -39,9 +39,9 @@ Part I's program with no data behind it. That is a chainload into an engine
 that panics, rather than a menu row that stays unconfirmable, and closing it is
 what this script is for.
 
-`data.bat` on its own is still the Part II step; `fetch.sh` is Part I's program
-and must run before `part1/data.bat`, since it is what stages that script into
-existence. `update-build.bat` is the three in order.
+`data.bat` on its own is still the Part II step and `fetch.sh` is Part I's
+program. Part I's bank files are copied into `saturn/cd/data` by hand, and
+`update-build.bat` runs the first two and then checks for them.
 
 The released kit has none of these. It ships one `run-me.bat` that installs both
 games out of the two folders it carries and injects them into a prebuilt disc —

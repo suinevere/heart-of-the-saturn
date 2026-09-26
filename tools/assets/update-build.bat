@@ -7,8 +7,9 @@
 :; echo "== Step 2/3: fetch Part I's program =="
 :; sh ../another/fetch.sh "$@"
 :;
-:; echo "== Step 3/3: install Part I data =="
-:; if [ -f ./part1/data.bat ]; then if sh ./part1/data.bat "$@"; then echo "Part I: data installed."; else echo "Part I: data unavailable -- OUT OF THIS WORLD will not be playable on this disc."; fi; else echo "Part I: no data step present -- skipping."; fi
+:; echo "== Step 3/3: check Part I data =="
+:; n=$(find ../../saturn/cd/data -maxdepth 1 -type f \( -iname 'bank??' -o -iname 'memlist.bin' \) 2>/dev/null | wc -l | tr -d ' ')
+:; if [ "$n" -eq 14 ]; then echo "Part I: data present."; else echo "Part I: data absent ($n of 14) -- copy bank01 to bank0d and memlist.bin into saturn/cd/data, or OUT OF THIS WORLD will not be playable on this disc."; fi
 :;
 :; echo
 :; echo "Ready to build: cd saturn && compile.bat"
@@ -34,11 +35,11 @@ IF NOT DEFINED SH_EXE (
     IF ERRORLEVEL 1 ECHO Part I: program fetch failed -- OUT OF THIS WORLD will not appear on this disc.
 )
 
-ECHO == Step 3/3: install Part I data ==
-IF EXIST "%~dp0part1\data.bat" (
-    CALL "%~dp0part1\data.bat" %*
-    IF ERRORLEVEL 1 ( ECHO Part I: data unavailable -- OUT OF THIS WORLD will not be playable on this disc. ) ELSE ( ECHO Part I: data installed. )
-) ELSE ( ECHO Part I: no data step present -- skipping. )
+ECHO == Step 3/3: check Part I data ==
+SET /A P1=0
+FOR %%F IN ("%~dp0..\..\saturn\cd\data\bank??") DO SET /A P1+=1
+IF EXIST "%~dp0..\..\saturn\cd\data\memlist.bin" SET /A P1+=1
+IF "%P1%"=="14" ( ECHO Part I: data present. ) ELSE ( ECHO Part I: data absent, %P1% of 14 -- copy bank01 to bank0d and memlist.bin into saturn\cd\data, or OUT OF THIS WORLD will not be playable on this disc. )
 
 ECHO.
 ECHO Ready to build: cd saturn ^&^& compile.bat

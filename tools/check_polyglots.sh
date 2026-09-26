@@ -3,7 +3,7 @@ set -e
 cd "$(dirname "$0")/.."
 
 rc=0
-for f in tools/assets/*.bat tools/assets/part1/*.bat; do
+for f in tools/assets/*.bat; do
     [ -f "$f" ] || continue
     n=$(grep -n '^:; exit$' "$f" | head -1 | cut -d: -f1)
     if [ -z "$n" ]; then echo "SKIP $f (no POSIX half)"; continue; fi
