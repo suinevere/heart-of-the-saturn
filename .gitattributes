@@ -1,0 +1,6 @@
+tools/assets/*.bat text eol=lf
+tools/assets/lib/*.sh text eol=lf
+tools/another/fetch.sh text eol=lf
+tools/*.sh text eol=lf
+
+tools/assets/bin/** binary

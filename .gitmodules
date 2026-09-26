@@ -1,0 +1,6 @@
+[submodule "SaturnRingLib"]
+	path = SaturnRingLib
+	url = git@github.com:ReyeMe/SaturnRingLib.git
+[submodule "Another-Saturn"]
+	path = Another-Saturn
+	url = git@github.com:suinevere/out-of-this-saturn.git
