@@ -1,0 +1,231 @@
+name: Build & release setup kit
+
+on:
+  push:
+    tags: ['v*', '[0-9]*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  DISC_NAME: Heart of the Alien (USA)
+  KIT_DISC_NAME: Heart of the Alien - Out of This World Parts 1 and 2 (USA)
+  KIT_NAME: HOTA-Saturn
+
+jobs:
+  extractor-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build extract_disc for both mac architectures
+        run: |
+          set -e
+          mkdir -p out/amd64 out/arm64
+          clang -std=c99 -Wall -Wextra -O2 -arch x86_64 -Isaturn/src -o out/amd64/extract_disc tools/extract_disc.c saturn/src/discfmt.c
+          clang -std=c99 -Wall -Wextra -O2 -arch arm64 -Isaturn/src -o out/arm64/extract_disc tools/extract_disc.c saturn/src/discfmt.c
+          file out/amd64/extract_disc out/arm64/extract_disc
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extract_disc-mac
+          path: out/
+
+  part1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure Part I's main has been released
+        env:
+          GH_TOKEN: ${{ secrets.SUINEVERE_CI_PAT }}
+        run: sh tools/another/ensure_release.sh
+
+  build:
+    needs: [extractor-mac, part1]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (with SaturnRingLib submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Parse-check the polyglot scripts
+        run: sh tools/check_polyglots.sh
+
+      - name: Install host tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xorriso wget unzip zip curl gcc-mingw-w64-x86-64
+
+      - name: Cache SaturnRingLib toolchain
+        id: toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            SaturnRingLib/Compiler
+            SaturnRingLib/tools/bin
+          key: srl-toolchain-gcc14.2.0-iso2raw0.2.2
+
+      - name: Fetch SH-2 toolchain + iso2raw
+        if: steps.toolchain.outputs.cache-hit != 'true'
+        working-directory: SaturnRingLib
+        run: |
+          set -e
+          bash tools/scripts/getcompiler.sh 14.2.0
+          bash tools/scripts/getiso2raw.sh v0.2.2
+
+      - name: Build engine-only two-game disc
+        working-directory: saturn
+        env:
+          GH_TOKEN: ${{ secrets.SUINEVERE_CI_PAT }}
+        run: |
+          set -e
+          export SRL_INSTALL_ROOT=../SaturnRingLib
+          bash ../SaturnRingLib/tools/scripts/make.sh release ../SaturnRingLib/Compiler HOTA_PART1=1 HOTA_AUDIO=none HOTA_ASSETS=0
+          ls -la BuildDrop
+
+      - name: Assert the disc carries no game data
+        run: |
+          set -e
+          if ls saturn/cd/data/bank* saturn/cd/data/BANK* saturn/cd/data/memlist.bin saturn/cd/data/MEMLIST.BIN 2>/dev/null | grep -q .; then
+            echo "ERROR: Part I data present in the CD skeleton -- refusing to package"; exit 1
+          fi
+          for f in END1 END2 END3 END4 GAME2 INTRO1 INTRO2 INTRO3 INTRO4 MAKE2MB MID2 ROOMS1 ROOMS2 ROOMS3 ROOMS4 ROOMS5 ROOMS6 ROOMS7 ROOMS8; do
+            if [ -f "saturn/cd/data/$f.BIN" ] || [ -f "saturn/cd/data/$f.bin" ]; then
+              echo "ERROR: Part II blob $f present in the CD skeleton -- refusing to package"; exit 1
+            fi
+          done
+          xorriso -indev "saturn/BuildDrop/${DISC_NAME}.iso" -find / 2>/dev/null | tee /tmp/base-listing
+          if grep -qiE "BANK|MEMLIST|ROOMS1|GAME2" /tmp/base-listing; then
+            echo "ERROR: game data inside the base ISO"; exit 1
+          fi
+          for f in 0.BIN ANOTHER.BIN SELOOTW1.ART; do
+            grep -q "'/$f'" /tmp/base-listing || { echo "ERROR: /$f missing -- disc is incomplete"; exit 1; }
+          done
+
+      - name: Build extract_disc for Linux and Windows
+        run: |
+          set -e
+          mkdir -p extractors/lin extractors/win
+          gcc -std=c99 -Wall -Wextra -O2 -Isaturn/src -o extractors/lin/extract_disc tools/extract_disc.c saturn/src/discfmt.c
+          x86_64-w64-mingw32-gcc -std=c99 -Wall -Wextra -O2 -Isaturn/src -o extractors/win/extract_disc.exe tools/extract_disc.c saturn/src/discfmt.c
+          file extractors/lin/extract_disc extractors/win/extract_disc.exe
+
+      - name: Collect the macOS extractors
+        uses: actions/download-artifact@v4
+        with:
+          name: extract_disc-mac
+          path: extractors/mac
+
+      - name: Stage setup kit
+        id: kit
+        run: |
+          set -e
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then VER="${GITHUB_REF_NAME}"; else VER="${GITHUB_SHA::7}"; fi
+
+          STAGE="$RUNNER_TEMP/kit-stage"
+          RIPDIR="$STAGE/(put sega multi-bin and cue here)"
+          P1DIR="$STAGE/(put bank and memlist files here)"
+          mkdir -p "$STAGE/bin/music" "$RIPDIR" "$P1DIR"
+
+          cp "saturn/BuildDrop/${DISC_NAME}.iso" "$STAGE/bin/${KIT_DISC_NAME}.iso"
+          cp -r tools/assets/bin/. "$STAGE/bin/"
+          cp -r tools/assets/lib "$STAGE/bin/lib"
+
+          install -Dm755 extractors/lin/extract_disc       "$STAGE/bin/lin/extract_disc"
+          install -Dm755 extractors/win/extract_disc.exe   "$STAGE/bin/win/extract_disc.exe"
+          install -Dm755 extractors/mac/amd64/extract_disc "$STAGE/bin/mac/amd64/extract_disc"
+          install -Dm755 extractors/mac/arm64/extract_disc "$STAGE/bin/mac/arm64/extract_disc"
+          cp tools/assets/run-me.bat "$STAGE/"
+          cp tools/assets/README-kit.md "$STAGE/README.md"
+          cp saturn/cd/music/tracklist "$STAGE/bin/music/tracklist"
+
+          {
+            echo "Put your own copy of the Sega CD disc in this folder."
+          } > "$RIPDIR/READ ME.txt"
+
+          {
+            echo "Put the Another World / Out of This World PC DOS data files here."
+          } > "$P1DIR/READ ME.txt"
+
+          if grep -rIlE 'https?://' "$STAGE" | grep -v 'bin/LICENSE-xorriso.txt' | grep -q .; then
+            echo "ERROR: a URL survived into the kit -- refusing to package"
+            grep -rIlE 'https?://' "$STAGE" | grep -v 'bin/LICENSE-xorriso.txt'
+            exit 1
+          fi
+
+          chmod +x "$STAGE"/*.bat "$STAGE"/bin/lin/iso2raw "$STAGE"/bin/mac/*/iso2raw                    "$STAGE"/bin/lin/extract_disc "$STAGE"/bin/mac/*/extract_disc
+
+          echo "ver=$VER"           >> "$GITHUB_OUTPUT"
+          echo "stage_dir=$STAGE"   >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test the kit
+        run: |
+          set -e
+          TEST="$RUNNER_TEMP/kit-test"
+          cp -r "${{ steps.kit.outputs.stage_dir }}" "$TEST"
+          RIP="$TEST/(put sega multi-bin and cue here)"
+          P1="$TEST/(put bank and memlist files here)"
+          mkdir -p "$RIP" "$P1"
+          for n in 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D; do
+            printf 'placeholder bank%s\n' "$n" > "$P1/BANK$n"
+          done
+          printf 'placeholder memlist\n' > "$P1/MEMLIST.BIN"
+          FAKE="$RUNNER_TEMP/fake-rip"
+          mkdir -p "$FAKE/root"
+          for b in $(grep -oE '"[A-Z0-9]+\.BIN"' tools/extract_disc.c | tr -d '"'); do
+            printf 'placeholder %s\n' "$b" > "$FAKE/root/$b"
+          done
+          test "$(ls -1 "$FAKE/root" | wc -l)" -eq 19
+          xorriso -as mkisofs -quiet -V HOTA -o "$FAKE/fake.iso" "$FAKE/root"
+          "$TEST/bin/lin/iso2raw" "$FAKE/fake.iso" -o "$RIP/fake rip (Track 01).bin"
+          printf 'FILE "fake rip (Track 01).bin" BINARY\n  TRACK 01 MODE1/2352\n    INDEX 01 00:00:00\n' > "$RIP/fake rip.cue"
+          (cd "$TEST" && bash run-me.bat)
+          out="$TEST/${KIT_DISC_NAME}"
+          test -s "$out/${KIT_DISC_NAME} (Track 01).bin"
+          grep -q "FILE \"${KIT_DISC_NAME} (Track 01).bin\" BINARY" "$out/${KIT_DISC_NAME}.cue"
+          perl -e 'binmode STDIN; binmode STDOUT; while (read(STDIN,$s,2352)==2352) { print substr($s,16,2048) }' \
+            < "$out/${KIT_DISC_NAME} (Track 01).bin" > /tmp/deraw.iso
+          xorriso -indev /tmp/deraw.iso -find / 2>/dev/null | tee /tmp/full-listing
+          for f in 0.BIN ANOTHER.BIN BANK01 BANK0D MEMLIST.BIN ROOMS1.BIN GAME2.BIN; do
+            grep -q "'/$f'" /tmp/full-listing || { echo "ERROR: /$f missing from the built disc"; exit 1; }
+          done
+          cmp -n 32768 "saturn/BuildDrop/${DISC_NAME}.iso" /tmp/deraw.iso
+          echo "Kit smoke test passed: both games on one disc."
+
+      - name: Package setup kit
+        id: package
+        run: |
+          set -e
+          NAME="${KIT_NAME}-${{ steps.kit.outputs.ver }}"
+          (cd "${{ steps.kit.outputs.stage_dir }}" && zip -rq "$RUNNER_TEMP/${NAME}.zip" .)
+          echo "artifact_name=${NAME}"             >> "$GITHUB_OUTPUT"
+          echo "zip_path=$RUNNER_TEMP/${NAME}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Upload kit as workflow artifact (manual runs)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.kit.outputs.stage_dir }}
+
+      - name: Attach to GitHub release (tag runs)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF_NAME}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            printf '%s\n' \
+              "Automated Heart of the Alien / Out of This World Saturn build from $TAG." \
+              "" \
+              "Unzip it, drop your own game files into the two folders named for them," \
+              "and run \`run-me.bat\` (double-click on Windows, or \`bash run-me.bat\`)." \
+              "" \
+              "You supply both games' data: a Sega CD rip in \`assets/\` for Part II, and the" \
+              "PC DOS release's fourteen files in \`data/\` for Part I. The kit fetches nothing" \
+              "and says so plainly when either is missing. Part I is optional -- without it" \
+              "you still get a working Part II disc. See README.md in the zip." > /tmp/notes.md
+            gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md
+          fi
+          gh release upload "$TAG" "${{ steps.package.outputs.zip_path }}" --clobber
