@@ -1,0 +1,236 @@
+#include <stdio.h>
+#include <string.h>
+#include "keymap.h"
+
+static int g_fail = 0;
+
+static void expect_int(const char *what, int got, int want)
+{
+    if (got != want) {
+        g_fail++;
+        printf("FAIL %s\n  actual   = %d\n  expected = %d\n", what, got, want);
+    }
+}
+
+static void test_defaults_are_b_a_c(void)
+{
+    KeyMap m;
+
+    keymap_defaults(&m);
+    expect_int("run defaults to B",      (int)m.row[KEYMAP_ROW_RUN],     (int)PAD_B);
+    expect_int("whip defaults to A",     (int)m.row[KEYMAP_ROW_WHIP],    (int)PAD_A);
+    expect_int("jump defaults to C",     (int)m.row[KEYMAP_ROW_JUMP],    (int)PAD_C);
+    expect_int("and there are exactly three rows", (int)KEYMAP_ROW_COUNT, 3);
+}
+
+static void test_apply_routes_each_button(void)
+{
+    KeyMap m;
+    int a, b, c;
+
+    keymap_defaults(&m);
+
+    keymap_apply(&m, PAD_BIT_B, &a, &b, &c);
+    expect_int("B sets key_a", a, 1);
+    expect_int("B leaves key_b", b, 0);
+    expect_int("B leaves key_c", c, 0);
+
+    keymap_apply(&m, PAD_BIT_A, &a, &b, &c);
+    expect_int("A sets key_b", b, 1);
+    expect_int("A leaves key_a", a, 0);
+
+    keymap_apply(&m, PAD_BIT_C, &a, &b, &c);
+    expect_int("C sets key_c", c, 1);
+    expect_int("C leaves key_a", a, 0);
+
+    keymap_apply(&m, 0, &a, &b, &c);
+    expect_int("nothing held leaves key_a", a, 0);
+    expect_int("nothing held leaves key_b", b, 0);
+    expect_int("nothing held leaves key_c", c, 0);
+
+    keymap_apply(&m, PAD_BIT_X | PAD_BIT_START | PAD_BIT_UP, &a, &b, &c);
+    expect_int("unbound buttons set nothing", a + b + c, 0);
+}
+
+static void test_chord_emerges_from_remapped_buttons(void)
+{
+    KeyMap m;
+    int a, b, c;
+
+    keymap_defaults(&m);
+    m.row[KEYMAP_ROW_RUN]  = PAD_X;
+    m.row[KEYMAP_ROW_JUMP] = PAD_Y;
+
+    keymap_apply(&m, PAD_BIT_X | PAD_BIT_Y, &a, &b, &c);
+    expect_int("remapped run and jump together set key_a", a, 1);
+    expect_int("remapped run and jump together set key_c", c, 1);
+
+    keymap_apply(&m, PAD_BIT_X, &a, &b, &c);
+    expect_int("remapped run alone leaves key_c", c, 0);
+}
+
+static void test_assign_to_a_free_button(void)
+{
+    KeyMap m;
+
+    keymap_defaults(&m);
+    expect_int("binding jump to a free button is accepted",
+               keymap_assign(&m, KEYMAP_ROW_JUMP, PAD_Z), 1);
+    expect_int("jump is now Z", (int)m.row[KEYMAP_ROW_JUMP], (int)PAD_Z);
+    expect_int("run is untouched", (int)m.row[KEYMAP_ROW_RUN], (int)PAD_B);
+}
+
+static void test_assign_swaps_with_the_row_that_held_it(void)
+{
+    KeyMap m;
+
+    keymap_defaults(&m);
+    expect_int("binding whip to B is accepted",
+               keymap_assign(&m, KEYMAP_ROW_WHIP, PAD_B), 1);
+    expect_int("whip took B",           (int)m.row[KEYMAP_ROW_WHIP], (int)PAD_B);
+    expect_int("run took whip's old A", (int)m.row[KEYMAP_ROW_RUN],  (int)PAD_A);
+    expect_int("jump is untouched",     (int)m.row[KEYMAP_ROW_JUMP], (int)PAD_C);
+}
+
+static void test_swap_is_reversible(void)
+{
+    KeyMap m;
+
+    keymap_defaults(&m);
+    keymap_assign(&m, KEYMAP_ROW_WHIP, PAD_B);
+    keymap_assign(&m, KEYMAP_ROW_WHIP, PAD_A);
+    expect_int("whip is back on A", (int)m.row[KEYMAP_ROW_WHIP], (int)PAD_A);
+    expect_int("run is back on B",  (int)m.row[KEYMAP_ROW_RUN],  (int)PAD_B);
+}
+
+static void test_every_row_refuses_none(void)
+{
+    KeyMap m;
+    KeyMap before;
+    int r;
+
+    keymap_defaults(&m);
+    before = m;
+
+    for (r = 0; r < KEYMAP_ROW_COUNT; r++) {
+        expect_int("a row refuses PAD_NONE",
+                   keymap_assign(&m, (KeymapRow)r, PAD_NONE), 0);
+    }
+    expect_int("and the map is bit-identical after every refusal",
+               memcmp(&m, &before, sizeof(m)), 0);
+}
+
+static void test_no_swap_can_be_refused(void)
+{
+    KeyMap m;
+    int r;
+    int q;
+
+    for (r = 0; r < KEYMAP_ROW_COUNT; r++) {
+        for (q = 0; q < KEYMAP_ROW_COUNT; q++) {
+            if (r == q) {
+                continue;
+            }
+            keymap_defaults(&m);
+            expect_int("taking another row's button always succeeds",
+                       keymap_assign(&m, (KeymapRow)r, m.row[q]), 1);
+            expect_int("the displaced row is never left unbound",
+                       (int)m.row[q] != (int)PAD_NONE, 1);
+        }
+    }
+}
+
+static void test_reassigning_the_same_button_is_a_no_op(void)
+{
+    KeyMap m;
+    KeyMap before;
+
+    keymap_defaults(&m);
+    before = m;
+
+    expect_int("rebinding a row to the button it already holds reports no change",
+               keymap_assign(&m, KEYMAP_ROW_RUN, PAD_B), 0);
+    expect_int("and leaves the map bit-identical",
+               memcmp(&m, &before, sizeof(m)), 0);
+}
+
+static void test_round_trip(void)
+{
+    KeyMap out;
+    KeyMap in;
+    unsigned char buf[KEYMAP_ENTRY_BYTES];
+
+    keymap_defaults(&out);
+    keymap_assign(&out, KEYMAP_ROW_JUMP, PAD_X);
+    keymap_assign(&out, KEYMAP_ROW_WHIP, PAD_Z);
+
+    keymap_serialise(&out, buf);
+    memset(&in, 0, sizeof(in));
+
+    expect_int("a serialised map parses", keymap_parse(&in, buf, sizeof(buf)), 1);
+    expect_int("the round trip is exact", memcmp(&in, &out, sizeof(in)), 0);
+}
+
+static void test_parse_refuses_damaged_entries(void)
+{
+    KeyMap m;
+    KeyMap untouched;
+    unsigned char buf[KEYMAP_ENTRY_BYTES];
+    unsigned char bad[KEYMAP_ENTRY_BYTES];
+
+    keymap_defaults(&m);
+    keymap_serialise(&m, buf);
+    keymap_defaults(&untouched);
+
+    expect_int("a short buffer is refused",
+               keymap_parse(&m, buf, KEYMAP_ENTRY_BYTES - 1), 0);
+
+    memcpy(bad, buf, sizeof(bad));
+    bad[0] = 'X';
+    expect_int("a bad magic is refused", keymap_parse(&m, bad, sizeof(bad)), 0);
+
+    memcpy(bad, buf, sizeof(bad));
+    bad[4] = KEYMAP_FORMAT_VERSION + 1;
+    expect_int("an unknown version is refused",
+               keymap_parse(&m, bad, sizeof(bad)), 0);
+
+    memcpy(bad, buf, sizeof(bad));
+    bad[6] = (unsigned char)(PAD_R + 1);
+    expect_int("an out-of-range button is refused",
+               keymap_parse(&m, bad, sizeof(bad)), 0);
+
+    memcpy(bad, buf, sizeof(bad));
+    bad[7] = bad[6];
+    expect_int("a duplicate binding is refused",
+               keymap_parse(&m, bad, sizeof(bad)), 0);
+
+    memcpy(bad, buf, sizeof(bad));
+    bad[6] = (unsigned char)PAD_NONE;
+    expect_int("an unbound core row is refused",
+               keymap_parse(&m, bad, sizeof(bad)), 0);
+
+    expect_int("every refusal left the map alone",
+               memcmp(&m, &untouched, sizeof(m)), 0);
+}
+
+int main(void)
+{
+    test_defaults_are_b_a_c();
+    test_apply_routes_each_button();
+    test_chord_emerges_from_remapped_buttons();
+    test_assign_to_a_free_button();
+    test_assign_swaps_with_the_row_that_held_it();
+    test_swap_is_reversible();
+    test_every_row_refuses_none();
+    test_no_swap_can_be_refused();
+    test_reassigning_the_same_button_is_a_no_op();
+    test_round_trip();
+    test_parse_refuses_damaged_entries();
+
+    if (g_fail == 0) {
+        printf("keymap: all tests passed\n");
+        return 0;
+    }
+    printf("keymap: %d failure(s)\n", g_fail);
+    return 1;
+}
