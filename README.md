@@ -1,10 +1,8 @@
-# Heart of the Alien Redux
+# Heart of the Saturn
 
 An open-source rewrite of the *Heart of the Alien* engine, ported to the Sega Saturn.
 
 The Saturn build authors one disc carrying both halves of the story. *Heart of the Alien* (Part II) runs from this engine; *Out of This World* (Part I) is a separate program built from [Out of this World for Sega Saturn](https://github.com/suinevere/out-of-this-saturn) and chainloaded from the boot menu. Part I's data is optional and a disc built without it still plays Part II.
-
-Be aware of what that costs, though. The boot menu gates the Part I row on Part I's *program*, `ANOTHER.BIN`, and not on its data: every disc built here carries the program, so the row stays selectable even with no bank files behind it and confirming it chainloads into an engine with no resources. Supply the DOS files if you want that row to lead anywhere.
 
 Original homepage: http://hota.sourceforge.net/
 
@@ -20,13 +18,6 @@ This repository carries no game data, and neither does the setup kit. You need y
 
 - **Part II** comes from a Sega CD rip of *Heart of the Alien* as a `.cue` with its `.bin` tracks beside it. The data is not a flat archive: all 19 blobs sit on the data track and the music is 41 CD-DA tracks, so the asset step extracts them from the image rather than unzipping anything.
 - **Part I** comes from the PC DOS release of *Out of This World*: `bank01` through `bank0d` and `memlist.bin`, fourteen files.
-
-## Requirements
-
-- Git, with SSH access to GitHub. Both submodules are pinned over SSH.
-- A POSIX shell, or `cmd.exe` on Windows. The asset and build scripts are polyglots that run under both.
-- A host `gcc` for the unit tests and the disc extractor
-- Around 1.25 GB of disk: the filled CD skeleton is about 810 MB and the build artifacts about 420 MB, on top of the toolchain
 
 The SH-2 cross-compiler is not a prerequisite. Step 2 below installs it.
 
